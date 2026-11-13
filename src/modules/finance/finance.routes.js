@@ -1,0 +1,105 @@
+import { Router } from 'express';
+import { parse, notFound } from '../../core/utils.js';
+import { audit } from '../../services/audit.js';
+import { Student, Payment, StudentEnrolment, Section, ClassModel, AcademicYear } from '../../models/index.js';
+import * as v from './finance.validation.js';
+import * as svc from './finance.service.js';
+
+const r = Router();
+
+r.get('/dashboard', async (req, res) => res.json(await svc.dashboard(req.ctx)));
+
+// lookups for filters (only class/section names, no academic data)
+r.get('/lookups', async (req, res) => {
+  const [years, classes, sections] = await Promise.all([
+    AcademicYear.find({ tenantId: req.tenantId }).sort({ startDate: -1 }).select('name isCurrent').lean(), ClassModel.find({ tenantId: req.tenantId, status: 'active' }).sort({ level: 1 }).select('name').lean(),
+    Section.find({ tenantId: req.tenantId, yearId: req.ctx.year?._id, status: 'active' }).select('name classId').lean(),
+  ]);
+  res.json({ years, classes, sections });
+});
+
+// fee structures
+r.get('/structures', async (req, res) => res.json(await svc.listStructures(req.ctx, { yearId: req.query.yearId })));
+r.post('/structures', async (req, res) => {
+  const s = await svc.createStructure(req.ctx, parse(v.structureBody, req.body));
+  await audit(req, 'fees.structure_created', 'FeeStructure', s._id, `Created fee structure ${s.name}`);
+  res.status(201).json(s);
+});
+r.patch('/structures/:id', async (req, res) => res.json(await svc.updateStructure(req.ctx, req.params.id, parse(v.structurePatch, req.body))));
+r.delete('/structures/:id', async (req, res) => { await svc.deleteStructure(req.ctx, req.params.id); res.json({ ok: true }); });
+r.post('/assign', async (req, res) => {
+  const out = await svc.assignStructure(req.ctx, parse(v.assignBody, req.body));
+  await audit(req, 'fees.assigned', 'FeeStructure', req.body.structureId, `Billed ${out.assigned} student(s) (${out.skipped} already billed)`, out);
+  res.json(out);
+});
+
+// students & dues
+r.get('/students', async (req, res) => res.json(await svc.listDues(req.ctx, parse(v.duesQuery, req.query))));
+r.get('/students/:id/account', async (req, res) => {
+  const s = await Student.findOne({ _id: req.params.id, tenantId: req.tenantId }).select('name admissionNo status guardians').lean();
+  if (!s) throw notFound('Student not found');
+  const enr = await StudentEnrolment.findOne({ tenantId: req.tenantId, studentId: s._id, status: 'active' }).sort({ createdAt: -1 }).lean();
+  const [sec, cls] = enr ? await Promise.all([Section.findById(enr.sectionId).lean(), ClassModel.findById(enr.classId).lean()]) : [];
+  res.json({ student: { id: s._id, name: s.name, admissionNo: s.admissionNo, status: s.status, className: cls?.name, section: sec?.name, rollNo: enr?.rollNo, guardian: s.guardians?.[0]?.name, guardianPhone: s.guardians?.[0]?.phone }, ...(await svc.studentAccount(req.tenantId, s._id, req.ctx.today)) });
+});
+
+// charges & concessions
+r.post('/charges', async (req, res) => {
+  const c = await svc.createCharge(req.ctx, parse(v.chargeBody, req.body));
+  await audit(req, 'fees.charge_created', 'StudentCharge', c._id, `Charge "${c.label}" ${c.amount}`);
+  res.status(201).json(c);
+});
+r.post('/charges/:id/concession', async (req, res) => {
+  const body = parse(v.concessionBody, req.body);
+  const c = await svc.addConcession(req.ctx, req.params.id, body, req.user.name);
+  await audit(req, 'fees.concession', 'StudentCharge', c._id, `Concession ${body.amount} on "${c.label}": ${body.reason}`);
+  res.json(c);
+});
+
+// payments (immutable; reverse instead of edit/delete)
+r.get('/payments', async (req, res) => res.json(await svc.listPayments(req.ctx, parse(v.rangeQuery, req.query))));
+r.post('/payments', async (req, res) => {
+  const p = await svc.collectPayment(req.ctx, parse(v.paymentBody, req.body), req.user.name);
+  await audit(req, 'fees.payment', 'Payment', p._id, `Receipt ${p.receiptNo} for ${p.amount} (${p.mode})`);
+  res.status(201).json(p);
+});
+r.post('/payments/:id/reverse', async (req, res) => {
+  const { reason } = parse(v.reverseBody, req.body);
+  const out = await svc.reversePayment(req.ctx, req.params.id, reason, req.user.name);
+  await audit(req, 'fees.payment_reversed', 'Payment', out.original._id, `Reversed ${out.original.receiptNo}: ${reason}`);
+  res.json(out);
+});
+r.get('/payments/:id/receipt.pdf', async (req, res) => {
+  const p = await Payment.findOne({ _id: req.params.id, tenantId: req.tenantId });
+  if (!p) throw notFound('Payment not found');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="receipt-${p.receiptNo}.pdf"`);
+  await svc.renderReceipt(req.tenantId, p, res);
+});
+
+// the school's fee policy and paying the whole year in advance
+r.get('/policy', async (req, res) => res.json(await svc.getPolicy(req.ctx)));
+r.put('/policy', async (req, res) => {
+  const out = await svc.updatePolicy(req.ctx, parse(v.policyBody, req.body));
+  await audit(req, 'fees.policy_updated', 'School', req.tenantId, `Fee policy: due day ${out.dueDay}, advance discount ${out.advanceDiscount.enabled ? `${out.advanceDiscount.value} ${out.advanceDiscount.type}` : 'off'}`);
+  res.json(out);
+});
+r.get('/students/:id/advance-plan', async (req, res) => res.json(await svc.advancePlan(req.ctx, req.params.id)));
+r.post('/students/:id/advance-payment', async (req, res) => {
+  const p = await svc.payAdvance(req.ctx, req.params.id, parse(v.advanceBody, req.body), req.user.name);
+  await audit(req, 'fees.advance_payment', 'Payment', p._id, `Advance payment, receipt ${p.receiptNo} for ${p.amount}`);
+  res.status(201).json(p);
+});
+
+// reports, reminders, exports
+r.get('/reports/collection', async (req, res) => res.json(await svc.collectionReport(req.ctx, parse(v.rangeQuery, req.query))));
+r.get('/reports/classes', async (req, res) => res.json(await svc.outstandingByClass(req.ctx)));
+r.post('/reminders', async (req, res) => {
+  const out = await svc.sendReminders(req.ctx, parse(v.remindBody, req.body));
+  await audit(req, 'fees.reminders', 'Student', null, `Sent ${out.sent} fee reminder(s)`);
+  res.json(out);
+});
+const csv = (res, name, body) => { res.setHeader('Content-Type', 'text/csv; charset=utf-8'); res.setHeader('Content-Disposition', `attachment; filename="${name}"`); res.send(body); };
+r.get('/export/payments.csv', async (req, res) => csv(res, 'payments.csv', await svc.exportPayments(req.ctx, parse(v.rangeQuery, req.query))));
+r.get('/export/dues.csv', async (req, res) => csv(res, 'dues.csv', await svc.exportDues(req.ctx, parse(v.duesQuery.partial(), req.query))));
+export default r;

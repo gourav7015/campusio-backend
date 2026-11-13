@@ -1,0 +1,160 @@
+import PDFDocument from 'pdfkit';
+import { Examination, ExaminationSubject, ReportCard, Subject, StudentEnrolment, Student } from '../../models/index.js';
+import { notFound, daysBetween, round1 } from '../../core/utils.js';
+import { submittedRecords, summarize } from '../../services/attendance.js';
+
+const classIdsOf = (ctx) => [...new Set(ctx.enrolments.map((e) => String(e.classId)))];
+
+export async function schedule(ctx) {
+  const exams = (await Examination.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, schedulePublished: true, status: { $ne: 'archived' } }).lean())
+    .filter((e) => !e.sectionId || ctx.sectionIds.includes(String(e.sectionId))); // a teacher's class test shows only to that section
+  const ess = await ExaminationSubject.find({ tenantId: ctx.tenantId, examId: { $in: exams.map((e) => e._id) }, classId: { $in: classIdsOf(ctx) } }).lean();
+  const subjects = new Map((await Subject.find({ tenantId: ctx.tenantId, _id: { $in: ess.map((e) => e.subjectId) } }).select('name').lean()).map((s) => [String(s._id), s.name]));
+  const en = new Map(exams.map((e) => [String(e._id), e.name]));
+  const examType = new Map(exams.map((e) => [String(e._id), e.type]));
+  return ess.filter((e) => e.date).map((e) => {
+    const left = daysBetween(ctx.today, e.date);
+    return { id: e._id, examId: e.examId, exam: en.get(String(e.examId)), type: examType.get(String(e.examId)), subject: subjects.get(String(e.subjectId)), date: e.date, startTime: e.startTime, endTime: e.endTime, room: e.room, daysLeft: left, state: left < 0 ? 'completed' : left === 0 ? 'today' : 'upcoming' };
+  }).sort((a, b) => a.date.localeCompare(b.date) || (a.startTime || '').localeCompare(b.startTime || ''));
+}
+
+/** Student results come only from published, immutable report cards — never from draft marks. */
+export async function currentCards(ctx) {
+  return ReportCard.find({ tenantId: ctx.tenantId, studentId: ctx.student._id, yearId: ctx.year._id, isCurrent: true }).sort({ publishedAt: 1 }).lean();
+}
+
+export async function resultsList(ctx) {
+  const [cards, allExams] = await Promise.all([currentCards(ctx), Examination.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, status: { $ne: 'archived' } }).lean()]);
+  const exams = allExams.filter((e) => !e.sectionId || ctx.sectionIds.includes(String(e.sectionId)));
+  const upcoming = await schedule(ctx);
+  const cardByExam = new Map(cards.map((c) => [String(c.examId), c]));
+  const rows = exams.filter((e) => cardByExam.has(String(e._id)) || (e.schedulePublished && upcoming.some((u) => String(u.examId) === String(e._id)))).map((e) => {
+    const c = cardByExam.get(String(e._id));
+    const dates = upcoming.filter((u) => String(u.examId) === String(e._id)).map((u) => u.date).sort();
+    return {
+      examId: e._id, name: e.name, type: e.type, date: dates[0] || e.startDate, status: c ? 'published' : 'upcoming', percentage: c?.snapshot.percentage ?? null, grade: c?.snapshot.grade ?? null,
+      resultStatus: c?.snapshot.resultStatus ?? null, cardId: c?._id, version: c?.version,
+    };
+  });
+  return rows.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+}
+
+export async function resultDetail(ctx, examId) {
+  const c = await ReportCard.findOne({ tenantId: ctx.tenantId, studentId: ctx.student._id, examId, isCurrent: true }).lean();
+  if (!c) throw notFound('Result not published');
+  return { id: c._id, version: c.version, publishedAt: c.publishedAt, correctionReason: c.correctionReason, ...c.snapshot };
+}
+
+export async function performance(ctx, { examId } = {}) {
+  const cards = await currentCards(ctx);
+  const trend = cards.map((c) => ({ exam: c.snapshot.exam.name, examId: c.examId, percentage: c.snapshot.percentage, grade: c.snapshot.grade }));
+  const latest = (examId && cards.find((c) => String(c.examId) === String(examId))) || cards[cards.length - 1];
+  const previous = latest ? cards[cards.indexOf(latest) - 1] : null;
+  const subjectWise = latest ? latest.snapshot.subjects.filter((s) => s.percentage != null).map((s) => ({ subject: s.subject, percentage: s.percentage, grade: s.grade })) : [];
+  const gradeCounts = {};
+  latest?.snapshot.subjects.forEach((s) => { if (s.grade) gradeCounts[s.grade] = (gradeCounts[s.grade] || 0) + 1; });
+  const improvement = latest && previous ? latest.snapshot.subjects.filter((s) => s.percentage != null).map((s) => {
+    const prev = previous.snapshot.subjects.find((p) => p.code === s.code);
+    return prev?.percentage != null ? { subject: s.subject, latest: s.percentage, previous: prev.percentage, change: round1(s.percentage - prev.percentage) } : null;
+  }).filter(Boolean) : [];
+  const recs = await submittedRecords(ctx.tenantId, { studentId: ctx.student._id, yearId: ctx.year._id });
+  const by = new Map();
+  recs.forEach((r) => { const k = r.date.slice(0, 7); if (!by.has(k)) by.set(k, []); by.get(k).push(r); });
+  const attendanceTrend = [...by.keys()].sort().map((month) => ({ month, percentage: summarize(by.get(month), ctx.settings).percentage }));
+  return {
+    trend, latestExam: latest ? { id: latest.examId, name: latest.snapshot.exam.name } : null, subjectWise,
+    gradeDistribution: Object.entries(gradeCounts).map(([grade, count]) => ({ grade, count })), attendanceTrend, improvement,
+    exams: cards.map((c) => ({ id: c.examId, name: c.snapshot.exam.name })),
+  };
+}
+
+export async function dashboardResult(ctx) {
+  const cards = await currentCards(ctx);
+  const latest = cards[cards.length - 1];
+  if (!latest) return null;
+  return { examId: latest.examId, exam: latest.snapshot.exam.name, percentage: latest.snapshot.percentage, grade: latest.snapshot.grade, resultStatus: latest.snapshot.resultStatus, subjects: latest.snapshot.subjects.map((s) => ({ subject: s.subject, percentage: s.percentage, grade: s.grade })) };
+}
+
+export function renderReportCardPdf(card, schoolName, res) {
+  const s = card.snapshot;
+  const doc = new PDFDocument({ size: 'A4', margin: 48 });
+  doc.pipe(res);
+  doc.fontSize(18).text(schoolName, { align: 'center' });
+  doc.fontSize(13).text(`Report Card — ${s.exam.name}`, { align: 'center' });
+  if (card.version > 1) doc.fontSize(9).fillColor('#666').text(`Revised version ${card.version}${card.correctionReason ? ` — ${card.correctionReason}` : ''}`, { align: 'center' }).fillColor('black');
+  doc.moveDown();
+  doc.fontSize(11).text(`Student: ${s.student.name}`).text(`Admission No: ${s.student.admissionNo}`).moveDown();
+  const cols = [48, 190, 440, 500];
+  const head = ['Subject', 'Marks by field', 'Total', 'Grade'];
+  doc.font('Helvetica-Bold');
+  const hy = doc.y;
+  head.forEach((h, i) => doc.text(h, cols[i], hy, { width: i === 1 ? 240 : 70 }));
+  doc.font('Helvetica').moveDown(0.3);
+  for (const r of s.subjects) {
+    const y = doc.y;
+    const fields = r.absent ? 'Absent' : r.exempt ? 'Exempt' : (r.components || []).map((c) => `${c.label} ${c.value ?? '-'}/${c.max}`).join('  ·  ');
+    const cells = [r.subject, fields, r.exempt ? 'EX' : `${r.obtained ?? '-'} / ${r.max}`, r.grade || '-'];
+    cells.forEach((c, i) => doc.text(String(c), cols[i], y, { width: i === 1 ? 240 : 70 }));
+    doc.moveDown(0.4);
+  }
+  doc.moveDown().font('Helvetica-Bold').text(`Total: ${s.totalObtained} / ${s.totalMax}   Percentage: ${s.percentage ?? '-'}%   Grade: ${s.grade ?? '-'}   Result: ${String(s.resultStatus).toUpperCase()}`, 48);
+  doc.font('Helvetica').moveDown().text(`Attendance: ${s.attendance.percentage ?? '-'}% (${s.attendance.present} present / ${s.attendance.workingDays} days)`);
+  if (s.teacherRemark) doc.moveDown().text(`Class teacher remarks: ${s.teacherRemark}`);
+  if (s.principalRemark) doc.text(`Principal remarks: ${s.principalRemark}`);
+  doc.end();
+}
+
+// ── whole-class view: every test held for the student's class, with all students' results and their rank ──
+/** Competition ranking by percentage (ties share a rank). */
+function rankOf(cards, studentId) {
+  const mine = cards.find((c) => String(c.studentId) === String(studentId));
+  if (!mine) return null;
+  return 1 + cards.filter((c) => (c.snapshot.percentage ?? 0) > (mine.snapshot.percentage ?? 0)).length;
+}
+const attempted = (card) => (card.snapshot.subjects || []).some((s) => !s.absent);
+
+async function visibleClassExams(ctx) {
+  const classIds = [...new Set(ctx.enrolments.map((e) => String(e.classId)))];
+  const exams = (await Examination.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, status: { $ne: 'archived' }, classIds: { $in: classIds } }).lean())
+    .filter((e) => !e.sectionId || ctx.sectionIds.includes(String(e.sectionId)));
+  const cards = await ReportCard.find({ tenantId: ctx.tenantId, examId: { $in: exams.map((e) => e._id) }, sectionId: { $in: ctx.sectionIds }, isCurrent: true }).lean();
+  // an unannounced test stays hidden until its results are published
+  return { exams: exams.filter((e) => e.schedulePublished || cards.some((c) => String(c.examId) === String(e._id))), cards };
+}
+
+export async function classExams(ctx) {
+  const { exams, cards } = await visibleClassExams(ctx);
+  const ess = await ExaminationSubject.find({ tenantId: ctx.tenantId, examId: { $in: exams.map((e) => e._id) } }).select('examId date subjectId').lean();
+  const subjects = new Map((await Subject.find({ tenantId: ctx.tenantId, _id: { $in: ess.map((x) => x.subjectId) } }).select('name').lean()).map((x) => [String(x._id), x.name]));
+  return exams.map((e) => {
+    const list = cards.filter((c) => String(c.examId) === String(e._id));
+    const mine = list.find((c) => String(c.studentId) === String(ctx.student._id));
+    const dates = ess.filter((x) => String(x.examId) === String(e._id) && x.date).map((x) => x.date).sort();
+    const published = list.length > 0;
+    return {
+      examId: e._id, name: e.name, type: e.type, date: dates[0] || e.startDate, subjects: [...new Set(ess.filter((x) => String(x.examId) === String(e._id)).map((x) => subjects.get(String(x.subjectId))))],
+      status: published ? 'published' : (dates[0] || e.startDate || '9999') >= ctx.today ? 'upcoming' : 'awaiting_results',
+      classSize: published ? list.length : null, attempted: mine ? attempted(mine) : false, hasResult: !!mine,
+      myRank: mine ? rankOf(list, ctx.student._id) : null, myPercentage: mine?.snapshot.percentage ?? null, myGrade: mine?.snapshot.grade ?? null,
+    };
+  }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+}
+
+export async function classExamDetail(ctx, examId) {
+  const { exams, cards } = await visibleClassExams(ctx);
+  const exam = exams.find((e) => String(e._id) === String(examId));
+  if (!exam) throw notFound('Test not found for your class');
+  const list = cards.filter((c) => String(c.examId) === String(examId));
+  if (!list.length) return { exam: { id: exam._id, name: exam.name, type: exam.type }, published: false, rows: [], subjects: [] };
+  const enr = await StudentEnrolment.find({ tenantId: ctx.tenantId, studentId: { $in: list.map((c) => c.studentId) }, sectionId: { $in: ctx.sectionIds } }).select('studentId rollNo').lean();
+  const rolls = new Map(enr.map((e) => [String(e.studentId), e.rollNo]));
+  const names = new Map((await Student.find({ tenantId: ctx.tenantId, _id: { $in: list.map((c) => c.studentId) } }).select('name').lean()).map((s) => [String(s._id), s.name]));
+  const subjectCols = [...new Map(list.flatMap((c) => c.snapshot.subjects).map((s) => [s.code, { code: s.code, subject: s.subject, max: s.max }])).values()];
+  const rows = list.map((c) => ({
+    rank: rankOf(list, c.studentId), studentId: c.studentId, name: names.get(String(c.studentId)), rollNo: rolls.get(String(c.studentId)), isMe: String(c.studentId) === String(ctx.student._id),
+    attempted: attempted(c), percentage: c.snapshot.percentage, grade: c.snapshot.grade, obtained: c.snapshot.totalObtained, max: c.snapshot.totalMax, result: c.snapshot.resultStatus,
+    marks: Object.fromEntries(c.snapshot.subjects.map((s) => [s.code, { obtained: s.obtained, max: s.max, grade: s.grade, absent: s.absent }])),
+  })).sort((a, b) => a.rank - b.rank || String(a.name).localeCompare(String(b.name)));
+  const me = rows.find((r) => r.isMe) || null;
+  return { exam: { id: exam._id, name: exam.name, type: exam.type }, published: true, subjects: subjectCols, rows, me, classSize: rows.length, average: Math.round((rows.reduce((n, r) => n + (r.percentage ?? 0), 0) / rows.length) * 10) / 10 };
+}
