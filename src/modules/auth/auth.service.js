@@ -2,13 +2,15 @@ import crypto from 'node:crypto';
 import { User, Session, School, AcademicYear } from '../../models/index.js';
 import { config } from '../../core/config.js';
 import { signToken } from '../../middleware/auth.js';
-import { checkPassword, hashPassword, assertPasswordPolicy } from '../../services/users.js';
+import { checkPassword, hashPassword, assertPasswordPolicy, needsRehash } from '../../services/users.js';
 import { HttpError, bad } from '../../core/utils.js';
 import { PORTALS } from './auth.validation.js';
 
 const MAX_FAILURES = 8;
 const LOCK_MINUTES = 15;
 const invalid = () => new HttpError(401, 'Invalid login id or password', 'INVALID_CREDENTIALS');
+// An unknown login id still costs one password check, so response time does not reveal which ids exist.
+let dummyHash;
 
 export async function schoolBrief(tenantId, withSettings = false) {
   if (!tenantId) return null;
@@ -23,7 +25,7 @@ const PORTAL_NAME = { student: 'Student', teacher: 'Teacher', finance: 'Finance'
 
 export async function login({ loginId, password, portal }, { userAgent, ip }) {
   const user = await User.findOne({ loginId: loginId.trim().toLowerCase() });
-  if (!user) throw invalid();
+  if (!user) { dummyHash ||= await hashPassword('not-a-real-password'); await checkPassword(password, dummyHash); throw invalid(); }
   if (user.lockedUntil && user.lockedUntil > new Date()) throw new HttpError(429, 'Account temporarily locked after repeated failures', 'LOCKED');
   if (!(await checkPassword(password, user.passwordHash))) {
     user.failedLogins += 1;
@@ -38,6 +40,7 @@ export async function login({ loginId, password, portal }, { userAgent, ip }) {
   // Each role signs in through its own portal. Only revealed after the password is right, so it leaks nothing.
   if (PORTALS[portal] !== user.role) throw new HttpError(403, `This login belongs to the ${PORTAL_NAME[user.role]} portal. Please sign in from the ${PORTAL_NAME[user.role]} login page.`, 'WRONG_PORTAL');
   user.failedLogins = 0; user.lockedUntil = undefined; user.lastLoginAt = new Date();
+  if (needsRehash(user.passwordHash)) user.passwordHash = await hashPassword(password); // quietly upgrade old, cheaper hashes
   await user.save();
 
   const jti = crypto.randomUUID();
@@ -49,7 +52,7 @@ export async function login({ loginId, password, portal }, { userAgent, ip }) {
 
 export async function changePassword(user, session, { currentPassword, newPassword }) {
   if (!(await checkPassword(currentPassword, user.passwordHash))) throw bad('Current password is incorrect');
-  assertPasswordPolicy(newPassword);
+  assertPasswordPolicy(newPassword, { loginId: user.loginId, choosing: true });
   if (newPassword === currentPassword) throw bad('Choose a different password');
   user.passwordHash = await hashPassword(newPassword);
   user.mustChangePassword = false;

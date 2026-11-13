@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import { config } from './core/config.js';
 import { requestId, accessLog, errorHandler, notFoundHandler } from './core/http.js';
 import { authenticate } from './middleware/auth.js';
+import { rejectOperatorKeys, noStore } from './middleware/sanitize.js';
 import rateLimit from 'express-rate-limit';
 import { mountModules } from './modules/index.js';
 
@@ -16,6 +17,7 @@ export function createApp() {
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
   app.use(cors({ origin: config.corsOrigin, credentials: false, exposedHeaders: ['x-request-id', 'content-disposition'] }));
   app.use(express.json({ limit: '2mb' }));
+  app.use('/api', noStore, rejectOperatorKeys);
   app.use(accessLog);
 
   // liveness: process is up; readiness: database reachable

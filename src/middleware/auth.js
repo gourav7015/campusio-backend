@@ -1,8 +1,9 @@
 import jwt from 'jsonwebtoken';
 import { config } from '../core/config.js';
-import { User, Session, School, Subscription } from '../models/index.js';
+import { User, Session, School, Subscription, AuditLog } from '../models/index.js';
 import { HttpError, forbidden, isId } from '../core/utils.js';
 import { todayStr } from '../core/utils.js';
+import { audit } from '../services/audit.js';
 
 const unauth = (m = 'Authentication required') => new HttpError(401, m, 'UNAUTHENTICATED');
 
@@ -40,6 +41,9 @@ export async function authenticate(req, _res, next) {
       if (!school) throw new HttpError(404, 'Acting school not found', 'NOT_FOUND');
       req.tenantId = school._id;
       req.acting = true;
+      // Any platform-administrator access to a school's records (reads included) leaves a trace: one entry per administrator, school and half hour.
+      const recent = await AuditLog.exists({ actorId: user._id, tenantId: school._id, action: 'platform.acting', createdAt: { $gt: new Date(Date.now() - 30 * 60 * 1000) } });
+      if (!recent) await audit(req, 'platform.acting', 'School', school._id, `Platform administrator started working inside ${school.name}`);
     }
   }
 

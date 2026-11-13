@@ -9,8 +9,11 @@ linkRoutes.post('/files/:id/link', async (req, res) => res.json(await svc.issueL
 export const downloadRoutes = Router();
 downloadRoutes.get('/download/:id', async (req, res) => {
   const { file, path } = await svc.openByToken(req.params.id, String(req.query.token || ''));
+  // Only PDFs and images may open in the browser; everything else downloads. The sandbox policy stops any active content from running even if a file were hostile.
+  const inline = ['application/pdf', 'image/png', 'image/jpeg', 'image/webp'].includes(file.mime);
   res.setHeader('Content-Type', file.mime || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName || 'file')}"`);
+  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(file.originalName || 'file')}"`);
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
   res.setHeader('Cache-Control', 'private, max-age=60');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.sendFile(path);

@@ -33,7 +33,7 @@ export function errorHandler(err, req, res, _next) {
     });
   }
   if (err instanceof HttpError) return res.status(err.status).json({ error: err.message, code: err.code, details: err.details });
-  if (err?.code === 11000) return res.status(409).json({ error: 'A record with the same unique value already exists', code: 'DUPLICATE', details: err.keyValue });
+  if (err?.code === 11000) return res.status(409).json({ error: 'A record with the same unique value already exists', code: 'DUPLICATE', details: { fields: Object.keys(err.keyPattern || err.keyValue || {}).filter((k) => k !== 'tenantId') } });
   if (err?.name === 'CastError') return res.status(400).json({ error: 'Invalid identifier', code: 'BAD_REQUEST' });
   if (err?.name === 'MulterError') return res.status(400).json({ error: err.message, code: 'UPLOAD' });
   if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: 'Malformed JSON', code: 'BAD_REQUEST' });

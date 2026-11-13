@@ -1,4 +1,5 @@
 /** Development helper: in-memory MongoDB + API + a populated demo school. Not for production. */
+if (process.env.NODE_ENV === 'production') { console.error('This script creates accounts with published demo passwords and must never run in production.'); process.exit(1); }
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 

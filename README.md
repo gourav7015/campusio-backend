@@ -1,4 +1,4 @@
-# School ERP — Backend (API)
+# Campusio — Backend (API)
 
 Multi-tenant school management API: **Node 20+ · Express 5 · Mongoose 8 · MongoDB Atlas**.
 The web app lives in its own repository (`school-erp-frontend`) and talks to this API over HTTP.

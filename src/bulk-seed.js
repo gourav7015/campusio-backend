@@ -4,6 +4,7 @@
  *   CONFIRM_WIPE=<db name> npm run dump -- --wipe   (drops that whole database first — destructive, so the name must be typed)
  * Everything is created the way the app creates it, so every portal works on it.
  */
+if (process.env.NODE_ENV === 'production') { console.error('This script creates accounts with published demo passwords and must never run in production.'); process.exit(1); }
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import { config, requireMongoUri } from './core/config.js';
