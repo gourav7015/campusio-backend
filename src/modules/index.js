@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireRole, requireTenant, rejectActing } from '../middleware/auth.js';
 import { forbidden } from '../core/utils.js';
+import { AcademicYear } from '../models/index.js';
 import { adminContext, teacherContext, studentContext, staffContext } from '../middleware/context.js';
 import authRoutes from './auth/auth.routes.js';
 import platformRoutes from './platform/platform.routes.js';
@@ -33,16 +34,25 @@ import libraryRoutes from './library/library.routes.js';
 import { selfRoutes } from './library/library.self.routes.js';
 import teacherPortal from './teacher-portal/teacher.routes.js';
 import studentPortal from './student-portal/student.routes.js';
+import { approvalRoutes } from './finance/expenses.routes.js';
+import { readRoutes as schoolInfoRead, adminRoutes as schoolInfoAdmin } from './school-info/school-info.routes.js';
+import { teacherRoutes as classLifeTeacher, studentRoutes as classLifeStudent, adminRoutes as classLifeAdmin } from './class-life/class-life.routes.js';
+import { teacherRoutes as schedTeacher, studentRoutes as schedStudent, adminRoutes as schedAdmin } from './scheduling/scheduling.routes.js';
+import subAdminRoutes from './sub-admins/sub-admins.routes.js';
+import { subAdminGate } from './sub-admins/permissions.js';
+import { studentRoutes as paymentsStudent, webhookRoutes as paymentsWebhook } from './payments/payments.routes.js';
+import { requesterRoutes as ticketRequester, at } from './helpdesk/helpdesk.routes.js';
 
 /** School Admin portal (and Super Admin acting on a chosen school). */
 const adminRouters = [
-  adminTools, staffRoutes, structureRoutes, studentsRoutes, teachersRoutes, assignmentsRoutes, timetableRoutes, attendanceAdmin, leaveAdmin,
+  at('/helpdesk', ticketRequester('platform')),
+  subAdminRoutes, schedAdmin, classLifeAdmin, approvalRoutes, schoolInfoRead, schoolInfoAdmin, adminTools, staffRoutes, structureRoutes, studentsRoutes, teachersRoutes, assignmentsRoutes, timetableRoutes, attendanceAdmin, leaveAdmin,
   homeworkAdmin, materialsAdmin, examsAdmin, commsAdmin, payrollAdmin, supportStaffAdmin, staffAttendanceAdmin, staffLeaveAdmin, insightRoutes,
 ];
 /** Teacher portal: every query is scoped server-side to the teacher's own active assignments. */
-const teacherRouters = [selfRoutes('teacher'), teacherPortal, attendanceTeacher, leaveTeacher, homeworkTeacher, materialsTeacher, examsTeacher, commsTeacher, payrollTeacher];
+const teacherRouters = [at('/tickets', ticketRequester('platform')), schedTeacher, classLifeTeacher, schoolInfoRead, selfRoutes('teacher'), teacherPortal, attendanceTeacher, leaveTeacher, homeworkTeacher, materialsTeacher, examsTeacher, commsTeacher, payrollTeacher];
 /** Student portal: every query is scoped server-side to the signed-in student's own records. */
-const studentRouters = [transportStudent, financeStudent, selfRoutes('student'), studentPortal, attendanceStudent, homeworkStudent, materialsStudent, examsStudent, commsStudent];
+const studentRouters = [paymentsStudent, at('/tickets', ticketRequester('platform')), schedStudent, classLifeStudent, schoolInfoRead, transportStudent, financeStudent, selfRoutes('student'), studentPortal, attendanceStudent, homeworkStudent, materialsStudent, examsStudent, commsStudent];
 
 /** School Admin sees finance and library data but cannot change it. */
 const viewOnly = (req, _res, next) => {
@@ -55,17 +65,20 @@ const stack = (routers) => { const r = Router(); routers.forEach((x) => r.use(x)
 export function mountModules(app, authenticate) {
   app.use('/api/auth', authRoutes);
   app.use('/api/files', downloadRoutes); // signed-token downloads (token issued only after a permission check)
+  app.use('/api/payments', paymentsWebhook); // the payment gateway calls this itself: no sign-in, the signature is the proof
   app.use('/api/platform', authenticate, platformRoutes);
   // view-only windows for the School Admin (mounted before the general /api/school stack)
-  app.use('/api/school/finance', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, adminContext, viewOnly, financeRoutes);
-  app.use('/api/school/transport', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, adminContext, viewOnly, transportRouter);
-  app.use('/api/school/library', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, adminContext, viewOnly, libraryRoutes);
-  app.use('/api/school', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, adminContext, stack(adminRouters));
-  app.use('/api/finance', authenticate, requireRole('finance'), rejectActing, requireTenant, adminContext, financeRoutes);
-  app.use('/api/library', authenticate, requireRole('library'), rejectActing, requireTenant, adminContext, libraryRoutes);
-  app.use('/api/transport', authenticate, requireRole('transport'), rejectActing, requireTenant, adminContext, transportRouter);
-  app.use('/api/staff', authenticate, requireRole('staff'), rejectActing, requireTenant, staffContext, staffPortal);
+  app.use('/api/school/finance', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, subAdminGate('finance'), adminContext, viewOnly, financeRoutes);
+  app.use('/api/school/transport', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, subAdminGate('transport'), adminContext, viewOnly, transportRouter);
+  app.use('/api/school/library', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, subAdminGate('library'), adminContext, viewOnly, libraryRoutes);
+  app.use('/api/school', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, subAdminGate(), adminContext, stack(adminRouters));
+  app.use('/api/finance', authenticate, requireRole('finance'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, financeRoutes]));
+  app.use('/api/library', authenticate, requireRole('library'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, libraryRoutes]));
+  app.use('/api/transport', authenticate, requireRole('transport'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, transportRouter]));
+  app.use('/api/staff', authenticate, requireRole('staff'), rejectActing, requireTenant, staffContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, staffPortal]));
   app.use('/api/teacher', authenticate, requireRole('teacher'), rejectActing, requireTenant, teacherContext, stack(teacherRouters));
   app.use('/api/student', authenticate, requireRole('student'), rejectActing, requireTenant, studentContext, stack(studentRouters));
+  // The school's academic years (names and dates only), so any signed-in person can look back at a past session.
+  app.get('/api/shared/years', authenticate, requireTenant, async (req, res) => res.json(await AcademicYear.find({ tenantId: req.tenantId }).sort({ startDate: -1 }).select('name startDate endDate isCurrent status').lean()));
   app.use('/api/shared', authenticate, requireTenant, linkRoutes);
 }

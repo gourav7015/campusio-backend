@@ -1,3 +1,4 @@
+import { ON_ROLL } from '../../services/context.js';
 import {
   AcademicYear, ClassModel, Section, Subject, SubjectOffering, StudentEnrolment, TeachingAssignment, TimetableEntry,
   AttendanceSession, School, Homework, ClassTeacherAssignment, Teacher,
@@ -16,13 +17,21 @@ const owned = async (Model, tenantId, id, label) => {
 // ── academic years ──
 export const listYears = (tenantId) => AcademicYear.find({ tenantId }).sort({ startDate: -1 });
 
+async function assertWindows(tenantId, windows) {
+  if (!windows?.length) return;
+  const n = await ClassModel.countDocuments({ tenantId, _id: { $in: windows.map((w) => w.classId) } });
+  if (n !== windows.length) throw notFound('One of those classes was not found');
+}
+
 export async function createYear(tenantId, body) {
+  await assertWindows(tenantId, body.classWindows);
   const makeCurrent = body.isCurrent || !(await AcademicYear.exists({ tenantId }));
   if (makeCurrent) await AcademicYear.updateMany({ tenantId }, { isCurrent: false });
   return AcademicYear.create({ tenantId, ...body, isCurrent: makeCurrent, status: makeCurrent ? 'active' : 'upcoming' });
 }
 export async function updateYear(tenantId, id, body) {
   const y = await owned(AcademicYear, tenantId, id, 'Academic year');
+  await assertWindows(tenantId, body.classWindows);
   Object.assign(y, body);
   if (y.endDate <= y.startDate) throw bad('End date must be after start date');
   return y.save();
@@ -63,20 +72,36 @@ export async function listSections(tenantId, { yearId, classId }) {
   if (yearId) f.yearId = yearId;
   if (classId) f.classId = classId;
   const sections = await Section.find(f).sort({ classId: 1, name: 1 }).lean();
-  const counts = await StudentEnrolment.aggregate([
-    { $match: { tenantId, status: 'active', sectionId: { $in: sections.map((s) => s._id) } } },
-    { $group: { _id: '$sectionId', n: { $sum: 1 } } },
+  const [counts, years] = await Promise.all([
+    StudentEnrolment.aggregate([
+      { $match: { tenantId, status: { $in: ON_ROLL }, sectionId: { $in: sections.map((x) => x._id) } } },
+      { $group: { _id: { s: '$sectionId', st: '$status' }, n: { $sum: 1 } } },
+    ]),
+    AcademicYear.find({ tenantId }).select('isCurrent').lean(),
   ]);
-  const cm = new Map(counts.map((c) => [String(c._id), c.n]));
-  return sections.map((s) => ({ ...s, studentCount: cm.get(String(s._id)) || 0 }));
+  // the current year counts students in the class now; another year also counts those whose enrolment ended by promotion or completion
+  const current = new Map(years.map((y) => [String(y._id), y.isCurrent]));
+  const cm = new Map();
+  for (const c of counts) {
+    const sec = sections.find((x) => String(x._id) === String(c._id.s));
+    if (current.get(String(sec?.yearId)) && c._id.st !== 'active') continue;
+    cm.set(String(c._id.s), (cm.get(String(c._id.s)) || 0) + c.n);
+  }
+  return sections.map((x) => ({ ...x, studentCount: cm.get(String(x._id)) || 0 }));
 }
 export async function createSection(tenantId, body) {
   await owned(AcademicYear, tenantId, body.yearId, 'Academic year');
-  await owned(ClassModel, tenantId, body.classId, 'Class');
-  return Section.create({ tenantId, ...body });
+  const cls = await owned(ClassModel, tenantId, body.classId, 'Class');
+  const name = body.name.trim().toUpperCase();
+  if (await Section.exists({ tenantId, yearId: body.yearId, classId: body.classId, name })) throw conflict(`${cls.name} already has a section ${name}`);
+  return Section.create({ tenantId, ...body, name });
 }
 export async function updateSection(tenantId, id, body) {
   const s = await owned(Section, tenantId, id, 'Section');
+  if (body.name !== undefined) {
+    body = { ...body, name: body.name.trim().toUpperCase() };
+    if (body.name !== s.name && await Section.exists({ tenantId, yearId: s.yearId, classId: s.classId, name: body.name, _id: { $ne: s._id } })) throw conflict(`This class already has a section ${body.name}`);
+  }
   if (body.capacity !== undefined) {
     const n = await StudentEnrolment.countDocuments({ tenantId, sectionId: s._id, status: 'active' });
     if (body.capacity < n) throw conflict(`Capacity cannot be lower than the ${n} enrolled students`);

@@ -10,9 +10,18 @@ const ctx = (req) => ({ tenantId: req.tenantId, actorId: req.user._id });
 
 r.get('/students', async (req, res) => res.json(await svc.listStudents(req.tenantId, parse(v.listQuery, req.query))));
 
+r.get('/students/fee-preview', async (req, res) => res.json(await svc.feePreview(req.tenantId, parse(v.feePreviewQuery, req.query))));
+
+r.post('/students/bulk', async (req, res) => {
+  const b = parse(v.bulkBody, req.body);
+  const out = await svc.bulkUpdate(ctx(req), b);
+  await audit(req, 'student.bulk_changed', 'Student', null, `Bulk ${b.action} for ${out.done} of ${out.requested} student(s)`, { action: b.action, failed: out.failed.length });
+  res.json(out);
+});
 r.post('/students', async (req, res) => {
   const out = await svc.admitStudent(ctx(req), parse(v.admitBody, req.body));
   await audit(req, 'student.admitted', 'Student', out.student._id, `Admitted ${out.student.name} (${out.student.admissionNo})`);
+  if (out.discount) await audit(req, 'student.admission_discount', 'Student', out.student._id, `Gave ${out.student.name} a personal discount of ${out.discount.type === 'percent' ? `${out.discount.value}%` : `₹${out.discount.value}`} on tuition (₹${out.discount.applied} off): ${out.discount.reason}`);
   res.status(201).json(out);
 });
 

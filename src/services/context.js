@@ -41,6 +41,13 @@ export async function resolveYear(req) {
   return getCurrentYear(req.tenantId);
 }
 
+/**
+ * Which enrolments make up a class list. The current year only counts students who are in the class now. A year that has ended (or has not begun)
+ * also counts students whose enrolment was closed by promotion, repeating the year or completion, so last year's classes are not shown empty.
+ */
+export const ON_ROLL = ['active', 'promoted', 'retained', 'completed'];
+export const rollStatus = (year) => (year && !year.isCurrent ? { $in: ON_ROLL } : 'active');
+
 export const inForce = (a, today) => (!a.effectiveFrom || a.effectiveFrom <= today) && (!a.effectiveTo || a.effectiveTo >= today);
 
 export async function teacherScope(tenantId, teacherId, yearId, today) {

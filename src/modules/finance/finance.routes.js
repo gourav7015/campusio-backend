@@ -1,11 +1,16 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { parse, notFound } from '../../core/utils.js';
 import { audit } from '../../services/audit.js';
 import { Student, Payment, StudentEnrolment, Section, ClassModel, AcademicYear } from '../../models/index.js';
 import * as v from './finance.validation.js';
 import * as svc from './finance.service.js';
+import { listOnline } from '../payments/payments.service.js';
+
+import { expenseRoutes } from './expenses.routes.js';
 
 const r = Router();
+r.use(expenseRoutes);
 
 r.get('/dashboard', async (req, res) => res.json(await svc.dashboard(req.ctx)));
 
@@ -43,6 +48,19 @@ r.get('/students/:id/account', async (req, res) => {
   res.json({ student: { id: s._id, name: s.name, admissionNo: s.admissionNo, status: s.status, className: cls?.name, section: sec?.name, rollNo: enr?.rollNo, guardian: s.guardians?.[0]?.name, guardianPhone: s.guardians?.[0]?.phone }, ...(await svc.studentAccount(req.tenantId, s._id, req.ctx.today)) });
 });
 
+// the standing personal discount (every month, from now on)
+const pdBody = z.object({ type: z.enum(['percent', 'per_month']), value: z.number().positive().max(10_000_000), reason: z.string().trim().min(3).max(200) });
+r.put('/students/:id/personal-discount', async (req, res) => {
+  const out = await svc.setPersonalDiscount(req.ctx, req.params.id, parse(pdBody, req.body), req.user.name);
+  await audit(req, 'fees.personal_discount', 'Student', req.params.id, `Set a personal discount on tuition: ${out.personalDiscount.type === 'percent' ? `${out.personalDiscount.value}%` : `₹${out.personalDiscount.value} a month`} (${out.personalDiscount.reason})`);
+  res.json(out);
+});
+r.delete('/students/:id/personal-discount', async (req, res) => {
+  const out = await svc.clearPersonalDiscount(req.ctx, req.params.id, req.user.name);
+  await audit(req, 'fees.personal_discount_removed', 'Student', req.params.id, 'Removed the personal discount');
+  res.json(out);
+});
+
 // charges & concessions
 r.post('/charges', async (req, res) => {
   const c = await svc.createCharge(req.ctx, parse(v.chargeBody, req.body));
@@ -57,6 +75,7 @@ r.post('/charges/:id/concession', async (req, res) => {
 });
 
 // payments (immutable; reverse instead of edit/delete)
+r.get('/online-payments', async (req, res) => res.json(await listOnline(req.ctx, parse(z.object({ status: z.enum(['created', 'processing', 'paid', 'failed', 'expired', 'needs_review']).optional(), limit: z.coerce.number().int().min(1).max(200).default(100) }), req.query))));
 r.get('/payments', async (req, res) => res.json(await svc.listPayments(req.ctx, parse(v.rangeQuery, req.query))));
 r.post('/payments', async (req, res) => {
   const p = await svc.collectPayment(req.ctx, parse(v.paymentBody, req.body), req.user.name);
@@ -93,6 +112,8 @@ r.post('/students/:id/advance-payment', async (req, res) => {
 
 // reports, reminders, exports
 r.get('/reports/collection', async (req, res) => res.json(await svc.collectionReport(req.ctx, parse(v.rangeQuery, req.query))));
+const oid = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id');
+r.get('/reports/defaulters-by-class', async (req, res) => res.json(await svc.defaultersByClass(req.ctx, parse(z.object({ classId: oid.optional(), sectionId: oid.optional() }), req.query))));
 r.get('/reports/classes', async (req, res) => res.json(await svc.outstandingByClass(req.ctx)));
 r.post('/reminders', async (req, res) => {
   const out = await svc.sendReminders(req.ctx, parse(v.remindBody, req.body));
@@ -100,6 +121,7 @@ r.post('/reminders', async (req, res) => {
   res.json(out);
 });
 const csv = (res, name, body) => { res.setHeader('Content-Type', 'text/csv; charset=utf-8'); res.setHeader('Content-Disposition', `attachment; filename="${name}"`); res.send(body); };
+r.get('/export/defaulters-by-class.csv', async (req, res) => csv(res, 'defaulters-by-class.csv', await svc.exportDefaultersByClass(req.ctx)));
 r.get('/export/payments.csv', async (req, res) => csv(res, 'payments.csv', await svc.exportPayments(req.ctx, parse(v.rangeQuery, req.query))));
 r.get('/export/dues.csv', async (req, res) => csv(res, 'dues.csv', await svc.exportDues(req.ctx, parse(v.duesQuery.partial(), req.query))));
 export default r;

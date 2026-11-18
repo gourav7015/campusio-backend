@@ -72,6 +72,11 @@ adminRoutes.post('/announcements/:id/attachments', upload.single('file'), async 
   const file = await saveFile(req, req.file, { kind: 'announcement', ownerType: 'announcement', ownerId: req.params.id, visibility: 'school' });
   res.status(201).json(await ann.attach(req.ctx, req.params.id, file));
 });
+adminRoutes.post('/events/government-holidays', async (req, res) => {
+  const out = await cal.addGovernmentHolidays(req.ctx);
+  await audit(req, 'calendar.government_holidays', 'CalendarEvent', null, `Added ${out.added} government holiday(s)`);
+  res.json(out);
+});
 adminRoutes.get('/events', async (req, res) => res.json(await cal.listEvents(req.ctx, parse(v.calendarQuery, req.query))));
 adminRoutes.post('/events', async (req, res) => {
   const e = await cal.createEvent(req.ctx, parse(v.eventBody, req.body));

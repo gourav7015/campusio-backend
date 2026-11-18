@@ -1,3 +1,5 @@
+import { rollStatus } from '../../services/context.js';
+import { monitorsOf } from '../class-life/class-life.service.js';
 import {
   Student, StudentEnrolment, Section, ClassModel, Subject, SubjectOffering, Examination, Homework, StudyMaterial, MarksSheet, ExaminationSubject, ReportCard, User, AuditLog, TeachingAssignment, StudentRemark, AcademicYear, ClassTeacherAssignment, AttendanceSession,
 } from '../../models/index.js';
@@ -26,7 +28,7 @@ export async function myClasses(ctx) {
   const sections = await Section.find({ tenantId: ctx.tenantId, _id: { $in: sectionIds } }).lean();
   const [subjects, counts] = await Promise.all([
     Subject.find({ tenantId: ctx.tenantId, _id: { $in: scope.assignments.map((a) => a.subjectId) } }).lean(),
-    StudentEnrolment.aggregate([{ $match: { tenantId: ctx.tenantId, status: 'active', sectionId: { $in: sections.map((s) => s._id) } } }, { $group: { _id: '$sectionId', n: { $sum: 1 } } }]),
+    StudentEnrolment.aggregate([{ $match: { tenantId: ctx.tenantId, status: rollStatus(ctx.year), sectionId: { $in: sections.map((s) => s._id) } } }, { $group: { _id: '$sectionId', n: { $sum: 1 } } }]),
   ]);
   const classes = mk(await ClassModel.find({ tenantId: ctx.tenantId, _id: { $in: sections.map((s) => s.classId) } }).lean());
   const sm = mk(subjects); const cm = new Map(counts.map((c) => [String(c._id), c.n]));
@@ -68,7 +70,7 @@ export async function classOverview(ctx, sectionId) {
 
 export async function classStudents(ctx, sectionId) {
   assertSection(ctx, sectionId);
-  const enr = await StudentEnrolment.find({ tenantId: ctx.tenantId, sectionId, status: 'active' }).sort({ rollNo: 1 }).lean();
+  const enr = await StudentEnrolment.find({ tenantId: ctx.tenantId, sectionId, status: rollStatus(ctx.year) }).sort({ rollNo: 1 }).lean();
   const students = mk(await Student.find({ tenantId: ctx.tenantId, _id: { $in: enr.map((e) => e.studentId) } }).select('name admissionNo gender').lean());
   const recs = await submittedRecords(ctx.tenantId, { sectionId, yearId: ctx.year._id });
   const by = new Map();
@@ -77,6 +79,7 @@ export async function classStudents(ctx, sectionId) {
   const cards = await ReportCard.find({ tenantId: ctx.tenantId, sectionId, yearId: ctx.year._id, isCurrent: true, studentId: { $in: enr.map((e) => e.studentId) } }).sort({ publishedAt: 1 }).lean();
   const subjDocs = mk(await Subject.find({ tenantId: ctx.tenantId, _id: { $in: subjectIds } }).select('code').lean());
   const codes = new Set([...subjDocs.values()].map((s) => s.code));
+  const monitors = await monitorsOf(ctx.tenantId, sectionId);
   return enr.map((e) => {
     const s = students.get(String(e.studentId));
     const mine = cards.filter((c) => String(c.studentId) === String(e.studentId));
@@ -84,16 +87,16 @@ export async function classStudents(ctx, sectionId) {
     // a subject teacher sees scores for their own subject; the class teacher sees overall
     const ownScore = last?.snapshot.subjects.filter((x) => codes.has(x.code) && x.percentage != null);
     const latest = ctx.scope.classTeacherSectionIds.includes(String(sectionId)) ? last?.snapshot.percentage ?? null : ownScore?.length ? Math.round(ownScore.reduce((n, x) => n + x.percentage, 0) / ownScore.length) : null;
-    return { studentId: e.studentId, rollNo: e.rollNo, name: s?.name, admissionNo: s?.admissionNo, attendance: summarize(by.get(String(e.studentId)) || [], ctx.settings).percentage, latestScore: latest };
+    return { studentId: e.studentId, rollNo: e.rollNo, name: s?.name, admissionNo: s?.admissionNo, attendance: summarize(by.get(String(e.studentId)) || [], ctx.settings).percentage, latestScore: latest, monitor: monitors.has(String(e.studentId)) };
   });
 }
 
 /** Teachers see academic data only, never fees, documents or unrelated administrative details. */
 export async function studentDetail(ctx, studentId) {
-  const enrols = await StudentEnrolment.find({ tenantId: ctx.tenantId, studentId, status: 'active', yearId: ctx.year._id });
+  const enrols = await StudentEnrolment.find({ tenantId: ctx.tenantId, studentId, status: rollStatus(ctx.year), yearId: ctx.year._id });
   const enr = enrols.find((e) => ctx.scope.hasSection(e.sectionId));
   if (!enr) throw notFound('Student not found in your classes');
-  const [student, section, cls] = await Promise.all([Student.findOne({ _id: studentId, tenantId: ctx.tenantId }).select('name admissionNo gender dob house guardians'), Section.findById(enr.sectionId), ClassModel.findById(enr.classId)]);
+  const [student, section, cls] = await Promise.all([Student.findOne({ _id: studentId, tenantId: ctx.tenantId }).select('name admissionNo gender dob house guardians phone email address photoFileId'), Section.findById(enr.sectionId), ClassModel.findById(enr.classId)]);
   const recs = await submittedRecords(ctx.tenantId, { studentId, yearId: ctx.year._id });
   const isCT = ctx.scope.classTeacherSectionIds.includes(String(enr.sectionId));
   const mySubjects = new Set(ctx.scope.assignments.filter((a) => String(a.sectionId) === String(enr.sectionId)).map((a) => String(a.subjectId)));
@@ -105,6 +108,7 @@ export async function studentDetail(ctx, studentId) {
   const [secs, cls2, years] = await Promise.all([Section.find({ tenantId: ctx.tenantId }).lean(), ClassModel.find({ tenantId: ctx.tenantId }).lean(), AcademicYear.find({ tenantId: ctx.tenantId }).lean()]);
   const SM = mk(secs); const CM = mk(cls2); const YM = mk(years);
   const remarks = await StudentRemark.find({ tenantId: ctx.tenantId, studentId }).sort({ createdAt: -1 }).limit(30).populate('teacherId', 'name').lean();
+  const monitors = await monitorsOf(ctx.tenantId, enr.sectionId);
   return {
     profile: { id: student._id, name: student.name, admissionNo: student.admissionNo, rollNo: enr.rollNo, className: cls?.name, section: section?.name, gender: student.gender, house: student.house, guardian: student.guardians?.find((g) => g.isPrimary)?.name || student.guardians?.[0]?.name },
     attendance: summarize(recs, ctx.settings),
@@ -113,12 +117,13 @@ export async function studentDetail(ctx, studentId) {
       subjects: c.snapshot.subjects.filter((s) => isCT || myCodes.has(s.code)).map((s) => ({ subject: s.subject, components: s.components, obtained: s.obtained, max: s.max, percentage: s.percentage, grade: s.grade, absent: s.absent, remarks: s.remarks })),
     })),
     homework: hw.map((h) => ({ id: h._id, title: h.title, dueDate: h.dueDate })),
-    remarks: remarks.map((r) => ({ id: r._id, text: r.text, date: r.date, teacher: r.teacherId?.name, mine: String(r.teacherId?._id) === String(ctx.teacher._id) })),
+    remarks: remarks.map((r) => ({ id: r._id, text: r.text, date: r.date, category: r.category, requireAck: r.requireAck, acknowledged: !!r.ackAt, teacher: r.teacherId?.name, mine: String(r.teacherId?._id) === String(ctx.teacher._id) })),
+    canEdit: isCT, monitor: monitors.has(String(studentId)), photoFileId: student.photoFileId, contact: isCT ? { phone: student.phone, email: student.email, address: student.address, guardianPhone: student.guardians?.[0]?.phone, guardianEmail: student.guardians?.[0]?.email } : undefined,
     history: history.map((e) => ({ year: YM.get(String(e.yearId))?.name, className: CM.get(String(e.classId))?.name, section: SM.get(String(e.sectionId))?.name, rollNo: e.rollNo, status: e.status, startDate: e.startDate, endDate: e.endDate })),
   };
 }
 export async function addRemark(ctx, studentId, text) {
-  const enr = await StudentEnrolment.findOne({ tenantId: ctx.tenantId, studentId, status: 'active', yearId: ctx.year._id });
+  const enr = await StudentEnrolment.findOne({ tenantId: ctx.tenantId, studentId, status: rollStatus(ctx.year), yearId: ctx.year._id });
   if (!enr || !ctx.scope.hasSection(enr.sectionId)) throw notFound('Student not found in your classes');
   return StudentRemark.create({ tenantId: ctx.tenantId, studentId, teacherId: ctx.teacher._id, text, date: ctx.today });
 }

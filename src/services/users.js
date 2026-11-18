@@ -25,7 +25,7 @@ export function assertPasswordPolicy(p, { loginId, choosing = false } = {}) {
  * The only way user accounts come into existence: created by Super Admin (school admins)
  * or by School Admin / acting Super Admin (everyone inside a school). No self-signup.
  */
-export async function createUserAccount({ role, tenantId, name, email, loginId, password, createdBy }) {
+export async function createUserAccount({ role, tenantId, name, email, loginId, password, createdBy, extra = {} }) {
   let id = (loginId || email || '').trim().toLowerCase();
   if (!id) throw bad('A login id or email is required');
   if (await User.exists({ loginId: id })) throw conflict(`Login id "${id}" is already in use`);
@@ -33,7 +33,7 @@ export async function createUserAccount({ role, tenantId, name, email, loginId, 
   if (password) assertPasswordPolicy(password);
   const user = await User.create({
     role, tenantId: tenantId || null, name, email: email?.toLowerCase() || undefined, loginId: id,
-    passwordHash: await hashPassword(plain), mustChangePassword: true, createdBy,
+    passwordHash: await hashPassword(plain), mustChangePassword: true, createdBy, ...extra,
   });
   return { user, temporaryPassword: plain };
 }
@@ -45,5 +45,5 @@ export async function schoolCode(tenantId) {
 
 export const publicUser = (u) => ({
   id: u._id, name: u.name, loginId: u.loginId, email: u.email, role: u.role, tenantId: u.tenantId,
-  mustChangePassword: u.mustChangePassword, language: u.language, notificationPrefs: u.notificationPrefs, status: u.status,
+  mustChangePassword: u.mustChangePassword, adminLevel: u.role === 'school_admin' ? u.adminLevel || 'full' : undefined, permissions: u.adminLevel === 'sub' ? u.permissions || [] : undefined, language: u.language, notificationPrefs: u.notificationPrefs, status: u.status,
 });

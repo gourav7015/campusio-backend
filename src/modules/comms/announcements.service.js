@@ -66,7 +66,7 @@ export async function markRead(ctx, viewer, id) {
 async function publishFanout(ctx, a) {
   if (!liveNow(a)) return;
   const ids = await audienceUserIds(ctx.tenantId, a.audience);
-  await notifyUsers(ctx.tenantId, ids, { category: 'announcements', title: a.title, body: (a.body || '').slice(0, 140), link: { type: 'announcement', id: String(a._id) }, dedupeKey: `ann:${a._id}` });
+  await notifyUsers(ctx.tenantId, ids, { category: 'announcements', title: a.category === 'urgent' ? `URGENT: ${a.title}` : a.title, body: (a.body || '').slice(0, 140), link: { type: 'announcement', id: String(a._id) }, dedupeKey: `ann:${a._id}` });
 }
 
 export async function create(ctx, body, creator) {

@@ -30,6 +30,11 @@ r.post('/books', async (req, res) => {
 });
 r.get('/books/:id', async (req, res) => res.json(await svc.getBook(req.ctx, req.params.id)));
 r.patch('/books/:id', async (req, res) => res.json(await svc.updateBook(req.ctx, req.params.id, parse(v.bookPatch, req.body))));
+r.delete('/books/:id', async (req, res) => {
+  const out = await svc.deleteBook(req.ctx, req.params.id);
+  await audit(req, 'library.book_deleted', 'Book', req.params.id, `${out.mode === 'deleted' ? 'Deleted' : 'Archived (it has lending history)'} "${out.title}" (${out.copies} copies)`, { mode: out.mode });
+  res.json(out);
+});
 r.post('/books/:id/copies', async (req, res) => {
   const nos = await svc.addCopies(req.ctx, req.params.id, parse(v.addCopiesBody, req.body).count);
   await audit(req, 'library.copies_added', 'Book', req.params.id, `Added ${nos.length} copies`);

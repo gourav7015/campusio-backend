@@ -3,8 +3,6 @@ import { z } from 'zod';
 const subscription = z.object({
   plan: z.string().default('starter'),
   status: z.enum(['trial', 'active', 'expired', 'cancelled']).default('trial'),
-  studentLimit: z.number().int().positive().default(500),
-  teacherLimit: z.number().int().positive().default(50),
   startsOn: z.string().optional(),
   expiresOn: z.string().optional(),
 });

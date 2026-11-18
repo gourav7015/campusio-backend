@@ -1,4 +1,6 @@
+import { rollStatus } from '../../services/context.js';
 import mongoose from 'mongoose';
+import { monitorsOf } from '../class-life/class-life.service.js';
 import {
   Section, ClassModel, StudentEnrolment, Student, ClassTeacherAssignment, TeachingAssignment, AttendanceSession, AttendanceRecord, Teacher, User,
   LeaveApplication, Substitution, TimetableEntry,
@@ -44,7 +46,7 @@ export async function sectionInsight(ctx, sectionId) {
   const section = await loadSection(ctx, sectionId);
   const [cls, ct, enrols, session, assignments, hw] = await Promise.all([
     ClassModel.findById(section.classId).lean(), ClassTeacherAssignment.findOne({ tenantId: ctx.tenantId, sectionId, open: true }).populate('teacherId', 'name').lean(),
-    StudentEnrolment.find({ tenantId: ctx.tenantId, sectionId, status: 'active' }).select('studentId').lean(),
+    StudentEnrolment.find({ tenantId: ctx.tenantId, sectionId, status: rollStatus(ctx.year) }).select('studentId').lean(),
     AttendanceSession.findOne({ tenantId: ctx.tenantId, sectionId, date: ctx.today }).lean(),
     TeachingAssignment.find({ tenantId: ctx.tenantId, sectionId, yearId: section.yearId, open: true }).populate('subjectId', 'name').populate('teacherId', 'name').populate('offeringId', 'weeklyPeriods').lean(),
     Homework.countDocuments({ tenantId: ctx.tenantId, sectionId, status: 'published', dueDate: { $gte: ctx.today } }),
@@ -70,7 +72,7 @@ export async function sectionInsight(ctx, sectionId) {
 
 export async function sectionStudents(ctx, sectionId) {
   await loadSection(ctx, sectionId);
-  const enrols = await StudentEnrolment.find({ tenantId: ctx.tenantId, sectionId, status: 'active' }).sort({ rollNo: 1 }).lean();
+  const enrols = await StudentEnrolment.find({ tenantId: ctx.tenantId, sectionId, status: rollStatus(ctx.year) }).sort({ rollNo: 1 }).lean();
   const ids = enrols.map((e) => e.studentId);
   const [students, counts, scores, loans, buses] = await Promise.all([
     Student.find({ tenantId: ctx.tenantId, _id: { $in: ids } }).select('name admissionNo gender').lean(),
@@ -79,9 +81,10 @@ export async function sectionStudents(ctx, sectionId) {
     busNumbers(ctx.tenantId, ids),
   ]);
   const S = mk(students); const L = by(loans, 'borrowerId');
+  const monitors = await monitorsOf(ctx.tenantId, sectionId);
   return enrols.map((e) => {
     const k = String(e.studentId); const mine = L.get(k) || [];
-    return { studentId: e.studentId, rollNo: e.rollNo, name: S.get(k)?.name, admissionNo: S.get(k)?.admissionNo, gender: S.get(k)?.gender, attendance: summarizeCounts(counts.get(k) || zeroCounts(), ctx.settings).percentage, latestScore: scores.get(k) ?? null, booksOut: mine.length, overdueBooks: mine.filter((l) => l.dueDate < ctx.today).length, bus: buses.get(k) || null };
+    return { studentId: e.studentId, monitor: monitors.has(k), rollNo: e.rollNo, name: S.get(k)?.name, admissionNo: S.get(k)?.admissionNo, gender: S.get(k)?.gender, attendance: summarizeCounts(counts.get(k) || zeroCounts(), ctx.settings).percentage, latestScore: scores.get(k) ?? null, booksOut: mine.length, overdueBooks: mine.filter((l) => l.dueDate < ctx.today).length, bus: buses.get(k) || null };
   });
 }
 
@@ -98,7 +101,7 @@ export async function classAnalysis(ctx, { classId, sectionId }) {
   }
   const sectionIds = sections.map((s) => s._id);
   const [enrols, cards] = await Promise.all([
-    StudentEnrolment.find({ tenantId: ctx.tenantId, sectionId: { $in: sectionIds }, yearId: ctx.year._id, status: 'active' }).sort({ rollNo: 1 }).lean(),
+    StudentEnrolment.find({ tenantId: ctx.tenantId, sectionId: { $in: sectionIds }, yearId: ctx.year._id, status: rollStatus(ctx.year) }).sort({ rollNo: 1 }).lean(),
     ReportCard.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, isCurrent: true, sectionId: { $in: sectionIds } }).lean(),
   ]);
   const [students, exams, allClassExams] = await Promise.all([

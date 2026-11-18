@@ -64,16 +64,18 @@ describe('platform, provisioning rules and tenant isolation', () => {
     expect(own.body.some((c) => c.name === 'Class 8')).toBe(true);
   });
 
-  it('enforces subscription student limits in the backend', async () => {
-    const tiny = await makeSchool(root, 'tiny', { studentLimit: 1 });
+  it('puts no cap on how many students or teachers a school can have (only sections have a capacity)', async () => {
+    const old = await api().post('/api/platform/schools').set(root.h).send({ name: 'Old Client School', code: 'oldc', subscription: { status: 'active', studentLimit: 1, teacherLimit: 1 }, admin: { name: 'Admin', email: 'admin@oldc.test', password: 'Admin@12345' } });
+    expect(old.status).toBe(201); // a limit sent by an old client is simply ignored
+    const tiny = await makeSchool(root, 'tiny');
     const y = (await api().post('/api/school/years').set(tiny.h).send({ name: '2026-2027', startDate: '2026-04-01', endDate: '2027-03-31' })).body;
     const c = (await api().post('/api/school/classes').set(tiny.h).send({ name: 'Class 1' })).body;
     const s = (await api().post('/api/school/sections').set(tiny.h).send({ yearId: y._id, classId: c._id, name: 'A' })).body;
     const mk = (n, dob) => api().post('/api/school/students').set(tiny.h).send({ name: n, dob, sectionId: s._id, guardians: [{ name: 'Parent', relationship: 'Mother', phone: '9876543210' }] });
     expect((await mk('One Kid', '2018-01-01')).status).toBe(201);
-    const over = await mk('Two Kid', '2018-02-02');
-    expect(over.status).toBe(409);
-    expect(over.body.error).toMatch(/limit/i);
+    expect((await mk('Two Kid', '2018-02-02')).status).toBe(201);
+    expect((await mk('Three Kid', '2018-03-03')).status).toBe(201);
+    expect((await api().get('/api/school/dashboard').set(tiny.h)).body.subscription.studentLimit).toBeUndefined();
   });
 
   it('suspending a school blocks its users and kills their sessions; password policy and forced change work', async () => {

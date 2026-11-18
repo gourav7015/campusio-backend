@@ -79,7 +79,7 @@ async function buildSchool(cfg, hashes, superAdmin) {
   settings.statutory = { pf: { ...settings.statutory.pf, enabled: true }, esi: { ...settings.statutory.esi, enabled: true }, pt: { ...settings.statutory.pt, enabled: true } }; // this school deducts PF, ESI and professional tax
   const stats = {};
   await bulk(M.School, [{ _id: tenantId, name: cfg.name, code: cfg.code, address: `${cfg.city}, India`, phone: '0281 555 0100', board: 'CBSE', status: 'active', settings }]);
-  await bulk(M.Subscription, [{ schoolId: tenantId, plan: 'premium', status: 'active', studentLimit: 3000, teacherLimit: 200, startsOn: '2026-04-01', expiresOn: '2027-03-31' }]);
+  await bulk(M.Subscription, [{ schoolId: tenantId, plan: 'premium', status: 'active', startsOn: '2026-04-01', expiresOn: '2027-03-31' }]);
   await bulk(M.AcademicYear, [
     { tenantId, name: '2024-2025', startDate: '2024-04-01', endDate: '2025-03-31', isCurrent: false, status: 'closed' },
     { tenantId, name: '2025-2026', startDate: '2025-04-01', endDate: '2026-03-31', isCurrent: false, status: 'closed' },

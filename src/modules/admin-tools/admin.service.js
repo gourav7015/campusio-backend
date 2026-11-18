@@ -1,3 +1,4 @@
+import { rollStatus } from '../../services/context.js';
 import {
   Student, Teacher, Section, ClassModel, Subscription, LeaveApplication, Message, AuditLog, Examination, MarksSheet, TimetableEntry, StudentEnrolment, ReportCard,
   Homework, Announcement, Subject, File, AttendanceSession, AttendanceRecord,
@@ -24,7 +25,7 @@ export async function dashboard(ctx) {
   return {
     year: year && { id: year._id, name: year.name }, today,
     cards: { students, teachers, sections, pendingLeave, unreadMessages, unresolvedPeriods: unresolved, openAttendanceQueries: openQueries },
-    subscription: sub && { plan: sub.plan, status: sub.status, expiresOn: sub.expiresOn, studentLimit: sub.studentLimit, teacherLimit: sub.teacherLimit, studentsUsed: students, teachersUsed: teachers },
+    subscription: sub && { plan: sub.plan, status: sub.status, expiresOn: sub.expiresOn, studentsUsed: students, teachersUsed: teachers },
     finance, library: { onLoan, overdue: overdueLoans },
     attendance: att.totals, attendanceTrend: trendRows.map((t) => ({ date: t.date, percentage: t.percentage })),
     exams: { total: exams.length, awaitingReview: (sheetStatus.submitted || 0) + (sheetStatus.under_review || 0), approved: sheetStatus.approved || 0, published: sheetStatus.published || 0, returned: sheetStatus.returned || 0 },
@@ -86,7 +87,7 @@ export async function reportsSummary(ctx) {
   const { tenantId, year } = ctx;
   const [sections, classes, strength] = await Promise.all([
     Section.find({ tenantId, yearId: year?._id, status: 'active' }).lean(), ClassModel.find({ tenantId }).lean(),
-    StudentEnrolment.aggregate([{ $match: { tenantId, yearId: year?._id, status: 'active' } }, { $group: { _id: '$sectionId', n: { $sum: 1 } } }]),
+    StudentEnrolment.aggregate([{ $match: { tenantId, yearId: year?._id, status: rollStatus(year) } }, { $group: { _id: '$sectionId', n: { $sum: 1 } } }]),
   ]);
   const cm = new Map(classes.map((c) => [String(c._id), c.name])); const sm = new Map(strength.map((s) => [String(s._id), s.n]));
   const regs = await sessionCounts(tenantId, { yearId: year?._id });

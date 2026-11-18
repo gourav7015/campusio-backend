@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import {
-  File, Homework, StudyMaterial, Announcement, Student, Teacher, StudentEnrolment, TeachingAssignment, ClassTeacherAssignment, LeaveApplication, User,
+  File, Ticket, Homework, StudyMaterial, Announcement, Student, Teacher, StudentEnrolment, TeachingAssignment, ClassTeacherAssignment, LeaveApplication, User,
 } from '../../models/index.js';
 import { notFound, forbidden } from '../../core/utils.js';
 import { filePath, signFileToken, verifyFileToken } from '../../services/files.js';
@@ -27,6 +27,7 @@ const sectionsOf = async (user) => {
 export async function canAccess(user, tenantId, file) {
   if (!file || String(file.tenantId) !== String(tenantId)) return false;
   if (user.role === 'school_admin' || user.role === 'super_admin') return true;
+  if (file.ownerType === 'school' || file.ownerType === 'license') return true; // the school's own gallery and licences are for everyone at the school
   const { ids, student, teacher } = await sectionsOf(user);
   const { today } = await schoolToday(tenantId);
   switch (file.kind) {
@@ -47,9 +48,17 @@ export async function canAccess(user, tenantId, file) {
       return !!a && visibleTo(a, { role: user.role, sectionIds: ids });
     }
     case 'document': case 'photo':
-      if (file.ownerType === 'student') return !!student && String(student._id) === String(file.ownerId);
+      if (file.ownerType === 'student') {
+        if (student) return String(student._id) === String(file.ownerId);
+        if (user.role === 'teacher' && file.kind === 'photo') return !!(await StudentEnrolment.exists({ tenantId: user.tenantId, studentId: file.ownerId, status: 'active', sectionId: { $in: ids } })); // a teacher sees the photos of their own students
+        return false;
+      }
       if (file.ownerType === 'teacher') return !!teacher && String(teacher._id) === String(file.ownerId);
       return false;
+    case 'ticket': { // a help desk attachment: only the person who raised the ticket, and never one that sits on a private note
+      const t = await Ticket.findOne({ _id: file.ownerId, tenantId, 'raisedBy.userId': user._id }).select('messages');
+      return !!t && t.messages.some((m) => !m.internal && (m.attachments || []).some((a) => String(a.fileId) === String(file._id)));
+    }
     case 'leave': {
       const l = await LeaveApplication.findOne({ attachmentFileId: file._id, tenantId });
       return !!l && !!teacher && String(l.teacherId) === String(teacher._id);

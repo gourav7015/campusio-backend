@@ -1,3 +1,4 @@
+import { rollStatus } from '../../services/context.js';
 import {
   Book, BookCopy, LibraryIssue, Student, Teacher, StudentEnrolment, Section, ClassModel, StudentCharge, School,
 } from '../../models/index.js';
@@ -38,6 +39,26 @@ export async function updateBook(ctx, id, body) {
   if (body.status === 'archived' && (await LibraryIssue.exists({ tenantId: ctx.tenantId, bookId: b._id, status: 'issued' }))) throw conflict('Copies of this book are on loan. Archive it after they are returned.');
   Object.assign(b, body);
   return b.save();
+}
+
+/**
+ * Remove a book from the catalogue. A book that was never lent is erased with its copies; one with lending history is archived
+ * (history, fines and fee charges keep pointing at it). Copies on loan block the removal.
+ */
+export async function deleteBook(ctx, id) {
+  const b = await Book.findOne({ _id: id, tenantId: ctx.tenantId });
+  if (!b) throw notFound('Book not found');
+  const onLoan = await LibraryIssue.countDocuments({ tenantId: ctx.tenantId, bookId: b._id, status: 'issued' });
+  if (onLoan) throw conflict(`${onLoan} cop${onLoan === 1 ? 'y is' : 'ies are'} on loan. Return ${onLoan === 1 ? 'it' : 'them'} first.`);
+  const copies = await BookCopy.countDocuments({ tenantId: ctx.tenantId, bookId: b._id });
+  if (await LibraryIssue.exists({ tenantId: ctx.tenantId, bookId: b._id })) {
+    await BookCopy.updateMany({ tenantId: ctx.tenantId, bookId: b._id }, { $set: { status: 'withdrawn' } });
+    b.status = 'archived'; await b.save();
+    return { mode: 'archived', title: b.title, copies };
+  }
+  await BookCopy.deleteMany({ tenantId: ctx.tenantId, bookId: b._id });
+  await Book.deleteOne({ _id: b._id, tenantId: ctx.tenantId });
+  return { mode: 'deleted', title: b.title, copies };
 }
 
 export async function setCopyStatus(ctx, copyId, { status, notes }) {
@@ -185,6 +206,23 @@ export async function renewIssue(ctx, id) {
   return issue.save();
 }
 
+/** "Class 8" + "A" -> "8-A" (LKG and UKG keep their name). Batched: one query per collection for the whole page. */
+const classLabel = (cls, sec) => `${/^Class (\d+)$/.exec(cls || '')?.[1] || cls || ''}${sec ? `-${sec}` : ''}` || null;
+async function studentClasses(tenantId, studentIds) {
+  if (!studentIds.length) return new Map();
+  // the newest enrolment per student wins (the current year's active one, else the most recent)
+  const enrols = await StudentEnrolment.find({ tenantId, studentId: { $in: studentIds } }).sort({ startDate: -1, createdAt: -1 }).select('studentId classId sectionId status').lean();
+  const pick = new Map();
+  for (const e of enrols) { const k = String(e.studentId); const cur = pick.get(k); if (!cur || (e.status === 'active' && cur.status !== 'active')) pick.set(k, e); }
+  const picks = [...pick.values()];
+  const [classes, sections] = await Promise.all([
+    ClassModel.find({ tenantId, _id: { $in: picks.map((e) => e.classId) } }).select('name').lean(),
+    Section.find({ tenantId, _id: { $in: picks.map((e) => e.sectionId) } }).select('name').lean(),
+  ]);
+  const C = mk(classes); const S = mk(sections);
+  return new Map(picks.map((e) => [String(e.studentId), { className: C.get(String(e.classId))?.name || null, sectionName: S.get(String(e.sectionId))?.name || null }]));
+}
+
 export async function listLoans(ctx, q) {
   const f = { tenantId: ctx.tenantId };
   if (q.status === 'overdue') { f.status = 'issued'; f.dueDate = { $lt: ctx.today }; } else if (q.status !== 'all') f.status = q.status;
@@ -193,12 +231,13 @@ export async function listLoans(ctx, q) {
   let rows = await LibraryIssue.find(f).sort({ dueDate: 1, createdAt: -1 }).limit(1000).lean();
   const [books, names, copies] = await Promise.all([Book.find({ tenantId: ctx.tenantId, _id: { $in: rows.map((r) => r.bookId) } }).select('title author').lean(), borrowerNames(ctx.tenantId, rows), BookCopy.find({ tenantId: ctx.tenantId, _id: { $in: rows.map((r) => r.copyId) } }).select('accessionNo').lean()]);
   const B = mk(books); const C = mk(copies);
+  const klass = await studentClasses(ctx.tenantId, rows.filter((r) => r.borrowerType === 'student').map((r) => r.borrowerId));
   const rate = rulesOf(ctx.settings).finePerDay;
   rows = rows.map((r) => {
     const late = r.status === 'issued' ? Math.max(0, daysBetween(r.dueDate, ctx.today)) : r.fineDays || 0;
-    return { ...r, book: B.get(String(r.bookId))?.title, author: B.get(String(r.bookId))?.author, accessionNo: C.get(String(r.copyId))?.accessionNo, borrower: names.get(String(r.borrowerId)), overdue: r.status === 'issued' && r.dueDate < ctx.today, daysLate: late, fineSoFar: r.status === 'issued' ? round2(late * rate) : r.fineAmount };
+    return { ...r, book: B.get(String(r.bookId))?.title, author: B.get(String(r.bookId))?.author, accessionNo: C.get(String(r.copyId))?.accessionNo, borrower: names.get(String(r.borrowerId)), ...(r.borrowerType === 'student' ? { className: klass.get(String(r.borrowerId))?.className ?? null, sectionName: klass.get(String(r.borrowerId))?.sectionName ?? null, classLabel: klass.get(String(r.borrowerId)) ? classLabel(klass.get(String(r.borrowerId)).className, klass.get(String(r.borrowerId)).sectionName) : null } : { className: null, sectionName: null, classLabel: 'Teacher' }), overdue: r.status === 'issued' && r.dueDate < ctx.today, daysLate: late, fineSoFar: r.status === 'issued' ? round2(late * rate) : r.fineAmount };
   });
-  if (q.q) { const rx = new RegExp(escapeRegex(q.q), 'i'); rows = rows.filter((r) => rx.test(r.book || '') || rx.test(r.borrower || '') || rx.test(r.accessionNo || '')); }
+  if (q.q) { const rx = new RegExp(escapeRegex(q.q), 'i'); rows = rows.filter((r) => rx.test(r.book || '') || rx.test(r.borrower || '') || rx.test(r.accessionNo || '') || rx.test(r.classLabel || '')); }
   return { total: rows.length, items: rows.slice((q.page - 1) * q.limit, q.page * q.limit) };
 }
 
@@ -240,7 +279,7 @@ export async function exportInventory(ctx) {
 }
 export async function exportLoans(ctx, status) {
   const { items } = await listLoans(ctx, { status: status || 'all', page: 1, limit: 100000 });
-  return toCsv(items, [{ label: 'Accession', get: (r) => r.accessionNo }, { label: 'Book', get: (r) => r.book }, { label: 'Borrower', get: (r) => r.borrower }, { label: 'Type', get: (r) => r.borrowerType }, { label: 'Issued', get: (r) => r.issuedOn }, { label: 'Due', get: (r) => r.dueDate }, { label: 'Returned', get: (r) => r.returnedOn }, { label: 'Status', get: (r) => r.status }, { label: 'Days late', get: (r) => r.daysLate }, { label: 'Fine', get: (r) => r.fineSoFar }]);
+  return toCsv(items, [{ label: 'Accession', get: (r) => r.accessionNo }, { label: 'Book', get: (r) => r.book }, { label: 'Borrower', get: (r) => r.borrower }, { label: 'Type', get: (r) => r.borrowerType }, { label: 'Class', get: (r) => r.classLabel }, { label: 'Issued', get: (r) => r.issuedOn }, { label: 'Due', get: (r) => r.dueDate }, { label: 'Returned', get: (r) => r.returnedOn }, { label: 'Status', get: (r) => r.status }, { label: 'Days late', get: (r) => r.daysLate }, { label: 'Fine', get: (r) => r.fineSoFar }]);
 }
 
 // ───────────── settings ─────────────
@@ -274,7 +313,7 @@ export async function classBorrowers(ctx, { classId, sectionId, filter = 'all' }
   else sections = await Section.find({ tenantId: ctx.tenantId, classId, yearId: ctx.year._id, status: 'active' }).sort({ name: 1 }).lean();
   const cls = await ClassModel.findOne({ _id: classId, tenantId: ctx.tenantId }).lean();
   if (!cls) throw notFound('Class not found');
-  const enrols = await StudentEnrolment.find({ tenantId: ctx.tenantId, sectionId: { $in: sections.map((s) => s._id) }, yearId: ctx.year._id, status: 'active' }).sort({ rollNo: 1 }).lean();
+  const enrols = await StudentEnrolment.find({ tenantId: ctx.tenantId, sectionId: { $in: sections.map((s) => s._id) }, yearId: ctx.year._id, status: rollStatus(ctx.year) }).sort({ rollNo: 1 }).lean();
   const ids = enrols.map((e) => e.studentId);
   const [students, issues] = await Promise.all([
     Student.find({ tenantId: ctx.tenantId, _id: { $in: ids } }).select('name admissionNo').lean(),

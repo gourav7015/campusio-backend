@@ -31,7 +31,37 @@ export const config = {
   fileLinkTtlSeconds: Number(process.env.FILE_LINK_TTL || 300),
   loginRateLimit: Number(process.env.LOGIN_RATE_LIMIT || 20),
   apiRateLimit: Number(process.env.API_RATE_LIMIT || 600),
+  /** Outgoing email. With no RESEND_API_KEY nothing is ever sent (the in-app notification still happens). */
+  mail: {
+    resendKey: process.env.RESEND_API_KEY || '',
+    from: process.env.MAIL_FROM || '', // e.g. Campusio <noreply@mail.example.com>; the domain must be verified at Resend
+    replyTo: process.env.MAIL_REPLY_TO || '', // where replies to notification emails go (the support inbox)
+    supportTo: process.env.MAIL_SUPPORT_TO || process.env.MAIL_REPLY_TO || '', // who hears about new platform help desk tickets
+    appUrl: (process.env.APP_URL || (process.env.CORS_ORIGIN || 'http://localhost:5173').split(',')[0]).replace(/\/$/, ''),
+    // which in-app notification categories are also emailed. A person can still switch email off (notificationPrefs.email = false) or one category off.
+    categories: new Set((process.env.MAIL_CATEGORIES || 'system,approvals,leave,fees,announcements,results,examination,helpdesk').split(',').map((s) => s.trim()).filter(Boolean)),
+    // Resend's free plan allows about 2 requests a second, so the queue sends one email at a time with a short gap.
+    gapMs: Number(process.env.MAIL_GAP_MS ?? (process.env.NODE_ENV === 'test' ? 0 : 600)),
+  },
+  /**
+   * Online fee payments. provider 'mock' is a built-in test gateway that behaves like Razorpay (orders, signed results, webhooks) but moves no money;
+   * 'razorpay' talks to the real thing; 'off' switches online payment off. The test gateway can never run in production by accident.
+   */
+  payments: {
+    provider: (process.env.PAYMENT_PROVIDER || (process.env.NODE_ENV === 'production' ? 'off' : 'mock')).toLowerCase(),
+    razorpay: { keyId: process.env.RAZORPAY_KEY_ID || '', keySecret: process.env.RAZORPAY_KEY_SECRET || '', webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET || '' },
+    mockSecret: process.env.MOCK_PAYMENT_SECRET || 'mock-gateway-secret-not-for-production',
+    orderMinutes: Number(process.env.PAYMENT_ORDER_MINUTES || 30), // an order nobody paid is closed after this long
+    maxAmount: Number(process.env.PAYMENT_MAX_AMOUNT || 500000),
+  },
 };
+if (!['mock', 'razorpay', 'off'].includes(config.payments.provider)) throw new Error('PAYMENT_PROVIDER must be mock, razorpay or off');
+if (isProd && config.payments.provider === 'mock' && process.env.ALLOW_MOCK_PAYMENTS !== 'true') throw new Error('PAYMENT_PROVIDER=mock moves no real money and is not allowed in production (set razorpay or off)');
+if (config.payments.provider === 'razorpay') {
+  const z = config.payments.razorpay;
+  if (!z.keyId || !z.keySecret || !z.webhookSecret) throw new Error('PAYMENT_PROVIDER=razorpay needs RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET');
+}
+if (isProd && config.mail.resendKey && !config.mail.from) throw new Error('MAIL_FROM must be set (a sender on your verified Resend domain) when RESEND_API_KEY is set');
 
 /** The database is MongoDB Atlas (or any MongoDB) given by MONGO_URI. There is deliberately no silent fallback to a local database. */
 export function requireMongoUri() {

@@ -30,7 +30,7 @@ export async function feed(ctx, { from, to }, { sectionIds, classIds, teacherId 
   for (const e of events) {
     const secs = (e.sectionIds || []).map(String);
     if (secs.length && !secs.some((s) => sectionIds.includes(s))) continue;
-    items.push({ id: String(e._id), title: e.title, type: e.type, date: e.startDate, endDate: e.endDate, description: e.description, source: 'event' });
+    items.push({ id: String(e._id), title: e.title, type: e.type, kind: e.kind || 'school', date: e.startDate, endDate: e.endDate, description: e.description, source: 'event' });
   }
   const exams = (await Examination.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, schedulePublished: true }).select('_id name sectionId').lean())
     .filter((e) => !e.sectionId || sectionIds.includes(String(e.sectionId)));
@@ -44,4 +44,28 @@ export async function feed(ctx, { from, to }, { sectionIds, classIds, teacherId 
   const hs = new Map((await Subject.find({ tenantId: ctx.tenantId, _id: { $in: hw.map((h) => h.subjectId) } }).select('name').lean()).map((s) => [String(s._id), s.name]));
   for (const h of hw) items.push({ id: String(h._id), title: `${hs.get(String(h.subjectId)) || ''}: ${h.title}`, type: 'deadline', date: h.dueDate, endDate: h.dueDate, source: 'homework', link: { type: 'homework', id: String(h._id) } });
   return items.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * National holidays that fall on the same date every year. Festivals that move with the moon or the state (Diwali, Eid, Holi…) are NOT guessed:
+ * the school adds those itself, so a wrong date can never reach a family.
+ */
+export const FIXED_GOVERNMENT_HOLIDAYS = [
+  { md: '01-26', title: 'Republic Day' }, { md: '04-14', title: 'Dr. B. R. Ambedkar Jayanti' }, { md: '08-15', title: 'Independence Day' },
+  { md: '10-02', title: 'Gandhi Jayanti' }, { md: '12-25', title: 'Christmas' },
+];
+export async function addGovernmentHolidays(ctx) {
+  const y = ctx.year;
+  if (!y) throw notFound('Create an academic year first');
+  const years = [...new Set([Number(y.startDate.slice(0, 4)), Number(y.endDate.slice(0, 4))])];
+  let added = 0; let skipped = 0;
+  for (const yr of years) for (const h of FIXED_GOVERNMENT_HOLIDAYS) {
+    const date = `${yr}-${h.md}`;
+    if (date < y.startDate || date > y.endDate) continue;
+    const have = await CalendarEvent.exists({ tenantId: ctx.tenantId, type: 'holiday', title: h.title, startDate: date });
+    if (have) { skipped += 1; continue; }
+    await CalendarEvent.create({ tenantId: ctx.tenantId, title: h.title, type: 'holiday', kind: 'government', description: 'Government holiday', startDate: date, endDate: date, sectionIds: [], createdBy: ctx.actorId });
+    added += 1;
+  }
+  return { added, skipped };
 }

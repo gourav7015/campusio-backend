@@ -13,6 +13,22 @@ export function distanceMeters(a, b) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
+const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+/**
+ * When self check-in is open: from `checkInOpensBeforeMinutes` before the shift starts until the shift ends (unless the school turned the closing time off).
+ * Times are the school's own clock. A shift that runs past midnight is not supported.
+ */
+export function checkInWindow(pol) {
+  const before = pol.checkInOpensBeforeMinutes ?? 60;
+  const opens = Math.max(0, mins(pol.shiftStart) - before);
+  const closes = pol.checkInClosesAtShiftEnd === false ? 24 * 60 - 1 : mins(pol.shiftEnd);
+  return { opensAt: hhmm(opens), closesAt: hhmm(closes), opens, closes };
+}
+export function checkInState(pol, now) {
+  const w = checkInWindow(pol); const n = mins(now);
+  return { opensAt: w.opensAt, closesAt: w.closesAt, state: n < w.opens ? 'early' : n > w.closes ? 'closed' : 'open' };
+}
+
 /** What the times say, against the school's working hours: late, hours worked, and the status the register should suggest. */
 export function evaluate(settings, punch) {
   if (!punch?.checkIn) return null;
@@ -48,13 +64,18 @@ function locate(ctx, coords) {
 export async function today(ctx, person) {
   const p = await StaffPunch.findOne({ tenantId: ctx.tenantId, personId: person.id, date: ctx.today }).lean();
   const pol = policyOf(ctx);
-  return { date: ctx.today, now: nowTimeStr(ctx.settings.timezone), punch: p, evaluation: evaluate(ctx.settings, p), policy: { shiftStart: pol.shiftStart, shiftEnd: pol.shiftEnd, graceMinutes: pol.graceMinutes, requiresLocation: !!pol.location, radiusMeters: pol.location?.radiusMeters } };
+  const now = nowTimeStr(ctx.settings.timezone);
+  const win = checkInState(pol, now);
+  return { date: ctx.today, now, punch: p, evaluation: evaluate(ctx.settings, p), policy: { shiftStart: pol.shiftStart, shiftEnd: pol.shiftEnd, graceMinutes: pol.graceMinutes, opensAt: win.opensAt, closesAt: win.closesAt, checkInState: win.state, requiresLocation: !!pol.location, radiusMeters: pol.location?.radiusMeters } };
 }
 
 export async function checkIn(ctx, person, coords) {
   await workingToday(ctx);
   const existing = await StaffPunch.findOne({ tenantId: ctx.tenantId, personId: person.id, date: ctx.today });
   if (existing?.checkIn) throw conflict(`You already checked in at ${existing.checkIn}`);
+  const win = checkInState(policyOf(ctx), nowTimeStr(ctx.settings.timezone));
+  if (win.state === 'early') throw bad(`Check-in opens at ${win.opensAt}. It is too early to check in.`);
+  if (win.state === 'closed') throw bad(`Check-in closed at ${win.closesAt}. Ask the school office to record your time.`);
   const where = locate(ctx, coords);
   const doc = { checkIn: nowTimeStr(ctx.settings.timezone), source: 'self', inLocation: where };
   await StaffPunch.updateOne({ tenantId: ctx.tenantId, personId: person.id, date: ctx.today }, { $set: { personType: person.type, group: person.group, ...doc } }, { upsert: true });

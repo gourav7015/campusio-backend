@@ -233,7 +233,7 @@ describe('Finance portal: fee structures, billing, payments, receipts, reversals
     expect(r1.sent).toBe(r1.matched);
     expect((await api().post(F('/reminders')).set(fin.h).send({})).body.sent).toBe(0); // deduplicated
     const csv = await api().get(F('/export/dues.csv')).set(fin.h);
-    expect(csv.text.split('\n')[0]).toBe('Admission No,Student,Class,Section,Guardian,Phone,Billed,Paid,Pending,Overdue,Next due');
+    expect(csv.text.split('\n')[0]).toBe('Admission No,Student,Class,Section,Guardian,Phone,Billed,Paid,Pending,Overdue,Days overdue,Next due');
     expect((await api().get(F('/export/payments.csv')).set(fin.h)).text).toContain('RCPT');
     expect((await api().get('/api/school/export/students.csv').set(fin.h)).status).toBe(403);
   });

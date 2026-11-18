@@ -36,5 +36,5 @@ export const duesQuery = z.object({
   q: z.string().optional(), sectionId: id.optional(), classId: id.optional(), status: z.enum(['all', 'overdue', 'pending', 'clear']).default('all'),
   page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(200).default(50),
 });
-export const rangeQuery = z.object({ from: date.optional(), to: date.optional(), mode: z.enum(MODES).optional(), q: z.string().optional(), limit: z.coerce.number().int().min(1).max(500).default(200) });
+export const rangeQuery = z.object({ from: date.optional(), to: date.optional(), mode: z.enum([...MODES, 'online']).optional(), q: z.string().optional(), limit: z.coerce.number().int().min(1).max(500).default(200) });
 export const remindBody = z.object({ studentIds: z.array(id).max(1000).optional(), onlyOverdue: z.boolean().default(true) });

@@ -36,3 +36,5 @@ export const adjustBody = z.object({
 });
 export const payBody = z.object({ paidOn: date.optional(), mode: z.enum(MODES).default('bank_transfer'), reference: z.string().trim().max(60).optional(), payslipIds: z.array(id).max(2000).optional() });
 export const listQuery = z.object({ q: z.string().optional(), levelId: id.optional(), status: z.enum(['all', 'with', 'without']).default('all'), type: z.enum(['all', 'teachers', 'staff']).default('all') });
+
+export const installmentBody = z.object({ amount: z.number().positive().max(10_000_000), paidOn: date.optional(), mode: z.enum(MODES).default('bank_transfer'), reference: z.string().trim().max(60).optional(), note: z.string().trim().max(120).optional() });

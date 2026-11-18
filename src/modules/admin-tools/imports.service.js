@@ -5,7 +5,6 @@ import { admitStudent } from '../students/students.service.js';
 import { createTeacher } from '../teachers/teachers.service.js';
 import { admitBody } from '../students/students.validation.js';
 import { teacherBody } from '../teachers/teachers.validation.js';
-import { assertWithinLimit } from '../../services/enrolment.js';
 
 export const rowsBody = z.object({ rows: z.array(z.record(z.any())).min(1).max(1000), dryRun: z.boolean().default(true), skipInvalid: z.boolean().default(false), yearId: z.string().optional() });
 
@@ -16,7 +15,6 @@ export async function importStudents(ctx, { rows, dryRun, skipInvalid, yearId })
   const sections = await Section.find({ tenantId: ctx.tenantId, yearId: yearId || year._id }).populate('classId', 'name').lean();
   const key = (cn, sn) => `${String(cn).toLowerCase().trim()}|${String(sn).toLowerCase().trim()}`;
   const secMap = new Map(sections.map((s) => [key(s.classId.name, s.name), s]));
-  await assertWithinLimit(ctx.tenantId, 'student', 0);
   const seenAdm = new Set(); const seenId = new Set();
   const report = [];
   const valid = [];
@@ -48,7 +46,6 @@ export async function importStudents(ctx, { rows, dryRun, skipInvalid, yearId })
   }
   const invalid = report.filter((r) => !r.ok).length;
   if (dryRun || (invalid && !skipInvalid)) return { dryRun: true, total: rows.length, valid: valid.length, invalid, report, committed: false };
-  await assertWithinLimit(ctx.tenantId, 'student', valid.length);
   const batch = await ImportBatch.create({ tenantId: ctx.tenantId, entity: 'students', createdBy: ctx.actorId, actingAsSuperAdmin: ctx.role === 'super_admin', total: rows.length });
   const credentials = []; const ids = []; const userIds = []; const failed = [];
   for (const v of valid) {
@@ -87,7 +84,6 @@ export async function importTeachers(ctx, { rows, dryRun, skipInvalid }) {
   }
   const invalid = report.filter((r) => !r.ok).length;
   if (dryRun || (invalid && !skipInvalid)) return { dryRun: true, total: rows.length, valid: valid.length, invalid, report, committed: false };
-  await assertWithinLimit(ctx.tenantId, 'teacher', valid.length);
   const batch = await ImportBatch.create({ tenantId: ctx.tenantId, entity: 'teachers', createdBy: ctx.actorId, actingAsSuperAdmin: ctx.role === 'super_admin', total: rows.length });
   const credentials = []; const ids = []; const userIds = []; const failed = [];
   for (const v of valid) {

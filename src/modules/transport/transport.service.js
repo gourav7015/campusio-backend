@@ -1,9 +1,25 @@
+import { rollStatus } from '../../services/context.js';
 import { Bus, StudentTransport, Student, StudentEnrolment, Section, ClassModel, StaffMember, Designation } from '../../models/index.js';
-import { notFound, conflict, bad, addDays, escapeRegex } from '../../core/utils.js';
+import { notFound, conflict, bad, addDays, daysBetween, escapeRegex } from '../../core/utils.js';
 import { billTransport, cancelTransportCharges } from '../finance/finance.service.js';
 
 const EXPIRIES = ['insuranceExpiry', 'fitnessExpiry', 'pollutionExpiry'];
 const expiryAlerts = (bus, today) => EXPIRIES.filter((k) => bus[k] && bus[k] <= addDays(today, 30)).map((k) => ({ field: k.replace('Expiry', ''), date: bus[k], expired: bus[k] < today }));
+/** valid / expiring (within 30 days) / expired / missing (no date on file). Dates are plain YYYY-MM-DD strings in the school's calendar. */
+const certState = (date, today) => (!date ? 'missing' : date < today ? 'expired' : date <= addDays(today, 30) ? 'expiring' : 'valid');
+const DOCS = [['insuranceExpiry', 'Insurance'], ['fitnessExpiry', 'Fitness certificate'], ['pollutionExpiry', 'Pollution certificate']];
+/** Every document of every non-retired bus, not just the problems. The driver's licence is listed only when a driver is assigned. */
+export function certificateRows(buses, crew, today) {
+  const out = [];
+  for (const b of buses.filter((x) => x.status !== 'retired')) {
+    const row = (doc, label, date) => out.push({ busId: b._id, bus: b.busNo, doc, label, date: date || null, daysLeft: date ? daysBetween(today, date) : null, state: certState(date, today) });
+    for (const [k, label] of DOCS) row(k.replace('Expiry', ''), label, b[k]);
+    const d = crew.get(String(b.driverId));
+    if (d) row('licence', `Driver licence (${d.name})`, d.licenseExpiry);
+  }
+  const rank = { expired: 0, expiring: 1, missing: 2, valid: 3 };
+  return out.sort((a, b) => rank[a.state] - rank[b.state] || (a.daysLeft ?? 0) - (b.daysLeft ?? 0) || String(a.bus).localeCompare(String(b.bus), undefined, { numeric: true }));
+}
 const card = (s) => (s ? { id: s._id, staffId: s.staffId, name: s.name, phone: s.phone, licenseNo: s.licenseNo, licenseExpiry: s.licenseExpiry, status: s.status } : null);
 
 async function crewOf(tenantId, buses) {
@@ -71,7 +87,7 @@ export async function deleteBus(ctx, id) {
 async function describeStudents(ctx, studentIds) {
   const [students, enrs] = await Promise.all([
     Student.find({ tenantId: ctx.tenantId, _id: { $in: studentIds } }).select('name admissionNo').lean(),
-    StudentEnrolment.find({ tenantId: ctx.tenantId, studentId: { $in: studentIds }, yearId: ctx.year?._id, status: 'active' }).lean(),
+    StudentEnrolment.find({ tenantId: ctx.tenantId, studentId: { $in: studentIds }, yearId: ctx.year?._id, status: rollStatus(ctx.year) }).lean(),
   ]);
   const [secs, cls] = await Promise.all([Section.find({ _id: { $in: enrs.map((e) => e.sectionId) } }).select('name').lean(), ClassModel.find({ _id: { $in: enrs.map((e) => e.classId) } }).select('name').lean()]);
   const S = new Map(secs.map((s) => [String(s._id), s.name])); const C = new Map(cls.map((c) => [String(c._id), c.name]));
@@ -163,6 +179,7 @@ export async function dashboard(ctx) {
     alerts: [
       ...buses.flatMap((b) => withCrew(b, crew, ctx.today).alerts.map((a) => ({ bus: b.busNo, ...a }))),
     ],
+    certificates: certificateRows(buses, crew, ctx.today),
     fullBuses: buses.filter((b) => b.status === 'active').map((b) => ({ id: b._id, busNo: b.busNo, riders: n.get(String(b._id)) || 0, capacity: b.capacity })).sort((a, b) => b.riders / b.capacity - a.riders / a.capacity).slice(0, 6),
   };
 }

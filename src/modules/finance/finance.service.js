@@ -1,8 +1,10 @@
+import { rollStatus } from '../../services/context.js';
+import { classSpan } from '../../services/yearSpan.js';
 import PDFDocument from 'pdfkit';
 import {
   FeeStructure, StudentCharge, Payment, Student, StudentEnrolment, Section, ClassModel, AcademicYear, School,
 } from '../../models/index.js';
-import { notFound, conflict, bad, round2, escapeRegex, eachDate, addDays, toCsv } from '../../core/utils.js';
+import { notFound, conflict, bad, round2, escapeRegex, eachDate, addDays, daysBetween, toCsv } from '../../core/utils.js';
 import { nextSeq, settingsOf, loadSchool } from '../../services/context.js';
 import { notifyUsers } from '../../services/notify.js';
 
@@ -59,12 +61,13 @@ export function policyOf(settings) {
 }
 
 /** Months an academic year is billed for, starting at the month the student joined (never earlier than the year). */
-export function billingMonths(year, fromDate) {
-  const start = fromDate && fromDate > year.startDate ? fromDate : year.startDate;
+export function billingMonths(year, fromDate, classId) {
+  const span = classSpan(year, classId);
+  const start = fromDate && fromDate > span.startDate ? fromDate : span.startDate;
   const out = [];
   let y = Number(start.slice(0, 4)); let m = Number(start.slice(5, 7));
-  const endKey = year.endDate.slice(0, 7);
-  while (`${y}-${pad2(m)}` <= endKey && out.length < 13) { out.push(`${y}-${pad2(m)}`); m += 1; if (m > 12) { m = 1; y += 1; } }
+  const endKey = span.endDate.slice(0, 7);
+  while (`${y}-${pad2(m)}` <= endKey && out.length < 18) { out.push(`${y}-${pad2(m)}`); m += 1; if (m > 12) { m = 1; y += 1; } }
   return out;
 }
 const dueOn = (period, day) => `${period}-${pad2(Math.min(day, 28))}`;
@@ -87,7 +90,7 @@ async function billStudent(ctx, structure, studentId, enrolment, spec) {
   const year = await AcademicYear.findById(structure.yearId);
   const policy = policyOf((await loadSchool(tenantId))?.settings);
   const dueDay = structure.dueDay || policy.dueDay;
-  const months = billingMonths(year, enrolment?.startDate);
+  const months = billingMonths(year, enrolment?.startDate, enrolment?.classId || structure.classId);
   if (!months.length) return false;
   const base = { tenantId, studentId, yearId: structure.yearId, kind: 'fee', structureId: structure._id, createdBy: actorId };
   const docs = [];
@@ -96,10 +99,15 @@ async function billStudent(ctx, structure, studentId, enrolment, spec) {
   // tuition: one charge per month, with any scholarship spread evenly across them
   const total = money(structure.monthlyFee * months.length);
   let conc = 0;
+  if (!spec) { // a standing personal discount follows the student into every month billed (a new year, a new structure)
+    const pd = (await Student.findOne({ _id: studentId, tenantId }).select('personalDiscount').lean())?.personalDiscount;
+    if (pd?.type) spec = pd.type === 'percent' ? { type: 'percent', value: pd.value, reason: pd.reason, kind: 'personal' } : { type: 'amount', value: money(pd.value * months.length), reason: pd.reason, kind: 'personal' };
+  }
   if (spec) conc = spec.type === 'percent' ? money((total * Math.min(spec.value, 100)) / 100) : Math.min(money(spec.value), total);
+  if (spec) spec.applied = conc; // how much was actually taken off, for callers that give one amount across several structures
   const cparts = splitEven(conc, months.length);
   months.forEach((m, i) => docs.push({ ...base, label: `Tuition fee — ${monthName(m)}`, category: 'Tuition', period: m, amount: structure.monthlyFee, concession: cparts[i], concessionNote: conc ? spec.reason : undefined,
-    concessions: cparts[i] ? [{ amount: cparts[i], reason: spec.reason, by: actorId, at: new Date() }] : [], dueDate: dueOn(m, dueDay) }));
+    concessions: cparts[i] ? [{ amount: cparts[i], reason: spec.reason, kind: spec.kind, by: actorId, at: new Date() }] : [], dueDate: dueOn(m, dueDay) }));
   for (const e of structure.extras || []) {
     if (e.frequency === 'monthly') months.forEach((m) => docs.push({ ...base, label: `${e.head} — ${monthName(m)}`, category: e.head, period: m, amount: e.amount, dueDate: dueOn(m, dueDay) }));
     else docs.push({ ...base, label: e.head, category: e.head, amount: e.amount, dueDate: firstDue });
@@ -130,13 +138,44 @@ export async function assignStructure(ctx, body) {
   return { assigned, skipped };
 }
 
-/** Called after admission / promotion so every new enrolment is billed without anyone having to remember. */
-export async function autoAssignForEnrolment(tenantId, enrolment, actorId) {
+const autoStructures = (tenantId, enrolment) => FeeStructure.find({ tenantId, yearId: enrolment.yearId, status: 'active', autoAssign: true, $or: [{ classId: null }, { classId: { $exists: false } }, { classId: enrolment.classId }] });
+
+/**
+ * What a new student will be billed, computed the way billStudent bills: admission fee once, tuition for each month from the joining
+ * month to the end of the year, and the extras. Used by the admission form so the numbers shown are the numbers charged.
+ */
+export async function admissionFeePreview(tenantId, { yearId, classId, startDate }) {
+  const year = await AcademicYear.findById(yearId);
+  const months = billingMonths(year, startDate, classId);
+  const structures = (await autoStructures(tenantId, { yearId, classId })).map((st) => {
+    const admissionFee = st.admissionFee || 0; const tuition = money((st.monthlyFee || 0) * months.length);
+    const extras = money((st.extras || []).reduce((n, e) => n + e.amount * (e.frequency === 'monthly' ? months.length : 1), 0));
+    return { structureId: st._id, name: st.name, admissionFee, monthlyFee: st.monthlyFee || 0, months: months.length, tuition, extras, total: money(admissionFee + tuition + extras) };
+  });
+  const sum = (k) => money(structures.reduce((n, x) => n + x[k], 0));
+  return { structures, months: months.length, totals: { admission: sum('admissionFee'), tuition: sum('tuition'), extras: sum('extras'), total: sum('total') } };
+}
+
+/** A personal discount given at admission applies to tuition only (the way scholarships are already recorded). Refuse anything that does not make sense. */
+export function assertDiscountFits(discount, preview) {
+  if (!preview.structures.length) throw bad('This class has no fee structure yet, so a discount cannot be given. Ask Finance to set one up first.');
+  if (!preview.totals.tuition) throw bad('There is no tuition fee for this class to take a discount from.');
+  if (discount.type === 'percent' && (discount.value <= 0 || discount.value > 100)) throw bad('A percentage discount must be between 0 and 100');
+  if (discount.type === 'amount' && discount.value > preview.totals.tuition) throw bad(`The discount cannot be more than the tuition fee of ${preview.totals.tuition}`);
+}
+
+/** Called after admission / promotion so every new enrolment is billed without anyone having to remember. `discount` (admission only) is a personal discount on tuition. */
+export async function autoAssignForEnrolment(tenantId, enrolment, actorId, discount = null) {
   const ctx = { tenantId, actorId };
-  const structures = await FeeStructure.find({ tenantId, yearId: enrolment.yearId, status: 'active', autoAssign: true, $or: [{ classId: null }, { classId: { $exists: false } }, { classId: enrolment.classId }] });
-  let n = 0;
-  for (const s of structures) if (await billStudent(ctx, s, enrolment.studentId, enrolment, null)) n++;
-  return n;
+  const structures = await autoStructures(tenantId, enrolment);
+  let n = 0; let applied = 0; let remaining = discount?.type === 'amount' ? discount.value : 0;
+  for (const st of structures) {
+    // a fixed amount is spread over the structures one after another so it is never given twice
+    const spec = discount ? (discount.type === 'percent' ? { ...discount, kind: 'personal' } : remaining > 0 ? { type: 'amount', value: remaining, reason: discount.reason, kind: 'personal' } : null) : null;
+    if (await billStudent(ctx, st, enrolment.studentId, enrolment, spec)) n++;
+    if (spec) { applied = money(applied + (spec.applied || 0)); if (discount.type === 'amount') remaining = money(remaining - (spec.applied || 0)); }
+  }
+  return discount ? { billed: n, discountApplied: applied } : n;
 }
 
 export async function createCharge(ctx, body, extra = {}) {
@@ -153,6 +192,41 @@ export async function addConcession(ctx, chargeId, { amount, reason }, byName) {
   c.concessions.push({ amount, reason, by: ctx.actorId, byName, at: new Date() });
   if (outstanding(c) <= 0) c.status = 'paid';
   return c.save();
+}
+
+/**
+ * A standing personal discount on tuition. It is applied to every tuition charge that has nothing paid on it yet, and to every month billed from now on.
+ * Charges that already have a payment are left alone, so receipts never disagree with what is owed.
+ */
+export async function setPersonalDiscount(ctx, studentId, { type, value, reason }, byName) {
+  const s = await Student.findOne({ _id: studentId, tenantId: ctx.tenantId });
+  if (!s) throw notFound('Student not found');
+  if (type === 'percent' && value > 100) throw bad('A percentage discount must be between 0 and 100');
+  s.personalDiscount = { type, value, reason, setByName: byName, setAt: new Date() };
+  await s.save();
+  return reapplyPersonalDiscount(ctx, s, byName);
+}
+export async function clearPersonalDiscount(ctx, studentId, byName) {
+  const s = await Student.findOne({ _id: studentId, tenantId: ctx.tenantId });
+  if (!s) throw notFound('Student not found');
+  s.personalDiscount = undefined; await s.save();
+  return reapplyPersonalDiscount(ctx, s, byName);
+}
+async function reapplyPersonalDiscount(ctx, student, byName) {
+  const pd = student.personalDiscount?.type ? student.personalDiscount : null;
+  const charges = await StudentCharge.find({ tenantId: ctx.tenantId, studentId: student._id, category: 'Tuition', status: 'open', paidAmount: { $lte: 0 } });
+  let changed = 0;
+  for (const c of charges) {
+    const old = money((c.concessions || []).filter((x) => x.kind === 'personal').reduce((n, x) => n + (x.amount || 0), 0));
+    const next = !pd ? 0 : pd.type === 'percent' ? money((c.amount * Math.min(pd.value, 100)) / 100) : Math.min(money(pd.value), c.amount);
+    if (old === next) continue;
+    c.concessions = (c.concessions || []).filter((x) => x.kind !== 'personal');
+    c.concession = money((c.concession || 0) - old + next);
+    if (next) c.concessions.push({ amount: next, reason: pd.reason, kind: 'personal', by: ctx.actorId, byName, at: new Date() });
+    c.concessionNote = pd?.reason || c.concessionNote;
+    await c.save(); changed += 1;
+  }
+  return { personalDiscount: pd ? { type: pd.type, value: pd.value, reason: pd.reason } : null, chargesUpdated: changed };
 }
 
 // ───────────── transport fees (billed monthly to students who ride a bus) ─────────────
@@ -311,7 +385,9 @@ export async function studentAccount(tenantId, studentId, today) {
   ]);
   const view = charges.map((c) => ({ ...c, net: money(c.amount - (c.concession || 0)), outstanding: outstanding(c), overdue: c.status === 'open' && !!c.dueDate && c.dueDate < today && outstanding(c) > 0 }));
   const open = view.filter((c) => c.status === 'open');
+  const pdoc = (await Student.findOne({ _id: studentId, tenantId }).select('personalDiscount').lean())?.personalDiscount;
   return {
+    personalDiscount: pdoc?.type ? { type: pdoc.type, value: pdoc.value, reason: pdoc.reason, setByName: pdoc.setByName } : null,
     charges: view, payments,
     totals: {
       assigned: sumOf(charges, (c) => c.amount), concession: sumOf(charges, (c) => c.concession || 0), paid: sumOf(charges, (c) => c.paidAmount || 0),
@@ -325,7 +401,7 @@ export async function studentAccount(tenantId, studentId, today) {
  * so school-wide totals (dashboard, class report, reminders) do not have to download thousands of student records.
  */
 async function duesRows(ctx, q) {
-  const enrFilter = { tenantId: ctx.tenantId, yearId: ctx.year?._id, status: 'active' };
+  const enrFilter = { tenantId: ctx.tenantId, yearId: ctx.year?._id, status: rollStatus(ctx.year) };
   if (q.sectionId) enrFilter.sectionId = q.sectionId;
   if (q.classId) enrFilter.classId = q.classId;
   const enrolments = await StudentEnrolment.find(enrFilter).select('studentId classId sectionId rollNo').lean();
@@ -337,6 +413,7 @@ async function duesRows(ctx, q) {
       _id: '$studentId', assigned: { $sum: '$amount' }, concession: { $sum: '$concession' }, paid: { $sum: '$paidAmount' },
       overdue: { $sum: { $cond: [{ $and: [{ $eq: ['$status', 'open'] }, { $lt: ['$dueDate', ctx.today] }] }, { $subtract: [{ $subtract: ['$amount', '$concession'] }, '$paidAmount'] }, 0] } },
       nextDue: { $min: { $cond: [{ $eq: ['$status', 'open'] }, '$dueDate', null] } },
+      oldestOverdue: { $min: { $cond: [{ $and: [{ $eq: ['$status', 'open'] }, { $lt: ['$dueDate', ctx.today] }, { $gt: [{ $subtract: [{ $subtract: ['$amount', '$concession'] }, '$paidAmount'] }, 0] }] }, '$dueDate', null] } },
     } }]),
     Section.find({ tenantId: ctx.tenantId, yearId: ctx.year?._id }).select('name').lean(), ClassModel.find({ tenantId: ctx.tenantId }).select('name').lean(),
   ]);
@@ -344,8 +421,8 @@ async function duesRows(ctx, q) {
   const S = mk(secs); const C = mk(classes); const E = new Map(enrolments.map((e) => [String(e.studentId), e]));
   return ids.map((id) => {
     const b = B.get(String(id)); const e = E.get(String(id));
-    return { studentId: id, className: C.get(String(e?.classId))?.name, section: S.get(String(e?.sectionId))?.name, rollNo: e?.rollNo, assigned: money(b?.assigned || 0), concession: money(b?.concession || 0), paid: money(b?.paid || 0),
-      pending: b ? money(b.assigned - b.concession - b.paid) : 0, overdue: money(b?.overdue || 0), nextDue: b?.nextDue || null, billed: !!b };
+    return { studentId: id, classId: e?.classId, sectionId: e?.sectionId, className: C.get(String(e?.classId))?.name, section: S.get(String(e?.sectionId))?.name, rollNo: e?.rollNo, assigned: money(b?.assigned || 0), concession: money(b?.concession || 0), paid: money(b?.paid || 0),
+      pending: b ? money(b.assigned - b.concession - b.paid) : 0, overdue: money(b?.overdue || 0), nextDue: b?.nextDue || null, daysOverdue: b?.oldestOverdue ? daysBetween(b.oldestOverdue, ctx.today) : 0, billed: !!b };
   });
 }
 
@@ -394,6 +471,37 @@ export async function outstandingByClass(ctx) {
   return [...by.values()].map((x) => ({ ...x, billed: money(x.billed), collected: money(x.collected), pending: money(x.pending), overdue: money(x.overdue) })).sort((a, b) => a.className.localeCompare(b.className, undefined, { numeric: true }));
 }
 
+/**
+ * Defaulters class by class: for every class (and the sections inside it) how many billed students are overdue and for how much.
+ * Classes with no defaulters are included with 0. The students themselves come from listDues (status=overdue, classId, sectionId), page by page.
+ */
+export async function defaultersByClass(ctx, { classId, sectionId } = {}) {
+  if (sectionId && !classId) { const sec = await Section.findOne({ _id: sectionId, tenantId: ctx.tenantId }).select('classId').lean(); if (!sec) throw notFound('Section not found'); classId = sec.classId; }
+  const [rows, classes, sections] = await Promise.all([
+    duesRows(ctx, { classId, sectionId }),
+    ClassModel.find({ tenantId: ctx.tenantId, status: 'active', ...(classId ? { _id: classId } : {}) }).sort({ level: 1 }).select('name level').lean(),
+    Section.find({ tenantId: ctx.tenantId, yearId: ctx.year?._id, status: 'active', ...(classId ? { classId } : {}), ...(sectionId ? { _id: sectionId } : {}) }).sort({ name: 1 }).select('name classId').lean(),
+  ]);
+  const tally = (list) => {
+    const billed = list.filter((r) => r.billed); const bad = list.filter((r) => r.overdue > 0);
+    return { studentsBilled: billed.length, defaulters: bad.length, overdueAmount: sumOf(bad, (r) => r.overdue), percentDefaulting: billed.length ? Math.round((bad.length / billed.length) * 1000) / 10 : 0 };
+  };
+  const items = classes.map((c) => {
+    const mine = rows.filter((r) => String(r.classId) === String(c._id));
+    return {
+      classId: c._id, className: c.name, level: c.level, ...tally(mine),
+      sections: sections.filter((x) => String(x.classId) === String(c._id)).map((x) => ({ sectionId: x._id, name: x.name, ...tally(mine.filter((r) => String(r.sectionId) === String(x._id))) })),
+    };
+  });
+  return { items, totals: { classes: items.length, ...tally(rows) } };
+}
+
+export async function exportDefaultersByClass(ctx) {
+  const d = await defaultersByClass(ctx);
+  const flat = d.items.flatMap((c) => [{ className: c.className, section: 'All', ...c }, ...c.sections.map((x) => ({ className: c.className, section: x.name, ...x }))]);
+  return toCsv(flat, [{ label: 'Class', get: (r) => r.className }, { label: 'Section', get: (r) => r.section }, { label: 'Students billed', get: (r) => r.studentsBilled }, { label: 'Defaulters', get: (r) => r.defaulters }, { label: '% defaulting', get: (r) => r.percentDefaulting }, { label: 'Overdue amount', get: (r) => r.overdueAmount }]);
+}
+
 export async function dashboard(ctx) {
   const month = ctx.today.slice(0, 7);
   const [today, monthAgg, dues, trend, recent, mode] = await Promise.all([
@@ -433,7 +541,7 @@ export async function exportPayments(ctx, q) {
 }
 export async function exportDues(ctx, q) {
   const d = await listDues(ctx, { ...q, page: 1, limit: 100000 });
-  return toCsv(d.items, [{ label: 'Admission No', get: (r) => r.admissionNo }, { label: 'Student', get: (r) => r.name }, { label: 'Class', get: (r) => r.className }, { label: 'Section', get: (r) => r.section }, { label: 'Guardian', get: (r) => r.guardian }, { label: 'Phone', get: (r) => r.guardianPhone }, { label: 'Billed', get: (r) => r.assigned }, { label: 'Paid', get: (r) => r.paid }, { label: 'Pending', get: (r) => r.pending }, { label: 'Overdue', get: (r) => r.overdue }, { label: 'Next due', get: (r) => r.nextDue }]);
+  return toCsv(d.items, [{ label: 'Admission No', get: (r) => r.admissionNo }, { label: 'Student', get: (r) => r.name }, { label: 'Class', get: (r) => r.className }, { label: 'Section', get: (r) => r.section }, { label: 'Guardian', get: (r) => r.guardian }, { label: 'Phone', get: (r) => r.guardianPhone }, { label: 'Billed', get: (r) => r.assigned }, { label: 'Paid', get: (r) => r.paid }, { label: 'Pending', get: (r) => r.pending }, { label: 'Overdue', get: (r) => r.overdue }, { label: 'Days overdue', get: (r) => r.daysOverdue }, { label: 'Next due', get: (r) => r.nextDue }]);
 }
 
 // ───────────── receipts ─────────────

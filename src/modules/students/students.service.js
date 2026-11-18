@@ -1,12 +1,14 @@
+import { rollStatus } from '../../services/context.js';
 import {
   Student, StudentEnrolment, TransferRecord, User, Session, AttendanceRecord, Marks, ReportCard, Section, ClassModel, AcademicYear, } from '../../models/index.js';
 import { notFound, conflict, bad, todayStr, escapeRegex, generatePassword } from '../../core/utils.js';
 import { createUserAccount, schoolCode, hashPassword } from '../../services/users.js';
 import { settingsOf, getCurrentYear, loadSchool } from '../../services/context.js';
+import { initialPassword } from '../../services/initialPassword.js';
 import { clearanceFor } from '../../services/clearance.js';
-import { autoAssignForEnrolment } from '../finance/finance.service.js';
+import { autoAssignForEnrolment, admissionFeePreview, assertDiscountFits } from '../finance/finance.service.js';
 import {
-  assertWithinLimit, nextRollNo, assertSectionHasRoom, resolvePlacement, generateAdmissionNo,
+  nextRollNo, assertSectionHasRoom, resolvePlacement, generateAdmissionNo,
 } from '../../services/enrolment.js';
 
 export async function listStudents(tenantId, q) {
@@ -17,7 +19,7 @@ export async function listStudents(tenantId, q) {
     const rx = new RegExp(escapeRegex(q.q), 'i');
     filter.$or = [{ name: rx }, { admissionNo: rx }, { 'guardians.name': rx }];
   }
-  const enrolFilter = { tenantId, yearId: year?._id, status: 'active' };
+  const enrolFilter = { tenantId, yearId: year?._id, status: rollStatus(year) };
   if (q.classId) enrolFilter.classId = q.classId;
   if (q.sectionId) enrolFilter.sectionId = q.sectionId;
   const enrolments = await StudentEnrolment.find(enrolFilter).lean();
@@ -28,7 +30,7 @@ export async function listStudents(tenantId, q) {
   ]);
   const enrolByStudent = new Map();
   if (!(q.classId || q.sectionId)) {
-    const extra = await StudentEnrolment.find({ tenantId, yearId: year?._id, status: 'active', studentId: { $in: students.map((s) => s._id) } }).lean();
+    const extra = await StudentEnrolment.find({ tenantId, yearId: year?._id, status: rollStatus(year), studentId: { $in: students.map((s) => s._id) } }).lean();
     extra.forEach((e) => enrolByStudent.set(String(e.studentId), e));
   } else enrolments.forEach((e) => enrolByStudent.set(String(e.studentId), e));
   const [sections, classes] = await Promise.all([Section.find({ tenantId, yearId: year?._id }).lean(), ClassModel.find({ tenantId }).lean()]);
@@ -56,7 +58,6 @@ export async function admitStudent(ctx, body) {
   const { section, cls } = await resolvePlacement(tenantId, { yearId: year._id, classId: body.classId, sectionId: body.sectionId });
   if (year.status === 'closed') throw conflict('Cannot admit into a closed academic year');
 
-  await assertWithinLimit(tenantId, 'student');
   await assertSectionHasRoom(tenantId, section);
   const dup = await findDuplicateIdentity(tenantId, body);
   if (dup && !body.confirmDuplicate) {
@@ -67,27 +68,45 @@ export async function admitStudent(ctx, body) {
   const admissionNo = body.admissionNo || (await generateAdmissionNo(tenantId, settings.admissionFormat, admissionDate));
   if (await Student.exists({ tenantId, admissionNo })) throw conflict(`Admission number ${admissionNo} already exists`);
 
+  if (body.discount) assertDiscountFits(body.discount, await admissionFeePreview(tenantId, { yearId: year._id, classId: cls._id, startDate: admissionDate })); // refuse before anything is created
+
   const rollNo = body.rollNo || (await nextRollNo(tenantId, section._id));
   const code = await schoolCode(tenantId);
   const created = {};
   try {
     const { user, temporaryPassword } = await createUserAccount({
       role: 'student', tenantId, name: body.name, email: body.email || undefined,
-      loginId: body.loginId || `${code}.${admissionNo}`.toLowerCase(), password: body.password, createdBy: actorId,
+      loginId: body.loginId || `${code}.${admissionNo}`.toLowerCase(), createdBy: actorId,
+      password: body.password || initialPassword(settings, { name: body.name, dob: body.dob, phone: body.phone || body.guardians?.[0]?.phone }),
     });
     created.user = user;
-    const { loginId: _l, password: _p, confirmDuplicate: _c, yearId: _y, classId: _cl, sectionId: _s, rollNo: _r, ...profile } = body;
+    const { loginId: _l, password: _p, confirmDuplicate: _c, discount: _d, yearId: _y, classId: _cl, sectionId: _s, rollNo: _r, ...profile } = body;
     const student = await Student.create({ ...profile, tenantId, userId: user._id, admissionNo, admissionDate, importBatchId: ctx.importBatchId });
     created.student = student;
     const enrolment = await StudentEnrolment.create({ tenantId, studentId: student._id, yearId: year._id, classId: cls._id, sectionId: section._id, rollNo, startDate: admissionDate });
     // bill the new student with every auto-assigned fee structure of this class and year
-    const billed = await autoAssignForEnrolment(tenantId, enrolment, actorId).catch(() => 0);
-    return { billed, student, enrolment, credentials: { loginId: user.loginId, temporaryPassword } };
+    const result = await autoAssignForEnrolment(tenantId, enrolment, actorId, body.discount).catch((e) => { if (body.discount) throw e; return 0; });
+    const billed = body.discount ? result.billed : result;
+    if (body.discount) {
+      const months = (await admissionFeePreview(tenantId, { yearId: year._id, classId: cls._id, startDate: admissionDate })).months || 1;
+      student.personalDiscount = { type: body.discount.type === 'percent' ? 'percent' : 'per_month', value: body.discount.type === 'percent' ? body.discount.value : Math.round((body.discount.value / months) * 100) / 100, reason: body.discount.reason, setByName: 'Admission', setAt: new Date() };
+      await student.save();
+    }
+    return { billed, discount: body.discount ? { ...body.discount, applied: result.discountApplied } : undefined, student, enrolment, credentials: { loginId: user.loginId, temporaryPassword } };
   } catch (e) {
     if (created.student) await Student.deleteOne({ _id: created.student._id });
     if (created.user) await User.deleteOne({ _id: created.user._id });
     throw e;
   }
+}
+
+/** What admitting a student into this section today would bill, for the admission form. */
+export async function feePreview(tenantId, { sectionId, admissionDate }) {
+  const school = await loadSchool(tenantId);
+  const section = await Section.findOne({ _id: sectionId, tenantId });
+  if (!section) throw notFound('Section not found');
+  const date = admissionDate || todayStr(settingsOf(school).timezone);
+  return { admissionDate: date, ...(await admissionFeePreview(tenantId, { yearId: section.yearId, classId: section.classId, startDate: date })) };
 }
 
 export async function getStudent(tenantId, id) {
@@ -145,7 +164,6 @@ export async function reactivateStudent(tenantId, id) {
   const s = await Student.findOne({ _id: id, tenantId });
   if (!s) throw notFound('Student not found');
   if (s.status === 'active') throw conflict('Student is already active');
-  await assertWithinLimit(tenantId, 'student');
   s.status = 'active';
   await s.save();
   if (s.userId) await User.updateOne({ _id: s.userId }, { status: 'active' });
@@ -173,7 +191,7 @@ export async function archiveStudent(tenantId, id) {
 export async function resetStudentPassword(tenantId, id) {
   const s = await Student.findOne({ _id: id, tenantId });
   if (!s?.userId) throw notFound('Student account not found');
-  const temporaryPassword = generatePassword();
+  const temporaryPassword = initialPassword(settingsOf(await loadSchool(tenantId)), { name: s.name, dob: s.dob, phone: s.phone || s.guardians?.[0]?.phone }) || generatePassword();
   const u = await User.findById(s.userId);
   u.passwordHash = await hashPassword(temporaryPassword); u.mustChangePassword = true; u.failedLogins = 0; u.lockedUntil = undefined;
   await u.save();
@@ -209,4 +227,22 @@ export async function transferStudent(ctx, id, { toSectionId, effectiveDate, rea
     tenantId, studentId: s._id, fromEnrolmentId: current._id, toEnrolmentId: next._id, fromSectionId: current.sectionId, toSectionId: section._id, effectiveDate: eff, reason, by: actorId,
   });
   return { enrolment: next, transfer: record };
+}
+
+/** One change for many students at once (the list's filter picks them). Each student succeeds or fails on its own and the answer says which. */
+export async function bulkUpdate(ctx, { studentIds, action, house, toSectionId, reason, effectiveDate }) {
+  const ids = [...new Set(studentIds.map(String))];
+  const found = await Student.find({ tenantId: ctx.tenantId, _id: { $in: ids } }).select('name').lean();
+  const name = new Map(found.map((x) => [String(x._id), x.name]));
+  const failed = []; let done = 0;
+  if (action === 'house') {
+    const r = await Student.updateMany({ tenantId: ctx.tenantId, _id: { $in: found.map((x) => x._id) } }, { $set: { house } });
+    done = r.modifiedCount ?? found.length;
+  } else {
+    for (const id of ids) {
+      if (!name.has(id)) { failed.push({ studentId: id, error: 'Student not found' }); continue; }
+      try { await transferStudent(ctx, id, { toSectionId, effectiveDate, reason }); done += 1; } catch (e) { failed.push({ studentId: id, name: name.get(id), error: e.message }); }
+    }
+  }
+  return { requested: ids.length, done, failed };
 }

@@ -198,7 +198,7 @@ async function generate(ctx, run) {
 }
 
 async function refreshTotals(run) {
-  const [t] = await Payslip.aggregate([{ $match: { runId: run._id } }, { $group: { _id: null, count: { $sum: 1 }, gross: { $sum: '$gross' }, deductions: { $sum: '$totalDeductions' }, net: { $sum: '$net' }, paid: { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, '$net', 0] } } } }]);
+  const [t] = await Payslip.aggregate([{ $match: { runId: run._id } }, { $group: { _id: null, count: { $sum: 1 }, gross: { $sum: '$gross' }, deductions: { $sum: '$totalDeductions' }, net: { $sum: '$net' }, paid: { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, '$net', { $ifNull: ['$paidAmount', 0] }] } } } }]);
   run.totals = { count: t?.count || 0, gross: round2(t?.gross || 0), deductions: round2(t?.deductions || 0), net: round2(t?.net || 0), paid: round2(t?.paid || 0) };
   await run.save();
   return run;
@@ -271,28 +271,51 @@ export async function markPaid(ctx, id, body) {
   const run = await ownRun(ctx, id);
   if (run.status === 'draft') throw conflict('Approve the payroll before paying it');
   const paidOn = body.paidOn || ctx.today;
-  const f = { tenantId: ctx.tenantId, runId: run._id, status: 'pending' };
+  const f = { tenantId: ctx.tenantId, runId: run._id, status: { $in: ['pending', 'partial'] } };
   if (body.payslipIds?.length) f._id = { $in: body.payslipIds };
   const slips = await Payslip.find(f);
   if (!slips.length) throw conflict('Nothing left to pay');
   for (const p of slips) {
     // conditional update so two admins paying at once cannot pay a slip twice
-    const r = await Payslip.updateOne({ _id: p._id, status: 'pending' }, { $set: { status: 'paid', paidOn, mode: body.mode, reference: body.reference, paidBy: ctx.actorId } });
+    const rest = round2(p.net - (p.paidAmount || 0)); // what is still owed after any part payments
+    const r = await Payslip.updateOne({ _id: p._id, status: { $in: ['pending', 'partial'] }, paidAmount: p.paidAmount || 0 }, { $set: { status: 'paid', paidOn, mode: body.mode, reference: body.reference, paidBy: ctx.actorId, paidAmount: p.net }, ...(rest > 0 ? { $push: { payments: { amount: rest, paidOn, mode: body.mode, reference: body.reference, by: ctx.actorId } } } : {}) });
     if (!r.modifiedCount) continue;
-    await notifyUsers(ctx.tenantId, [p.userId], { category: 'payroll', title: 'Salary paid', body: `₹${p.net.toLocaleString('en-IN')} for ${run.month} was paid by ${body.mode.replace('_', ' ')}.`, link: { type: 'payslip', id: String(p._id) }, dedupeKey: `payslip:${p._id}:paid` });
+    await notifyUsers(ctx.tenantId, [p.userId], { category: 'payroll', title: 'Salary paid', body: `₹${rest.toLocaleString('en-IN')} for ${run.month} was paid by ${body.mode.replace('_', ' ')}.`, link: { type: 'payslip', id: String(p._id) }, dedupeKey: `payslip:${p._id}:paid` });
   }
-  const left = await Payslip.countDocuments({ tenantId: ctx.tenantId, runId: run._id, status: 'pending' });
+  const left = await Payslip.countDocuments({ tenantId: ctx.tenantId, runId: run._id, status: { $in: ['pending', 'partial'] } });
   run.status = left ? 'approved' : 'paid';
   if (!left) run.paidAt = new Date();
   await refreshTotals(run);
   return run;
 }
 
+/** Pay part of one person's salary now (half a month, an advance against the month) and the rest later. */
+export async function payInstallment(ctx, payslipId, { amount, paidOn, mode, reference, note }) {
+  const p = await Payslip.findOne({ _id: payslipId, tenantId: ctx.tenantId });
+  if (!p) throw notFound('Payslip not found');
+  const run = await ownRun(ctx, p.runId);
+  if (run.status === 'draft') throw conflict('Approve the payroll before paying it');
+  const rest = round2(p.net - (p.paidAmount || 0));
+  if (p.status === 'paid' || rest <= 0) throw conflict('This salary is already paid in full');
+  if (amount > rest + 0.001) throw bad(`Only ₹${rest} is left to pay`);
+  const date = paidOn || ctx.today;
+  const done = round2((p.paidAmount || 0) + amount);
+  p.payments.push({ amount, paidOn: date, mode, reference, note, by: ctx.actorId });
+  p.paidAmount = done; p.status = done >= p.net - 0.001 ? 'paid' : 'partial';
+  if (p.status === 'paid') { p.paidOn = date; p.mode = mode; p.reference = reference; p.paidBy = ctx.actorId; }
+  await p.save();
+  await notifyUsers(ctx.tenantId, [p.userId], { category: 'payroll', title: p.status === 'paid' ? 'Salary paid' : 'Part of your salary was paid', body: `₹${amount.toLocaleString('en-IN')} for ${run.month}${p.status === 'paid' ? ' (the rest of your salary)' : `; ₹${round2(p.net - done).toLocaleString('en-IN')} is still to come`}.`, link: { type: 'payslip', id: String(p._id) }, dedupeKey: `payslip:${p._id}:part:${p.payments.length}` });
+  const left = await Payslip.countDocuments({ tenantId: ctx.tenantId, runId: run._id, status: { $in: ['pending', 'partial'] } });
+  run.status = left ? 'approved' : 'paid'; if (!left) run.paidAt = new Date();
+  await refreshTotals(run);
+  return p;
+}
+
 export async function summary(ctx) {
   const month = ctx.today.slice(0, 7);
   const [revs, people, run, ytd] = await Promise.all([
     latestRevisions(ctx.tenantId, ctx.today), allPeople(ctx), PayrollRun.findOne({ tenantId: ctx.tenantId, month }).lean(),
-    Payslip.aggregate([{ $match: { tenantId: ctx.tenantId, status: 'paid', month: { $gte: ctx.year ? ctx.year.startDate.slice(0, 7) : '0000-00', $lte: ctx.year ? ctx.year.endDate.slice(0, 7) : '9999-99' } } }, { $group: { _id: null, n: { $sum: '$net' } } }]),
+    Payslip.aggregate([{ $match: { tenantId: ctx.tenantId, status: { $in: ['paid', 'partial'] }, month: { $gte: ctx.year ? ctx.year.startDate.slice(0, 7) : '0000-00', $lte: ctx.year ? ctx.year.endDate.slice(0, 7) : '9999-99' } } }, { $group: { _id: null, n: { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, '$net', '$paidAmount'] } } } }]),
   ]);
   const current = people.map((t) => revs.get(String(t.id))).filter(Boolean).map((r) => structureOf(r));
   return {
@@ -326,7 +349,13 @@ export async function mySalary(ctx) {
     Payslip.aggregate([{ $match: { tenantId: ctx.tenantId, personId: me._id, status: 'paid', month: { $gte: from, $lte: to } } }, { $group: { _id: null, n: { $sum: '$net' }, c: { $sum: 1 } } }]),
   ]);
   const rev = revs.get(String(me._id));
+  // a revision only reaches a payslip when its month's payroll is run. If the newest approved payslip is for an earlier month, say so.
+  const visible = await myPayslips(ctx);
+  const latestMonth = visible[0]?.month || null;
+  const revisedAfterLatest = rev && latestMonth && monthOf(rev.effectiveFrom) > latestMonth
+    ? { effectiveFrom: rev.effectiveFrom, gross: structureOf(rev).gross, appliesFromMonth: monthOf(rev.effectiveFrom), latestPayslipMonth: latestMonth } : null;
   return {
+    revisedAfterLatest,
     teacher: selfInfo(ctx), person: selfInfo(ctx),
     current: rev ? { ...rev, ...structureOf(rev) } : null,
     history: history.map((r) => ({ effectiveFrom: r.effectiveFrom, levelName: r.levelName, ...structureOf(r) })),
@@ -372,7 +401,8 @@ export async function renderPayslip(tenantId, p, res) {
   row('Total deductions', inr(p.totalDeductions), true);
   doc.moveDown().fontSize(12); row('NET PAY', inr(p.net), true);
   doc.fontSize(10).font('Helvetica').moveDown();
-  doc.text(p.status === 'paid' ? `Paid on ${p.paidOn} by ${String(p.mode || '').replace('_', ' ')}${p.reference ? ` · Ref ${p.reference}` : ''}` : 'Payment pending');
+  doc.text(p.status === 'paid' ? `Paid on ${p.paidOn} by ${String(p.mode || '').replace('_', ' ')}${p.reference ? ` · Ref ${p.reference}` : ''}` : p.status === 'partial' ? `Part paid: ${inr(p.paidAmount)} of ${inr(p.net)}; balance ${inr(p.net - p.paidAmount)}` : 'Payment pending');
+  if (p.payments?.length > 1 || (p.payments?.length === 1 && p.status !== 'paid')) for (const x of p.payments) doc.text(`  ${x.paidOn}: ${inr(x.amount)} (${String(x.mode || '').replace('_', ' ')})`);
   doc.moveDown().fontSize(9).fillColor('#555').text('This is a computer generated payslip.');
   doc.end();
 }
@@ -405,14 +435,14 @@ async function peopleDetails(ctx, ids) {
 export async function bankFile(ctx, runId) {
   const run = await ownRun(ctx, runId);
   if (run.status === 'draft') throw conflict('Approve the payroll before preparing the bank file');
-  const slips = await Payslip.find({ tenantId: ctx.tenantId, runId: run._id, status: 'pending' }).sort({ personName: 1 }).lean();
+  const slips = await Payslip.find({ tenantId: ctx.tenantId, runId: run._id, status: { $in: ['pending', 'partial'] } }).sort({ personName: 1 }).lean();
   const D = await peopleDetails(ctx, slips.map((p) => p.personId));
   const ready = []; const missing = [];
   for (const p of slips) {
     const b = D.get(String(p.personId))?.bank || {};
-    if (!b.accountNo) { missing.push({ payslipId: p._id, name: p.personName, employeeId: p.employeeId, net: p.net, reason: 'No bank account on record' }); continue; }
-    if (!b.ifsc) { missing.push({ payslipId: p._id, name: p.personName, employeeId: p.employeeId, net: p.net, reason: 'IFSC code missing' }); continue; }
-    ready.push({ payslipId: p._id, payslipNo: p.payslipNo, name: b.accountName || p.personName, employeeId: p.employeeId, accountNo: b.accountNo, ifsc: b.ifsc, bankName: b.bankName || '', amount: p.net, narration: `Salary ${p.month}` });
+    if (!b.accountNo) { missing.push({ payslipId: p._id, name: p.personName, employeeId: p.employeeId, net: round2(p.net - (p.paidAmount || 0)), reason: 'No bank account on record' }); continue; }
+    if (!b.ifsc) { missing.push({ payslipId: p._id, name: p.personName, employeeId: p.employeeId, net: round2(p.net - (p.paidAmount || 0)), reason: 'IFSC code missing' }); continue; }
+    ready.push({ payslipId: p._id, payslipNo: p.payslipNo, name: b.accountName || p.personName, employeeId: p.employeeId, accountNo: b.accountNo, ifsc: b.ifsc, bankName: b.bankName || '', amount: round2(p.net - (p.paidAmount || 0)), narration: `Salary ${p.month}` });
   }
   return { month: run.month, status: run.status, ready, missing, total: round2(ready.reduce((n, r) => n + r.amount, 0)), count: ready.length };
 }

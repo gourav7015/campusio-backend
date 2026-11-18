@@ -1,7 +1,8 @@
 import { Teacher, User, Session, TeachingAssignment, ClassTeacherAssignment } from '../../models/index.js';
 import { notFound, conflict, escapeRegex, generatePassword } from '../../core/utils.js';
 import { createUserAccount, schoolCode, hashPassword } from '../../services/users.js';
-import { assertWithinLimit } from '../../services/enrolment.js';
+import { initialPassword } from '../../services/initialPassword.js';
+import { settingsOf, loadSchool } from '../../services/context.js';
 import { schoolToday } from '../../services/context.js';
 import { findOrCreateSubject } from '../../services/subjects.js';
 import { clearanceFor } from '../../services/clearance.js';
@@ -29,13 +30,14 @@ async function resolveSubjects(tenantId, names = []) {
 
 export async function createTeacher(ctx, body) {
   const { tenantId, actorId } = ctx;
-  await assertWithinLimit(tenantId, 'teacher');
   if (await Teacher.exists({ tenantId, employeeId: body.employeeId })) throw conflict(`Employee id ${body.employeeId} already exists`);
   const subjectIds = await resolveSubjects(tenantId, body.subjects);
   const code = await schoolCode(tenantId);
   const { user, temporaryPassword } = await createUserAccount({
     role: 'teacher', tenantId, name: body.name, email: body.email || undefined,
-    loginId: body.loginId || (body.email ? body.email : `${code}.t${body.employeeId}`), password: body.password, createdBy: actorId,
+    loginId: body.loginId || (body.email ? body.email : `${code}.t${body.employeeId}`), createdBy: actorId,
+    // chosen by the office, else the school's starting-password format (name + date of birth), else random
+    password: body.password || initialPassword(settingsOf(await loadSchool(tenantId)), { name: body.name, dob: body.dob, phone: body.phone }),
   });
   try {
     const { loginId: _l, password: _p, subjects: _s, ...profile } = body;
@@ -93,7 +95,6 @@ export async function reactivateTeacher(tenantId, id) {
   const t = await Teacher.findOne({ _id: id, tenantId });
   if (!t) throw notFound('Teacher not found');
   if (t.status === 'active') throw conflict('Teacher is already active');
-  await assertWithinLimit(tenantId, 'teacher');
   t.status = 'active';
   await t.save();
   if (t.userId) await User.updateOne({ _id: t.userId }, { status: 'active' });
@@ -103,7 +104,7 @@ export async function reactivateTeacher(tenantId, id) {
 export async function resetTeacherPassword(tenantId, id) {
   const t = await Teacher.findOne({ _id: id, tenantId });
   if (!t?.userId) throw notFound('Teacher account not found');
-  const temporaryPassword = generatePassword();
+  const temporaryPassword = initialPassword(settingsOf(await loadSchool(tenantId)), { name: t.name, dob: t.dob, phone: t.phone }) || generatePassword();
   const u = await User.findById(t.userId);
   u.passwordHash = await hashPassword(temporaryPassword); u.mustChangePassword = true; u.failedLogins = 0; u.lockedUntil = undefined;
   await u.save();

@@ -1,3 +1,4 @@
+import { classSpan } from '../../services/yearSpan.js';
 import {
   Examination, ExaminationSubject, MarksSheet, Marks, Section, ClassModel, Subject, SubjectOffering, AcademicYear, ReportCard, ReportRemark, Teacher, Student,
 } from '../../models/index.js';
@@ -77,7 +78,8 @@ export async function upsertExamSubject(ctx, examId, body) {
   const offering = await SubjectOffering.findOne({ tenantId: ctx.tenantId, yearId: exam.yearId, classId: body.classId, subjectId: body.subjectId });
   if (!offering) throw bad('That subject is not offered to the class in this academic year');
   const year = await AcademicYear.findById(exam.yearId);
-  if (body.date && (body.date < year.startDate || body.date > year.endDate)) throw bad('The exam date is outside the academic year');
+  const span = classSpan(year, body.classId);
+  if (body.date && (body.date < span.startDate || body.date > span.endDate)) throw bad(span.custom ? 'The exam date is outside this class\'s session dates' : 'The exam date is outside the academic year');
   const existing = await ExaminationSubject.findOne({ tenantId: ctx.tenantId, examId, classId: body.classId, subjectId: body.subjectId });
   const components = body.components ? normaliseComponents(body.components) : (existing?.components?.length ? existing.components.map((c) => c.toObject()) : (offering.assessment.components?.length ? offering.assessment.components.map((c) => ({ key: c.key, label: c.label, max: c.max })) : DEFAULT_COMPONENTS));
   const merged = { passMarks: existing?.passMarks ?? offering.assessment.passMarks, ...body, components };
@@ -174,7 +176,12 @@ async function transition(ctx, sheetId, from, to, patch = {}) {
   return sheet;
 }
 export const startReview = (ctx, id) => transition(ctx, id, ['submitted'], 'under_review');
-export const approveSheet = (ctx, id) => transition(ctx, id, ['submitted', 'under_review'], 'approved', { returnReason: undefined });
+export async function approveSheet(ctx, id) {
+  const sheet = await transition(ctx, id, ['submitted', 'under_review'], 'approved', { returnReason: undefined });
+  const t = await Teacher.findById(sheet.teacherId).select('userId');
+  await notifyUsers(ctx.tenantId, [t?.userId], { category: 'examination', title: 'Marks approved', body: 'Your marks sheet was approved. Results go to students when the exam is published.', link: { type: 'marks', id: String(sheet._id) }, dedupeKey: `appr:${sheet._id}` });
+  return sheet;
+}
 export async function returnSheet(ctx, id, reason) {
   const sheet = await transition(ctx, id, ['submitted', 'under_review'], 'returned', { returnReason: reason });
   const last = sheet.revisions[sheet.revisions.length - 1];

@@ -74,6 +74,11 @@ a.patch('/payroll/payslips/:id/adjustments', async (req, res) => {
   await audit(req, 'payroll.adjusted', 'Payslip', p._id, `Adjusted payslip ${p.payslipNo}: net ${p.net}`);
   res.json(p);
 });
+a.post('/payroll/payslips/:id/pay', async (req, res) => {
+  const p = await svc.payInstallment(req.ctx, req.params.id, parse(v.installmentBody, req.body));
+  await audit(req, 'payroll.part_paid', 'Payslip', p._id, `Paid ₹${p.payments[p.payments.length - 1].amount} of ${p.payslipNo} (${p.status})`);
+  res.json(p);
+});
 a.get('/payroll/payslips/:id/pdf', async (req, res) => { const p = await svc.ownPayslip(req.ctx, req.params.id).catch(() => { throw notFound('Payslip not found'); }); await pdf(req, res, p); });
 
 /** Teacher portal: read-only, own data only. */

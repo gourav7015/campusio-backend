@@ -2,6 +2,9 @@ import mongoose from 'mongoose';
 import { config, requireMongoUri } from './core/config.js';
 import { logger } from './core/logger.js';
 import { createApp } from './app.js';
+import { runAllReminders } from './modules/class-life/class-life.service.js';
+import { autoCloseResolved } from './modules/helpdesk/helpdesk.service.js';
+import { tidyOrders } from './modules/payments/payments.service.js';
 
 mongoose.set('strictQuery', true);
 
@@ -12,6 +15,15 @@ async function main() {
   const app = createApp();
   const server = app.listen(config.port, () => logger.info('api listening', { port: config.port, env: config.env }));
 
+  // families that have not acknowledged a teacher's remark are reminded once a day (checked every few hours)
+  const reminders = setInterval(() => runAllReminders().then((n) => n && logger.info('remark reminders sent', { n })).catch((e) => logger.warn('reminders failed', { error: e.message })), 3 * 60 * 60 * 1000);
+  reminders.unref();
+  // resolved help desk tickets that nobody reopened are closed after a week
+  const tidy = setInterval(() => autoCloseResolved().then((n) => n && logger.info('resolved tickets closed', { n })).catch((e) => logger.warn('ticket tidy failed', { error: e.message })), 3 * 60 * 60 * 1000);
+  tidy.unref();
+  // online payment orders nobody paid are closed (checked every few minutes)
+  const orders = setInterval(() => tidyOrders().then((n) => n && logger.info('payment orders tidied', { n })).catch((e) => logger.warn('order tidy failed', { error: e.message })), 5 * 60 * 1000);
+  orders.unref();
   const shutdown = (signal) => {
     logger.info('shutting down', { signal });
     server.close(async () => {

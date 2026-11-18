@@ -116,7 +116,8 @@ describe('promotion, bulk import, dashboards, profile and sessions', () => {
       expect(d.cards).toMatchObject({ teachers: 3 });
       expect(d.finance).toMatchObject({ pending: 0, overdue: 0 });
       expect(d.library).toMatchObject({ onLoan: 0, overdue: 0 });
-      expect(d.subscription.studentLimit).toBe(100);
+      expect(d.subscription).toMatchObject({ status: 'active' });
+      expect(d.subscription.studentLimit).toBeUndefined(); // there is no student or teacher cap
       expect(d.recent.length).toBeGreaterThan(0);
       const rep = (await api().get('/api/school/reports/summary').set(W.h)).body;
       expect(Array.isArray(rep.strength)).toBe(true);
@@ -141,6 +142,9 @@ describe('promotion, bulk import, dashboards, profile and sessions', () => {
       const S = W.studentLogins[2].h;
       const p = (await api().get('/api/student/profile').set(S)).body;
       expect(p.academic).toHaveProperty('admissionNo');
+      expect(p.editableFields).toEqual([]); // by default a student can only look at their own details
+      expect((await api().patch('/api/student/profile').set(S).send({ phone: '9000000001' })).status).toBe(403);
+      await api().put('/api/school/settings').set(W.h).send({ studentCanEditProfile: ['phone', 'address'] }); // a school may choose to allow some
       expect((await api().patch('/api/student/profile').set(S).send({ phone: '9000000001' })).body.personal.phone).toBe('9000000001');
       for (const bad of [{ sectionId: '64b000000000000000000000' }, { admissionNo: 'X' }, { rollNo: 1 }, { name: 'New Name' }, { role: 'school_admin' }]) {
         expect((await api().patch('/api/student/profile').set(S).send(bad)).status).toBe(400);

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { Payment } from '../../models/index.js';
 import { notFound } from '../../core/utils.js';
 import * as svc from './finance.service.js';
+import { onlineInfo } from '../payments/payments.service.js';
 
 /** Student fee information: strictly read-only and strictly their own account. */
 const r = Router();
@@ -13,6 +14,7 @@ r.get('/fees', async (req, res) => {
   const plan = await svc.advancePlan(req.ctx, req.ctx.student._id);
   res.json({
     totals: acct.totals,
+    online: onlineInfo(req.ctx),
     categories: [...cat.values()],
     advanceOffer: { eligible: plan.eligible, offer: plan.offer, months: plan.months, discount: plan.discount, payable: plan.payable, reason: plan.reason },
     charges: acct.charges.map((c) => ({ id: c._id, label: c.label, kind: c.kind, category: c.category, period: c.period, amount: c.amount, concession: c.concession, net: c.net, paid: c.paidAmount, outstanding: c.outstanding, dueDate: c.dueDate, status: c.status, overdue: c.overdue })),

@@ -1,9 +1,12 @@
+import { classSpan } from '../../services/yearSpan.js';
 import {
   AttendanceSession, AttendanceRecord, StudentEnrolment, Student, Section, CalendarEvent, AttendanceQuery, ClassModel,
 } from '../../models/index.js';
 import { notFound, conflict, bad, forbidden, addDays, eachDate, isoDay } from '../../core/utils.js';
 import { summarize, submittedRecords, sessionTotals, sessionCounts, zeroCounts, addCounts, summarizeCounts } from '../../services/attendance.js';
+import { AttendanceException } from '../../models/index.js';
 import { notifyUsers } from '../../services/notify.js';
+import { monitorsOf } from '../class-life/class-life.service.js';
 
 /**
  * Only a section's CLASS TEACHER takes (and edits, before submitting) its daily register.
@@ -29,14 +32,21 @@ export async function isHoliday(tenantId, section, date) {
   });
 }
 
+/** A Sunday exam or talent test: the School Admin may approve attendance on a day the school does not normally work. */
+const dayAllowed = (tenantId, sectionId, date) => AttendanceException.exists({ tenantId, sectionId, date, status: 'approved' });
+
 async function assertMarkableDate(ctx, section, date) {
   if (date > ctx.today) throw bad('Attendance cannot be marked for a future date');
-  if (!ctx.settings.workingDays.includes(isoDay(date))) throw bad('That date is not a working day');
+  const allowed = await dayAllowed(ctx.tenantId, section._id, date);
+  if (!allowed && !ctx.settings.workingDays.includes(isoDay(date))) throw bad('That date is not a working day. If the school is open for a test or exam, ask the School Admin to allow attendance for that day.');
   const holiday = await isHoliday(ctx.tenantId, section, date);
-  if (holiday) throw bad(`That date is a holiday (${holiday.title})`);
+  if (holiday && !allowed) throw bad(`That date is a holiday (${holiday.title})`);
   const { AcademicYear } = await import('../../models/index.js');
   const year = await AcademicYear.findOne({ _id: section.yearId, tenantId: ctx.tenantId });
-  if (year && (date < year.startDate || date > year.endDate)) throw bad('That date is outside the academic year');
+  if (year) {
+    const span = classSpan(year, section.classId);
+    if (date < span.startDate || date > span.endDate) throw bad(span.custom ? 'That date is outside this class\'s session dates' : 'That date is outside the academic year');
+  }
 }
 
 /** Students on the register for a date (enrolment dates, so transfers and late admissions are right). */
@@ -58,13 +68,15 @@ export async function getRegister(ctx, { sectionId, date }) {
   const records = session ? await AttendanceRecord.find({ sessionId: session._id }).lean() : [];
   const rm = new Map(records.map((r) => [String(r.studentId), r]));
   const holiday = await isHoliday(ctx.tenantId, section, date);
+  const monitors = await monitorsOf(ctx.tenantId, sectionId);
+  const allowedDay = await dayAllowed(ctx.tenantId, sectionId, date);
   let blocked = null;
   if (date > ctx.today) blocked = 'future';
-  else if (!ctx.settings.workingDays.includes(isoDay(date))) blocked = 'non_working_day';
-  else if (holiday) blocked = `holiday:${holiday.title}`;
+  else if (!allowedDay && !ctx.settings.workingDays.includes(isoDay(date))) blocked = 'non_working_day';
+  else if (holiday && !allowedDay) blocked = `holiday:${holiday.title}`;
   const students = list.map(({ enrolment, student }) => {
     const rec = rm.get(String(student._id));
-    return { studentId: student._id, name: student.name, admissionNo: student.admissionNo, rollNo: enrolment.rollNo, status: rec?.status || null, remarks: rec?.remarks || '', corrected: (rec?.history?.length || 0) > 0 };
+    return { studentId: student._id, name: student.name, admissionNo: student.admissionNo, rollNo: enrolment.rollNo, status: rec?.status || null, remarks: rec?.remarks || '', corrected: (rec?.history?.length || 0) > 0, regularised: !!rec?.regularised, monitor: monitors.has(String(student._id)) };
   });
   const marked = students.filter((s) => s.status);
   const mayMark = isClassTeacherOf(ctx, sectionId);
@@ -72,7 +84,7 @@ export async function getRegister(ctx, { sectionId, date }) {
     section: { id: section._id, name: section.name, className: cls?.name }, date, blocked, students,
     session: session && { id: session._id, status: session.status, submittedAt: session.submittedAt, remarks: session.remarks },
     totals: { ...sessionTotals(marked), total: students.length, unmarked: students.length - marked.length },
-    isClassTeacher: mayMark,
+    isClassTeacher: mayMark, specialDay: !!allowedDay,
     // before submission only the class teacher (or admin) edits; once submitted only the admin may correct, with a reason
     canEdit: mayMark && !blocked && (!session || session.status === 'draft'),
     canCorrect: ctx.role !== 'teacher' && !blocked && session?.status === 'submitted',
@@ -266,8 +278,9 @@ export async function requestCorrection(ctx, user, { sectionId, date, note }) {
 /** Every day of the academic year so far with the student's status: feeds the attendance heat map. */
 export async function studentHeatmap(ctx) {
   if (!ctx.year) return { days: [] };
-  const to = ctx.today < ctx.year.endDate ? ctx.today : ctx.year.endDate;
-  const from = ctx.year.startDate;
+  const span = classSpan(ctx.year, ctx.enrolment?.classId);
+  const to = ctx.today < span.endDate ? ctx.today : span.endDate;
+  const from = span.startDate;
   if (to < from) return { from, to, days: [] };
   const recs = await submittedRecords(ctx.tenantId, { studentId: ctx.student._id, yearId: ctx.year._id });
   const rm = new Map(recs.map((r) => [r.date, r.status]));

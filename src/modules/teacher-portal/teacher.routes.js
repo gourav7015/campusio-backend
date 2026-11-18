@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { parse } from '../../core/utils.js';
+import { parse, forbidden } from '../../core/utils.js';
 import { teacherDay, teacherWeek, periodsOf } from '../../services/timetable.js';
 import { teacherPerformance } from '../../services/analytics.js';
 import { isDateStr } from '../../core/utils.js';
@@ -16,7 +16,8 @@ r.use(selfPunchRoutes((req) => ({ type: 'teacher', id: req.ctx.teacher._id, grou
 r.get('/my-attendance', async (req, res) => res.json(await personAttendance(req.ctx, 'teacher', req.ctx.teacher._id, { joiningDate: req.ctx.teacher.joiningDate, group: 'teachers' })));
 r.get('/years', async (req, res) => res.json(await svc.myYears(req.ctx)));
 r.get('/profile', async (req, res) => res.json(await svc.profile(req.ctx)));
-r.patch('/profile', async (req, res) => res.json(await svc.updateProfile(req.ctx, parse(z.object({ phone: z.string().max(20).optional(), address: z.string().max(300).optional() }), req.body))));
+// a teacher's details are kept by the school office (Admin portal); a teacher may only add their own photo
+r.patch('/profile', async () => { throw forbidden('Your details are updated by the school office. Ask the administrator to change them.'); });
 
 r.get('/timetable', async (req, res) => {
   const { date } = parse(dateQ, req.query);
@@ -29,7 +30,6 @@ r.get('/classes', async (req, res) => res.json(await svc.myClasses(req.ctx)));
 r.get('/classes/:sectionId', async (req, res) => res.json(await svc.classOverview(req.ctx, req.params.sectionId)));
 r.get('/classes/:sectionId/students', async (req, res) => res.json(await svc.classStudents(req.ctx, req.params.sectionId)));
 r.get('/students/:id', async (req, res) => res.json(await svc.studentDetail(req.ctx, req.params.id)));
-r.post('/students/:id/remarks', async (req, res) => res.status(201).json(await svc.addRemark(req.ctx, req.params.id, parse(z.object({ text: z.string().trim().min(3).max(500) }), req.body).text)));
 r.get('/subjects', async (req, res) => res.json(await svc.mySubjects(req.ctx)));
 r.get('/performance', async (req, res) => res.json(await teacherPerformance(req.ctx)));
 r.get('/performance/class/:sectionId', async (req, res) => res.json(await svc.classPerformance(req.ctx, req.params.sectionId)));

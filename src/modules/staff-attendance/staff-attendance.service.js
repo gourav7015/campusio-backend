@@ -60,6 +60,7 @@ export async function getRegister(ctx, group, date) {
   });
   const count = (s) => rows.filter((r) => r.status === s).length;
   return {
+    policy: { shiftStart: ctx.settings.staffAttendance.shiftStart, shiftEnd: ctx.settings.staffAttendance.shiftEnd, graceMinutes: ctx.settings.staffAttendance.graceMinutes },
     group, date: d, session: session ? { status: session.status, submittedAt: session.submittedAt } : null, blocked,
     canEdit: !blocked && session?.status !== 'submitted', canCorrect: !blocked && session?.status === 'submitted',
     rows, totals: { people: rows.length, present: count('present'), late: count('late'), halfDay: count('half_day'), absent: count('absent'), leave: count('leave') },

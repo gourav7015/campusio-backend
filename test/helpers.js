@@ -50,7 +50,7 @@ export async function login(loginId, password, portal) {
 /** Create a school through the Super Admin API and sign in as its School Admin. */
 export async function makeSchool(root, code, opts = {}) {
   const res = await api().post('/api/platform/schools').set(root.h).send({
-    name: `${code} School`, code, subscription: { status: 'active', studentLimit: opts.studentLimit || 100, teacherLimit: opts.teacherLimit || 20 },
+    name: `${code} School`, code, subscription: { status: 'active' },
     admin: { name: `${code} Admin`, email: `admin@${code}.test`, password: 'Admin@12345' },
   });
   if (res.status !== 201) throw new Error(JSON.stringify(res.body));

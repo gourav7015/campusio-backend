@@ -1,19 +1,8 @@
 import {
-  Subscription, Student, Teacher, StudentEnrolment, Section, AcademicYear, ClassModel,
+  Student, StudentEnrolment, Section, AcademicYear, ClassModel,
 } from '../models/index.js';
 import { conflict, notFound, bad } from '../core/utils.js';
 import { nextSeq } from './context.js';
-
-export async function assertWithinLimit(tenantId, kind, adding = 1) {
-  const sub = await Subscription.findOne({ schoolId: tenantId });
-  if (!sub) return;
-  const Model = kind === 'student' ? Student : Teacher;
-  const limit = kind === 'student' ? sub.studentLimit : sub.teacherLimit;
-  const current = await Model.countDocuments({ tenantId, status: 'active' });
-  if (current + adding > limit) {
-    throw conflict(`Subscription limit reached: ${kind}s ${current}/${limit}. Ask the platform administrator to upgrade the plan.`, { limit, current });
-  }
-}
 
 export async function nextRollNo(tenantId, sectionId) {
   const last = await StudentEnrolment.findOne({ tenantId, sectionId, status: 'active' }).sort({ rollNo: -1 }).select('rollNo');

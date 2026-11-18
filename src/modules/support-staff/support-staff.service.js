@@ -1,7 +1,8 @@
 import { Designation, StaffMember, Bus } from '../../models/index.js';
 import { notFound, conflict, bad, forbidden, escapeRegex } from '../../core/utils.js';
-import { nextSeq } from '../../services/context.js';
+import { nextSeq, settingsOf, loadSchool } from '../../services/context.js';
 import { createUserAccount, hashPassword, schoolCode } from '../../services/users.js';
+import { initialPassword } from '../../services/initialPassword.js';
 import { generatePassword } from '../../core/utils.js';
 import { User, Session } from '../../models/index.js';
 
@@ -149,7 +150,7 @@ export async function createLogin(ctx, scope, id) {
   const { s } = await ownStaff(ctx, scope, id);
   if (s.userId) throw conflict(`${s.name} already has a login`);
   const code = await schoolCode(ctx.tenantId);
-  const { user, temporaryPassword } = await createUserAccount({ role: 'staff', tenantId: ctx.tenantId, name: s.name, loginId: `${code}.${s.staffId.toLowerCase()}`, createdBy: ctx.actorId });
+  const { user, temporaryPassword } = await createUserAccount({ role: 'staff', tenantId: ctx.tenantId, name: s.name, loginId: `${code}.${s.staffId.toLowerCase()}`, createdBy: ctx.actorId, password: initialPassword(settingsOf(await loadSchool(ctx.tenantId)), { name: s.name, dob: s.dob, phone: s.phone }) });
   s.userId = user._id;
   await s.save();
   return { loginId: user.loginId, temporaryPassword };
@@ -158,7 +159,7 @@ export async function createLogin(ctx, scope, id) {
 export async function resetLogin(ctx, scope, id) {
   const { s } = await ownStaff(ctx, scope, id);
   if (!s.userId) throw notFound(`${s.name} has no login yet`);
-  const temporaryPassword = generatePassword();
+  const temporaryPassword = initialPassword(settingsOf(await loadSchool(ctx.tenantId)), { name: s.name, dob: s.dob, phone: s.phone }) || generatePassword();
   const u = await User.findById(s.userId);
   u.passwordHash = await hashPassword(temporaryPassword); u.mustChangePassword = true; u.failedLogins = 0; u.lockedUntil = undefined;
   await u.save();

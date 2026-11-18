@@ -33,7 +33,7 @@ export async function buildDemo(base) {
 
   const created = await call('POST', '/api/platform/schools', root, {
     name: 'Greenfield Public School', code: 'gps', board: 'CBSE', address: '12 Park Road, Pune', phone: '020 5550 1234',
-    subscription: { plan: 'standard', status: 'active', studentLimit: 600, teacherLimit: 60 }, admin: { name: 'Anita Deshmukh', email: DEMO.admin.loginId },
+    subscription: { plan: 'standard', status: 'active' }, admin: { name: 'Anita Deshmukh', email: DEMO.admin.loginId },
   });
   const keep = async (userId, pw) => User.updateOne({ _id: userId }, { passwordHash: await hashPassword(pw), mustChangePassword: false });
   await keep(created.admin.id, DEMO.admin.password);

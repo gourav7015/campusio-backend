@@ -1,4 +1,4 @@
-import { Section, ClassModel, File, User, Notification } from '../../models/index.js';
+import { Section, ClassModel, File, User, Notification, ChatThread } from '../../models/index.js';
 import { forbidden, addDays, isoDay } from '../../core/utils.js';
 import { sectionDay, sectionWeek } from '../../services/timetable.js';
 import { listForStudent as homeworkFor } from '../homework/homework.service.js';
@@ -8,6 +8,7 @@ import { listFor as announcementsFor } from '../comms/announcements.service.js';
 import { feed } from '../comms/calendar.service.js';
 import { studentAccount } from '../finance/finance.service.js';
 import { LibraryIssue } from '../../models/index.js';
+import { monitorsOf, pendingCount } from '../class-life/class-life.service.js';
 
 
 export async function profile(ctx) {
@@ -19,7 +20,7 @@ export async function profile(ctx) {
   return {
     personal: { name: student.name, dob: student.dob, gender: student.gender, address: student.address, phone: student.phone, email: student.email, photoFileId: photo?._id },
     academic: {
-      admissionNo: student.admissionNo, academicYear: year?.name, className: cls?.name, section: section?.name, rollNo: enrolment?.rollNo, admissionDate: student.admissionDate, schoolName: ctx.school.name, enrolmentStatus: enrolment?.status,
+      admissionNo: student.admissionNo, academicYear: year?.name, className: cls?.name, section: section?.name, rollNo: enrolment?.rollNo, monitor: enrolment ? (await monitorsOf(ctx.tenantId, enrolment.sectionId)).has(String(student._id)) : false, admissionDate: student.admissionDate, schoolName: ctx.school.name, enrolmentStatus: enrolment?.status,
     },
     guardians: (student.guardians || []).map((g) => ({ name: g.name, relationship: g.relationship, phone: g.phone, email: g.email })),
     other: { house: student.house, bloodGroup: student.bloodGroup, emergencyContact: student.emergencyContact },
@@ -38,7 +39,6 @@ export async function updateProfile(ctx, body) {
 }
 
 export async function setPhoto(ctx, file) {
-  if (!ctx.settings.studentCanEditProfile.includes('photo')) throw forbidden('Your school does not allow students to change their profile photo');
   const old = ctx.student.photoFileId;
   ctx.student.photoFileId = file._id;
   await ctx.student.save();
@@ -80,6 +80,7 @@ export async function dashboard(ctx) {
     attendance.studentCalendar(ctx, today.slice(0, 7)),
     enrolled ? sectionDay({ tenantId: ctx.tenantId, yearId: ctx.year._id, sectionId: ctx.enrolment.sectionId, date: today, today, tz: ctx.settings.timezone }) : [],
   ]);
+  const [pendingRemarks, unreadChats] = await Promise.all([pendingCount(ctx), ChatThread.countDocuments({ tenantId: ctx.tenantId, studentId: ctx.student._id, unreadStudent: { $gt: 0 } })]);
   const [acct, loans] = await Promise.all([studentAccount(ctx.tenantId, ctx.student._id, today), LibraryIssue.find({ tenantId: ctx.tenantId, borrowerType: 'student', borrowerId: ctx.student._id, status: 'issued' }).lean()]);
   const pending = hwAll.filter((h) => h.state !== 'overdue');
   const next = schedule.find((s) => s.daysLeft >= 0);
@@ -96,6 +97,7 @@ export async function dashboard(ctx) {
     attendance: { summary: att, calendar: calendarMonth },
     homework: hwAll.slice(0, 5), overdueHomework: hwAll.filter((h) => h.state === 'overdue').length,
     fees: acct.charges.length ? { pending: acct.totals.pending, overdue: acct.totals.overdue, nextDue: acct.totals.nextDue } : null,
+    toDo: { remarksToAcknowledge: pendingRemarks, unreadChats },
     library: { onLoan: loans.length, overdue: loans.filter((l) => l.dueDate < today).length },
     upcomingExam: next || null, latestResult: latest, announcements: anns, calendar: cal.slice(0, 8),
     activity: activity.map((n) => ({ id: n._id, at: n.createdAt, title: n.title, body: n.body, category: n.category, link: n.link, read: !!n.readAt })),

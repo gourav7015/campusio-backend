@@ -27,11 +27,13 @@ export const defaultSettings = () => ({
   finance: { receiptFormat: 'RCPT{YYYY}{SEQ:5}', dueDay: 10, advanceDiscount: { enabled: true, minMonths: 12, type: 'months', value: 1 } },
   library: { loanDays: { student: 14, teacher: 30 }, maxBooks: { student: 2, teacher: 5 }, finePerDay: 2, maxRenewals: 1, blockIfOverdue: true },
   admissionFormat: 'ADM{YYYY}{SEQ:4}',
+  // starting password for students, teachers and staff made in bulk or one by one: first 4 letters of the name in capitals + date of birth. '' = a random one each time.
+  passwordFormat: '{NAME4}{DDMMYYYY}',
   leaveBalances: { casual: 12, sick: 10, earned: 0, other: 0 },
   staffLeaveBalances: { casual: 12, sick: 10, earned: 0, other: 0 },
   // working hours for staff. A check-in after shiftStart + graceMinutes is late; less than halfDayHours is a half day.
   // location (optional): staff may check in from their own login only within radiusMeters of the school.
-  staffAttendance: { shiftStart: '08:00', shiftEnd: '15:00', graceMinutes: 10, fullDayHours: 6, halfDayHours: 3, location: null },
+  staffAttendance: { shiftStart: '08:00', shiftEnd: '15:00', graceMinutes: 10, fullDayHours: 6, halfDayHours: 3, checkInOpensBeforeMinutes: 60, checkInClosesAtShiftEnd: true, location: null },
   // statutory deductions (India). Off by default: a school switches on what applies to it.
   statutory: {
     pf: { enabled: false, employeeRate: 12, employerRate: 12, wageCeiling: 15000 },
@@ -39,7 +41,7 @@ export const defaultSettings = () => ({
     pt: { enabled: false, slabs: [{ upTo: 12000, amount: 0 }, { upTo: 1000000000, amount: 200 }] },
   },
   showAttendanceVsPerformance: true,
-  studentCanEditProfile: ['phone', 'address'],
+  studentCanEditProfile: [], // students only look: their details are kept up to date by the school (a school may allow phone, address or email here)
 });
 
 export const School = model('School', new Schema({
@@ -54,8 +56,6 @@ export const Subscription = model('Subscription', new Schema({
   schoolId: { type: ObjectId, ref: 'School', required: true, unique: true },
   plan: { type: String, default: 'starter' },
   status: { type: String, enum: ['trial', 'active', 'expired', 'cancelled'], default: 'trial' },
-  studentLimit: { type: Number, default: 500 },
-  teacherLimit: { type: Number, default: 50 },
   startsOn: String, expiresOn: String,
 }, opts));
 
@@ -67,6 +67,8 @@ export const User = model('User', new Schema({
   name: { type: String, required: true, trim: true },
   passwordHash: { type: String, required: true },
   mustChangePassword: { type: Boolean, default: true },
+  // a sub-admin is a school_admin login that may use only the listed parts of the admin portal
+  adminLevel: { type: String, enum: ['full', 'sub'], default: 'full' }, permissions: [String],
   status: { type: String, enum: ['active', 'disabled'], default: 'active' },
   lastLoginAt: Date,
   failedLogins: { type: Number, default: 0 },
@@ -108,6 +110,9 @@ export const AcademicYear = model('AcademicYear', (() => {
     startDate: { type: String, required: true }, endDate: { type: String, required: true },
     isCurrent: { type: Boolean, default: false },
     status: { type: String, enum: ['upcoming', 'active', 'closed'], default: 'active' },
+    // Some classes run on their own calendar: classes 9 and 11 often start in January or February, and 10 and 12 follow the board's date sheet.
+    // A class listed here uses these dates instead of the school-wide ones; a class not listed follows the school year.
+    classWindows: { type: [new Schema({ classId: ref('Class', { required: true }), startDate: { type: String, required: true }, endDate: { type: String, required: true } }, { _id: false })], default: [] },
   }, opts);
   s.index({ tenantId: 1, name: 1 }, { unique: true });
   return s;
@@ -126,7 +131,7 @@ export const ClassModel = model('Class', (() => {
 export const Section = model('Section', (() => {
   const s = new Schema({
     tenantId: tenant, yearId: ref('AcademicYear', { required: true }), classId: ref('Class', { required: true }),
-    name: { type: String, required: true, trim: true }, capacity: { type: Number, default: 40 }, room: String,
+    name: { type: String, required: true, trim: true, uppercase: true }, capacity: { type: Number, default: 40 }, room: String, monitorIds: [ref('Student')], // always stored in capitals, so 12a and 12A can never be two sections
     status: { type: String, enum: ['active', 'archived'], default: 'active' },
   }, opts);
   s.index({ tenantId: 1, yearId: 1, classId: 1, name: 1 }, { unique: true });
@@ -164,6 +169,8 @@ export const Student = model('Student', (() => {
     guardians: [guardian], emergencyContact: { name: String, phone: String },
     status: { type: String, enum: ['active', 'withdrawn', 'transferred_out', 'completed', 'archived'], default: 'active' },
     importBatchId: ref('ImportBatch'),
+    // a discount on tuition that goes with the student and applies to every month billed (set at admission or by Finance)
+    personalDiscount: { type: { type: String, enum: ['percent', 'per_month'] }, value: Number, reason: String, setByName: String, setAt: Date },
   }, opts);
   s.index({ tenantId: 1, admissionNo: 1 }, { unique: true });
   s.index({ tenantId: 1, name: 1 });
@@ -193,7 +200,7 @@ export const Teacher = model('Teacher', (() => {
     tenantId: tenant, userId: ref('User'), employeeId: { type: String, required: true }, name: { type: String, required: true, trim: true },
     bank: { accountName: String, accountNo: String, ifsc: String, bankName: String, upi: String },
     statutory: { uan: String, esiNo: String, pan: String },
-    email: String, phone: String, qualification: String, designation: String, joiningDate: String, address: String,
+    email: String, phone: String, dob: String, qualification: String, designation: String, joiningDate: String, address: String,
     subjectIds: [ref('Subject')], photoFileId: ref('File'),
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
     importBatchId: ref('ImportBatch'),
@@ -269,8 +276,8 @@ export const AttendanceRecord = model('AttendanceRecord', (() => {
     studentId: ref('Student', { required: true }), enrolmentId: ref('StudentEnrolment'), sectionId: ref('Section'), yearId: ref('AcademicYear'),
     date: String,
     status: { type: String, enum: ['present', 'absent', 'late', 'leave', 'excused'], required: true },
-    remarks: String,
-    history: [new Schema({ from: String, to: String, by: ref('User'), byName: String, reason: String, at: { type: Date, default: Date.now } }, { _id: false })],
+    remarks: String, regularised: { type: Boolean, default: false },
+    history: [new Schema({ from: String, to: String, by: ref('User'), byName: String, reason: String, kind: String, at: { type: Date, default: Date.now } }, { _id: false })],
   }, opts);
   s.index({ sessionId: 1, studentId: 1 }, { unique: true });
   s.index({ tenantId: 1, studentId: 1, yearId: 1, date: 1 });
@@ -375,7 +382,7 @@ export const ReportRemark = model('ReportRemark', (() => {
 // ───────────── Communication ─────────────
 export const Announcement = model('Announcement', new Schema({
   tenantId: tenant, title: { type: String, required: true }, body: String,
-  category: { type: String, enum: ['holiday', 'examination', 'event', 'homework', 'general'], default: 'general' },
+  category: { type: String, enum: ['urgent', 'holiday', 'examination', 'event', 'homework', 'general'], default: 'general' },
   audience: { roles: [String], sectionIds: [ref('Section')], all: { type: Boolean, default: true } },
   attachments: [ref('File')], publishAt: Date, status: { type: String, enum: ['draft', 'published', 'archived'], default: 'published' }, createdBy: ref('User'), createdByName: String, createdByRole: String,
 }, opts));
@@ -389,6 +396,7 @@ export const AnnouncementRead = model('AnnouncementRead', (() => {
 export const CalendarEvent = model('CalendarEvent', new Schema({
   tenantId: tenant, title: { type: String, required: true }, description: String,
   type: { type: String, enum: ['holiday', 'exam', 'event', 'ptm', 'deadline', 'other'], default: 'event' },
+  kind: { type: String, enum: ['school', 'government'], default: 'school' }, // a school's own day, or a national / state holiday
   startDate: { type: String, required: true }, endDate: { type: String, required: true }, sectionIds: [ref('Section')], createdBy: ref('User'),
 }, opts));
 
@@ -408,6 +416,34 @@ export const Message = model('Message', new Schema({
   subject: { type: String, required: true }, body: { type: String, required: true },
   status: { type: String, enum: ['delivered', 'read'], default: 'delivered' }, readAt: Date,
 }, opts));
+
+// ───────────── Help desk ─────────────
+// scope 'platform': a School Admin asks Campusio support (handled by the Super Admin side).
+// scope 'school': a teacher, student or staff member asks their own school's admin.
+export const TICKET_CATEGORIES = ['general', 'bug', 'account', 'billing', 'how_to', 'feature', 'other'];
+export const Ticket = model('Ticket', (() => {
+  const reply = new Schema({
+    authorId: ref('User'), authorName: String, authorRole: String, body: { type: String, required: true },
+    internal: { type: Boolean, default: false }, // a note for the handling side only; the person who raised the ticket never sees it
+    attachments: { type: [new Schema({ fileId: ref('File'), name: String, mime: String, size: Number }, { _id: false })], default: [] },
+    at: { type: Date, default: Date.now },
+  });
+  const s = new Schema({
+    tenantId: tenant, scope: { type: String, enum: ['school', 'platform'], required: true },
+    number: { type: Number, required: true }, reference: { type: String, required: true }, // what people quote, e.g. DEMO-12 or T-0007
+    subject: { type: String, required: true }, category: { type: String, enum: TICKET_CATEGORIES, default: 'general' },
+    priority: { type: String, enum: ['low', 'normal', 'high', 'urgent'], default: 'normal' },
+    status: { type: String, enum: ['open', 'pending', 'resolved', 'closed'], default: 'open' }, // pending = waiting for the person who raised it
+    raisedBy: { userId: ref('User', { required: true }), name: String, role: String, email: String },
+    assignedTo: { userId: ref('User'), name: String },
+    messages: [reply], lastActivityAt: { type: Date, default: Date.now }, lastReplyBy: { type: String, enum: ['requester', 'handler'], default: 'requester' },
+    resolvedAt: Date, closedAt: Date,
+  }, opts);
+  s.index({ tenantId: 1, scope: 1, number: 1 }, { unique: true });
+  s.index({ scope: 1, status: 1, lastActivityAt: -1 });
+  s.index({ tenantId: 1, scope: 1, 'raisedBy.userId': 1, lastActivityAt: -1 });
+  return s;
+})());
 
 export const LeaveApplication = model('LeaveApplication', new Schema({
   tenantId: tenant, teacherId: ref('Teacher', { required: true, index: true }), userId: ref('User'),
@@ -464,20 +500,25 @@ export const Payslip = model('Payslip', (() => {
     earnings: [lineSchema], deductions: [lineSchema], lossOfPay: { type: Number, default: 0 },
     adjustments: [{ label: String, type: { type: String, enum: ['earning', 'deduction'] }, amount: Number, reason: String, _id: false }],
     gross: Number, totalDeductions: Number, net: Number, statutory: Schema.Types.Mixed,
-    status: { type: String, enum: ['pending', 'paid'], default: 'pending' }, paidOn: String, mode: String, reference: String, paidBy: ref('User'),
+    status: { type: String, enum: ['pending', 'partial', 'paid'], default: 'pending' }, paidOn: String, mode: String, reference: String, paidBy: ref('User'),
+    // salary can be paid in parts (half now, the rest later); the slip is 'paid' once the parts add up to the net pay
+    paidAmount: { type: Number, default: 0 }, payments: [new Schema({ amount: Number, paidOn: String, mode: String, reference: String, note: String, by: ref('User') }, { _id: false })],
   }, opts);
   s.index({ tenantId: 1, runId: 1, personId: 1 }, { unique: true });
   return s;
 })());
 
+/** A teacher's remark about a student (a homework mistake, behaviour, a guideline). The parent, who signs in as the student, must acknowledge it; reminders go out until they do. */
 export const StudentRemark = model('StudentRemark', new Schema({
   tenantId: tenant, studentId: ref('Student', { required: true, index: true }), teacherId: ref('Teacher', { required: true }), text: { type: String, required: true }, date: String,
+  category: { type: String, enum: ['remark', 'homework', 'behaviour', 'guideline'], default: 'remark' }, requireAck: { type: Boolean, default: true },
+  ackAt: Date, ackByName: String, reminders: { type: Number, default: 0 }, lastRemindedOn: String,
 }, opts));
 
 // ───────────── Files & imports ─────────────
 export const File = model('File', new Schema({
   tenantId: tenant, originalName: String, mime: String, size: Number, storageKey: { type: String, required: true },
-  kind: { type: String, enum: ['homework', 'material', 'document', 'photo', 'announcement', 'leave'], required: true },
+  kind: { type: String, enum: ['homework', 'material', 'document', 'photo', 'announcement', 'leave', 'ticket'], required: true },
   ownerType: String, ownerId: String, docType: String, visibility: { type: String, enum: ['owner', 'school'], default: 'owner' },
   uploadedBy: ref('User'),
 }, opts));
@@ -509,7 +550,7 @@ export const StudentCharge = model('StudentCharge', (() => {
     tenantId: tenant, studentId: ref('Student', { required: true, index: true }), yearId: ref('AcademicYear'),
     kind: { type: String, enum: ['fee', 'library_fine', 'other'], default: 'fee' }, label: { type: String, required: true }, category: String,
     structureId: ref('FeeStructure'), period: String, amount: { type: Number, required: true }, concession: { type: Number, default: 0 }, concessionNote: String,
-    concessions: [new Schema({ amount: Number, reason: String, by: ref('User'), byName: String, at: { type: Date, default: Date.now } }, { _id: false })],
+    concessions: [new Schema({ amount: Number, reason: String, kind: String, by: ref('User'), byName: String, at: { type: Date, default: Date.now } }, { _id: false })],
     dueDate: String, paidAmount: { type: Number, default: 0 }, status: { type: String, enum: ['open', 'paid'], default: 'open' },
     source: { type: { type: String }, id: String }, createdBy: ref('User'),
   }, opts);
@@ -522,7 +563,7 @@ export const StudentCharge = model('StudentCharge', (() => {
 export const Payment = model('Payment', (() => {
   const s = new Schema({
     tenantId: tenant, studentId: ref('Student', { required: true, index: true }), kind: { type: String, enum: ['payment', 'reversal'], default: 'payment' },
-    amount: { type: Number, required: true }, mode: { type: String, enum: ['cash', 'upi', 'cheque', 'bank_transfer', 'card', 'other'], default: 'cash' }, reference: String,
+    amount: { type: Number, required: true }, mode: { type: String, enum: ['cash', 'upi', 'cheque', 'bank_transfer', 'card', 'other', 'online'], default: 'cash' }, reference: String,
     receiptNo: { type: String, required: true }, paidOn: { type: String, required: true },
     allocations: [new Schema({ chargeId: ref('StudentCharge'), label: String, amount: Number }, { _id: false })],
     receivedBy: ref('User'), receivedByName: String, note: String,
@@ -530,6 +571,24 @@ export const Payment = model('Payment', (() => {
   }, opts);
   s.index({ tenantId: 1, receiptNo: 1 }, { unique: true });
   s.index({ tenantId: 1, paidOn: 1 });
+  return s;
+})());
+
+/**
+ * One attempt to pay fees online. The amount is worked out by the server from the student's open charges, never taken from the browser.
+ * created: waiting for the person to pay. paid: money received and a receipt issued. failed / expired: nothing was paid.
+ * needs_review: the gateway took the money but the dues no longer matched (for example the office recorded a cash payment meanwhile): finance must settle it.
+ */
+export const PaymentOrder = model('PaymentOrder', (() => {
+  const s = new Schema({
+    tenantId: tenant, studentId: ref('Student', { required: true, index: true }), userId: ref('User'),
+    provider: { type: String, enum: ['mock', 'razorpay'], required: true }, providerOrderId: { type: String, required: true }, providerPaymentId: String,
+    amount: { type: Number, required: true }, currency: { type: String, default: 'INR' }, chargeIds: [ref('StudentCharge')],
+    status: { type: String, enum: ['created', 'processing', 'paid', 'failed', 'expired', 'needs_review'], default: 'created' },
+    paymentId: ref('Payment'), receiptNo: String, failureReason: String, note: String, paidAt: Date,
+  }, opts);
+  s.index({ providerOrderId: 1 }, { unique: true });
+  s.index({ tenantId: 1, status: 1, createdAt: -1 });
   return s;
 })());
 
@@ -660,5 +719,96 @@ export const StaffPunch = model('StaffPunch', (() => {
   }, opts);
   s.index({ tenantId: 1, personId: 1, date: 1 }, { unique: true });
   s.index({ tenantId: 1, group: 1, date: 1 });
+  return s;
+})());
+
+// ───────────── School money out: expenses, budgets, approvals ─────────────
+export const Expense = model('Expense', (() => {
+  const s = new Schema({
+    tenantId: tenant, yearId: ref('AcademicYear'), date: { type: String, required: true }, department: { type: String, required: true, trim: true }, work: { type: String, trim: true },
+    title: { type: String, required: true, trim: true }, vendor: { type: String, trim: true }, billNo: { type: String, trim: true }, amount: { type: Number, required: true, min: 0.01 }, notes: String,
+    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+    submittedBy: ref('User'), submittedByName: String, decidedBy: ref('User'), decidedByName: String, decidedAt: Date, decisionNote: String,
+  }, opts);
+  s.index({ tenantId: 1, status: 1, date: -1 });
+  return s;
+})());
+
+/** Money set aside for a department (and optionally one piece of work) in an academic year. */
+export const Budget = model('Budget', (() => {
+  const s = new Schema({
+    tenantId: tenant, yearId: ref('AcademicYear', { required: true }), department: { type: String, required: true, trim: true }, work: { type: String, trim: true, default: '' },
+    allocated: { type: Number, required: true, min: 0 }, notes: String,
+  }, opts);
+  s.index({ tenantId: 1, yearId: 1, department: 1, work: 1 }, { unique: true });
+  return s;
+})());
+
+// ───────────── The school itself: profile, gallery, licences, tax details ─────────────
+export const SchoolProfile = model('SchoolProfile', new Schema({
+  tenantId: { type: ObjectId, ref: 'School', required: true, unique: true },
+  tagline: String, about: String, address: String, phone: String, email: String, website: String, board: String, affiliationNo: String, established: String,
+  principalName: String, principalMessage: String,
+  gallery: [new Schema({ fileId: ref('File'), caption: String }, { _id: true })],
+  sections: [new Schema({ title: { type: String, required: true }, body: String }, { _id: true })],
+  // visible only to the Finance team
+  finance: { gstin: String, pan: String, tan: String, bankName: String, accountName: String, accountNo: String, ifsc: String, branch: String, upi: String },
+}, opts));
+
+export const License = model('License', new Schema({
+  tenantId: tenant, name: { type: String, required: true, trim: true }, authority: { type: String, enum: ['state', 'central', 'local', 'other'], default: 'state' },
+  issuedBy: String, number: String, issuedOn: String, validUntil: String, fileId: ref('File'), notes: String,
+}, opts));
+
+// ───────────── Teacher and parent: chat ─────────────
+/** One conversation between a teacher and a student's family (they sign in as the student). */
+export const ChatThread = model('ChatThread', (() => {
+  const s = new Schema({
+    tenantId: tenant, studentId: ref('Student', { required: true }), teacherId: ref('Teacher', { required: true }), topic: String,
+    lastMessageAt: Date, lastPreview: String, unreadTeacher: { type: Number, default: 0 }, unreadStudent: { type: Number, default: 0 },
+  }, opts);
+  s.index({ tenantId: 1, studentId: 1, teacherId: 1 }, { unique: true });
+  return s;
+})());
+export const ChatMessage = model('ChatMessage', (() => {
+  const s = new Schema({ tenantId: tenant, threadId: ref('ChatThread', { required: true, index: true }), from: { type: String, enum: ['teacher', 'student'], required: true }, fromUserId: ref('User'), text: { type: String, required: true } }, opts);
+  s.index({ threadId: 1, createdAt: 1 });
+  return s;
+})());
+
+// ───────────── Attendance extras ─────────────
+/** A teacher asks to take attendance on a day the school does not work (a Sunday exam, a talent test). The School Admin approves. */
+export const AttendanceException = model('AttendanceException', (() => {
+  const s = new Schema({
+    tenantId: tenant, sectionId: ref('Section', { required: true }), date: { type: String, required: true }, reason: { type: String, required: true },
+    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' }, requestedBy: ref('User'), requestedByName: String, teacherId: ref('Teacher'),
+    decidedBy: ref('User'), decidedByName: String, decidedAt: Date, decisionNote: String,
+  }, opts);
+  s.index({ tenantId: 1, sectionId: 1, date: 1 }, { unique: true });
+  return s;
+})());
+
+/** Attendance taken period by period, for schools that want it (a setting). */
+export const PeriodAttendanceSession = model('PeriodAttendanceSession', (() => {
+  const s = new Schema({
+    tenantId: tenant, yearId: ref('AcademicYear'), sectionId: ref('Section', { required: true }), periodId: ref('TimetablePeriod', { required: true }), date: { type: String, required: true },
+    teacherId: ref('Teacher'), subjectId: ref('Subject'), markedBy: ref('User'),
+    records: [new Schema({ studentId: ref('Student', { required: true }), status: { type: String, enum: ['present', 'absent', 'late', 'leave', 'excused'], required: true } }, { _id: false })],
+  }, opts);
+  s.index({ tenantId: 1, sectionId: 1, date: 1, periodId: 1 }, { unique: true });
+  return s;
+})());
+
+// ───────────── Timetable: a teacher asks to swap a period ─────────────
+export const SwapRequest = model('SwapRequest', (() => {
+  const s = new Schema({
+    tenantId: tenant, date: { type: String, required: true }, reason: String,
+    fromTeacherId: ref('Teacher', { required: true }), fromEntryId: ref('TimetableEntry', { required: true }),
+    toTeacherId: ref('Teacher', { required: true }), toEntryId: ref('TimetableEntry'),
+    peerStatus: { type: String, enum: ['pending', 'accepted', 'declined'], default: 'pending' }, peerNote: String,
+    adminStatus: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' }, adminNote: String, decidedBy: ref('User'), decidedByName: String, decidedAt: Date,
+    status: { type: String, enum: ['pending', 'approved', 'rejected', 'declined', 'cancelled'], default: 'pending' },
+  }, opts);
+  s.index({ tenantId: 1, status: 1, date: 1 });
   return s;
 })());

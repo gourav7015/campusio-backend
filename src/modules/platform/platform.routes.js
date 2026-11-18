@@ -4,10 +4,12 @@ import { parse } from '../../core/utils.js';
 import { audit } from '../../services/audit.js';
 import * as v from './platform.validation.js';
 import * as svc from './platform.service.js';
+import { handlerRoutes as ticketHandler } from '../helpdesk/helpdesk.routes.js';
 
 const r = Router();
 r.use(requireRole('super_admin'));
 
+r.use('/helpdesk', ticketHandler('platform')); // tickets schools send to Campusio support
 r.get('/stats', async (_req, res) => res.json(await svc.platformStats()));
 r.get('/schools', async (req, res) => res.json(await svc.listSchools(req.query)));
 

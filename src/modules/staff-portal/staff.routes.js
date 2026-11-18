@@ -29,12 +29,13 @@ r.get('/my-attendance', async (req, res) => res.json(await personAttendance(req.
 
 r.get('/dashboard', async (req, res) => {
   const { ctx } = req; const staff = me(req);
-  const [att, balances, pending, last] = await Promise.all([
+  const [att, balances, pending, last, revised] = await Promise.all([
     personAttendance({ ...ctx, year: ctx.year || { startDate: `${ctx.today.slice(0, 4)}-01-01`, endDate: `${ctx.today.slice(0, 4)}-12-31` } }, 'staff', staff._id, { joiningDate: staff.joiningDate, group: ctx.group }),
     leave.balances(ctx, staff._id), StaffLeave.countDocuments({ tenantId: ctx.tenantId, staffId: staff._id, status: 'submitted' }),
     pay.myPayslips(ctx).then((x) => x[0] || null),
+    pay.mySalary(ctx).then((x) => x.revisedAfterLatest).catch(() => null),
   ]);
-  res.json({ today: ctx.today, name: staff.name, designation: ctx.designation?.name, attendance: att.summary, balances, pendingLeave: pending, lastPayslip: last && { id: last._id, month: last.month, net: last.net, status: last.status } });
+  res.json({ today: ctx.today, name: staff.name, designation: ctx.designation?.name, attendance: att.summary, balances, pendingLeave: pending, lastPayslip: last && { id: last._id, month: last.month, net: last.net, status: last.status }, salaryRevision: revised });
 });
 
 // leave

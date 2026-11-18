@@ -80,7 +80,7 @@ describe('Staff portal, staff leave, check-in times, bank file and statutory ded
 
   it('check-in and check-out: late against the school\'s hours, optional location fence, desk-entered times', async () => {
     // hours: shift starts 00:00 with no grace, so any check-in today is late; full day = 6h
-    expect((await api().put(A('/settings')).set(W.h).send({ staffAttendance: { shiftStart: '00:00', graceMinutes: 0, fullDayHours: 6, halfDayHours: 3 } })).status).toBe(200);
+    expect((await api().put(A('/settings')).set(W.h).send({ staffAttendance: { shiftStart: '00:00', shiftEnd: '23:59', graceMinutes: 0, fullDayHours: 6, halfDayHours: 3 } })).status).toBe(200);
     expect((await api().put(A('/settings')).set(W.h).send({ staffAttendance: { shiftStart: '25:00' } })).status).toBe(400);
     expect((await api().post(STF('/punch/check-out')).set(kLogin.h).send({})).status).toBe(409); // check in first
     const inn = await api().post(STF('/punch/check-in')).set(kLogin.h).send({});

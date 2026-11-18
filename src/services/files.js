@@ -48,10 +48,10 @@ export async function assertContentMatches(file) {
 }
 
 /** Persist metadata for a multer file. Bytes stay on disk/object storage, never in Mongo documents. */
-export async function saveFile(req, file, { kind, ownerType, ownerId, docType, visibility = 'owner' }) {
+export async function saveFile(req, file, { kind, ownerType, ownerId, docType, visibility = 'owner', tenantId = req.tenantId }) {
   await assertContentMatches(file);
   return File.create({
-    tenantId: req.tenantId, originalName: file.originalname, mime: file.mimetype, size: file.size, storageKey: file.filename,
+    tenantId, originalName: file.originalname, mime: file.mimetype, size: file.size, storageKey: file.filename,
     kind, ownerType, ownerId: ownerId ? String(ownerId) : undefined, docType, visibility, uploadedBy: req.user._id,
   });
 }

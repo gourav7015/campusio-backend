@@ -22,7 +22,11 @@ export const admitBody = z.object({
   admissionNo: z.string().trim().min(1).max(30).optional(), admissionDate: date.optional(),
   yearId: id.optional(), classId: id.optional(), sectionId: id, rollNo: z.number().int().positive().optional(),
   loginId: z.string().optional(), password: z.string().optional(), confirmDuplicate: z.boolean().optional(),
+  // a personal discount on tuition, given once at admission. Needs a reason; Finance sees it on the student's charges.
+  discount: z.object({ type: z.enum(['percent', 'amount']), value: z.number().positive().max(10_000_000), reason: z.string().trim().min(3).max(200) })
+    .refine((d) => d.type !== 'percent' || d.value <= 100, { message: 'A percentage discount must be between 0 and 100', path: ['value'] }).optional(),
 });
+export const feePreviewQuery = z.object({ sectionId: id, admissionDate: date.optional() });
 
 export const updateStudentBody = z.object({ ...profileFields, admissionNo: z.string().trim().min(1).max(30) }).partial();
 export const withdrawBody = z.object({ reason: z.string().trim().min(3), date: date.optional(), outcome: z.enum(['withdrawn', 'transferred_out']).default('withdrawn'), overrideClearance: z.boolean().optional() });
@@ -32,3 +36,7 @@ export const listQuery = z.object({
   status: z.enum(['active', 'withdrawn', 'transferred_out', 'completed', 'archived']).optional(),
   page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(200).default(50),
 });
+export const bulkBody = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('house'), studentIds: z.array(id).min(1).max(500), house: z.string().trim().min(1).max(30) }),
+  z.object({ action: z.literal('transfer'), studentIds: z.array(id).min(1).max(500), toSectionId: id, effectiveDate: date.optional(), reason: z.string().trim().min(3).max(200) }),
+]);
