@@ -42,7 +42,7 @@ export async function login(loginId, password, portal) {
     const res = await api().post('/api/auth/login').send({ loginId, password, portal: p });
     if (res.status === 200) return { token: res.body.token, user: res.body.user, h: { Authorization: `Bearer ${res.body.token}` } };
     last = res;
-    if (res.status === 401) break; // wrong credentials: no point trying other portals
+    // a wrong password and a right password at the wrong door get the same 401, so without a named portal every door is tried
   }
   throw new Error(`login failed ${last.status} ${JSON.stringify(last.body)}`);
 }

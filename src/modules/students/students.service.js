@@ -6,6 +6,7 @@ import { createUserAccount, schoolCode, hashPassword } from '../../services/user
 import { settingsOf, getCurrentYear, loadSchool } from '../../services/context.js';
 import { initialPassword } from '../../services/initialPassword.js';
 import { clearanceFor } from '../../services/clearance.js';
+import { resolveHouse } from '../houses/houses.service.js';
 import { autoAssignForEnrolment, admissionFeePreview, assertDiscountFits } from '../finance/finance.service.js';
 import {
   nextRollNo, assertSectionHasRoom, resolvePlacement, generateAdmissionNo,
@@ -81,6 +82,7 @@ export async function admitStudent(ctx, body) {
     });
     created.user = user;
     const { loginId: _l, password: _p, confirmDuplicate: _c, discount: _d, yearId: _y, classId: _cl, sectionId: _s, rollNo: _r, ...profile } = body;
+    if (profile.house !== undefined) profile.house = (await resolveHouse(tenantId, profile.house)) || undefined; // one of the school's own houses
     const student = await Student.create({ ...profile, tenantId, userId: user._id, admissionNo, admissionDate, importBatchId: ctx.importBatchId });
     created.student = student;
     const enrolment = await StudentEnrolment.create({ tenantId, studentId: student._id, yearId: year._id, classId: cls._id, sectionId: section._id, rollNo, startDate: admissionDate });
@@ -133,6 +135,7 @@ export async function updateStudent(tenantId, id, body) {
   if (body.admissionNo && body.admissionNo !== s.admissionNo && (await Student.exists({ tenantId, admissionNo: body.admissionNo, _id: { $ne: s._id } }))) {
     throw conflict(`Admission number ${body.admissionNo} already exists`);
   }
+  if (body.house !== undefined) body = { ...body, house: (await resolveHouse(tenantId, body.house)) || undefined };
   Object.assign(s, body);
   await s.save();
   if (body.name) await User.updateOne({ _id: s.userId }, { name: body.name });
@@ -236,7 +239,8 @@ export async function bulkUpdate(ctx, { studentIds, action, house, toSectionId, 
   const name = new Map(found.map((x) => [String(x._id), x.name]));
   const failed = []; let done = 0;
   if (action === 'house') {
-    const r = await Student.updateMany({ tenantId: ctx.tenantId, _id: { $in: found.map((x) => x._id) } }, { $set: { house } });
+    const set = (await resolveHouse(ctx.tenantId, house)) || ''; // a house of this school, or '' to take them out of any house
+    const r = await Student.updateMany({ tenantId: ctx.tenantId, _id: { $in: found.map((x) => x._id) } }, { $set: { house: set } });
     done = r.modifiedCount ?? found.length;
   } else {
     for (const id of ids) {

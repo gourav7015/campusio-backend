@@ -78,8 +78,10 @@ r.post('/charges/:id/concession', async (req, res) => {
 r.get('/online-payments', async (req, res) => res.json(await listOnline(req.ctx, parse(z.object({ status: z.enum(['created', 'processing', 'paid', 'failed', 'expired', 'needs_review']).optional(), limit: z.coerce.number().int().min(1).max(200).default(100) }), req.query))));
 r.get('/payments', async (req, res) => res.json(await svc.listPayments(req.ctx, parse(v.rangeQuery, req.query))));
 r.post('/payments', async (req, res) => {
-  const p = await svc.collectPayment(req.ctx, parse(v.paymentBody, req.body), req.user.name);
-  await audit(req, 'fees.payment', 'Payment', p._id, `Receipt ${p.receiptNo} for ${p.amount} (${p.mode})`);
+  const body = parse(v.paymentBody, req.body);
+  const p = await svc.collectWithDiscount(req.ctx, body, req.user.name);
+  if (p.discountOnly) { await audit(req, 'fees.discount', 'Student', body.studentId, `Discount of ${p.discount} cleared the dues (${body.discount.reason})`); return res.status(200).json(p); }
+  await audit(req, 'fees.payment', 'Payment', p._id, `Receipt ${p.receiptNo} for ${p.amount} (${p.mode})${body.discount ? `, after a discount (${body.discount.type === 'percent' ? `${body.discount.value}%` : body.discount.value}: ${body.discount.reason})` : ''}`);
   res.status(201).json(p);
 });
 r.post('/payments/:id/reverse', async (req, res) => {

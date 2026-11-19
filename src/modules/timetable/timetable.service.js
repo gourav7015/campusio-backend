@@ -168,9 +168,17 @@ export async function affectedPeriods(tenantId, leaveId) {
   const subjects = await Subject.find({ tenantId, _id: { $in: asg.map((a) => a.subjectId) } }).lean();
   const sm = new Map(subjects.map((s) => [String(s._id), s.name]));
   const am = new Map(asg.map((a) => [String(a._id), a]));
+  // a half day misses only the periods of that half: the school day is split at the middle of its lesson periods
+  const mins = (t) => { const [h, m] = String(t || '0:0').split(':').map(Number); return h * 60 + (m || 0); };
+  let halfOf = () => true;
+  if (leave.halfDay) {
+    const all = await TimetablePeriod.find({ tenantId, type: 'lesson' }).select('startTime endTime').lean();
+    const mid = all.length ? (Math.min(...all.map((p) => mins(p.startTime))) + Math.max(...all.map((p) => mins(p.endTime)))) / 2 : 720;
+    halfOf = (p) => (mins(p?.startTime) < mid ? 'first' : 'second') === (leave.halfSession || 'second');
+  }
   const out = [];
   for (const date of eachDate(leave.startDate, leave.endDate)) {
-    for (const e of entries.filter((x) => x.day === isoDay(date))) {
+    for (const e of entries.filter((x) => x.day === isoDay(date) && halfOf(x.periodId))) {
       const sub = subs.find((s) => String(s.entryId) === String(e._id) && s.date === date);
       out.push({
         date, entryId: e._id, period: e.periodId?.name, startTime: e.periodId?.startTime, endTime: e.periodId?.endTime, order: e.periodId?.order,

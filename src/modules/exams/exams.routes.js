@@ -4,6 +4,7 @@ import { audit } from '../../services/audit.js';
 import { loadSchool } from '../../services/context.js';
 import * as v from './exams.validation.js';
 import * as svc from './exams.service.js';
+import * as dsh from './datesheet.service.js';
 import * as marks from './marks.service.js';
 import * as results from './results.service.js';
 import { ReportCard } from '../../models/index.js';
@@ -17,6 +18,20 @@ adminRoutes.post('/exams', async (req, res) => {
   await audit(req, 'exam.created', 'Examination', e._id, `Created examination ${e.name}`);
   res.status(201).json(e);
 });
+adminRoutes.post('/exams/standard', async (req, res) => {
+  const out = await dsh.addStandardExams(req.ctx);
+  await audit(req, 'exam.standard_added', 'Examination', null, `Added the standard examinations (${out.created} new)`);
+  res.status(201).json(out);
+});
+adminRoutes.get('/exams/:id/datesheet', async (req, res) => res.json(await dsh.getDatesheet(req.ctx, req.params.id, parse(v.datesheetQuery, req.query).classId)));
+adminRoutes.put('/exams/:id/datesheet', async (req, res) => {
+  const b = parse(v.datesheetBody, req.body);
+  const out = await dsh.saveDatesheet(req.ctx, req.params.id, b);
+  await audit(req, 'exam.datesheet_saved', 'Examination', req.params.id, `Saved the date sheet (${out.saved} papers)`);
+  res.json(out);
+});
+adminRoutes.post('/exams/:id/datesheet/standard-subjects', async (req, res) => res.json(await dsh.addStandardSubjects(req.ctx, req.params.id, parse(v.datesheetQuery, req.body).classId)));
+adminRoutes.post('/exams/:id/datesheet/subjects', async (req, res) => { const b = parse(v.addSubjectBody, req.body); res.status(201).json(await dsh.addSubjectToClass(req.ctx, req.params.id, b.classId, b.name)); });
 adminRoutes.get('/exams/:id', async (req, res) => res.json(await svc.getExam(req.ctx, req.params.id)));
 adminRoutes.patch('/exams/:id', async (req, res) => res.json(await svc.updateExam(req.ctx, req.params.id, parse(v.examPatch, req.body))));
 adminRoutes.delete('/exams/:id', async (req, res) => { await svc.deleteExam(req.ctx, req.params.id); res.json({ ok: true }); });

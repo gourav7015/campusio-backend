@@ -9,6 +9,9 @@ describe('Bulk student change and government holidays', () => {
 
   it('one change for many students: house, or a move to another section; each student succeeds or fails on its own', async () => {
     const ids = W.students.map((s) => s.student._id);
+    // a student can be put only in a house the school has made
+    expect((await api().post('/api/school/students/bulk').set(W.h).send({ action: 'house', studentIds: ids, house: 'Blue' })).status).toBe(400);
+    await api().post('/api/school/houses').set(W.h).send({ name: 'Blue' });
     const h = await api().post('/api/school/students/bulk').set(W.h).send({ action: 'house', studentIds: ids, house: 'Blue' });
     expect(h.body).toMatchObject({ requested: 3, done: 3, failed: [] });
     expect((await api().get(`/api/school/students/${ids[0]}`).set(W.h)).body.house).toBe('Blue');

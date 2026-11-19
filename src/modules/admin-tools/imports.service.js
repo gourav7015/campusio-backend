@@ -1,3 +1,5 @@
+import { resolveTeacherDesignation } from '../support-staff/support-staff.service.js';
+import { resolveHouse } from '../houses/houses.service.js';
 import { z } from 'zod';
 import { ImportBatch, Student, Teacher, StudentEnrolment, Section, User, AttendanceRecord, Marks, MarksSheet, TeachingAssignment, Session } from '../../models/index.js';
 import { notFound, conflict, escapeRegex } from '../../core/utils.js';
@@ -36,6 +38,7 @@ export async function importStudents(ctx, { rows, dryRun, skipInvalid, yearId })
     const parsed = admitBody.safeParse(candidate);
     if (!parsed.success) parsed.error.issues.forEach((x) => errors.push(`${x.path.join('.')}: ${x.message}`));
     if (parsed.success) {
+      if (parsed.data.house) await resolveHouse(ctx.tenantId, parsed.data.house).catch((e) => errors.push(`house: ${e.message}`));
       const dupKey = `${parsed.data.name.toLowerCase()}|${parsed.data.dob}`;
       if (seenId.has(dupKey)) errors.push('Same name and date of birth appears twice in this file');
       seenId.add(dupKey);
@@ -70,6 +73,8 @@ export async function importTeachers(ctx, { rows, dryRun, skipInvalid }) {
     const parsed = teacherBody.safeParse(candidate);
     if (!parsed.success) parsed.error.issues.forEach((x) => errors.push(`${x.path.join('.')}: ${x.message}`));
     else {
+      if (parsed.data.designation) await resolveTeacherDesignation(ctx.tenantId, { designation: parsed.data.designation }).catch((e) => errors.push(`designation: ${e.message}`));
+      if (parsed.data.house) await resolveHouse(ctx.tenantId, parsed.data.house).catch((e) => errors.push(`house: ${e.message}`));
       if (seen.has(parsed.data.employeeId)) errors.push('Duplicate employee id in this file');
       else if (await Teacher.exists({ tenantId: ctx.tenantId, employeeId: parsed.data.employeeId })) errors.push('Employee id already exists');
       seen.add(parsed.data.employeeId);

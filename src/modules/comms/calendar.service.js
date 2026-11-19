@@ -21,6 +21,14 @@ export async function deleteEvent(ctx, id) {
   await e.deleteOne();
 }
 
+/** The school's own calendar for people who have no class of their own (finance, library, transport, staff): holidays and events for everyone, not exams or homework. */
+export async function schoolFeed(ctx, { from, to }) {
+  const start = from || addDays(ctx.today, -30);
+  const end = to || addDays(ctx.today, 90);
+  const events = await CalendarEvent.find({ tenantId: ctx.tenantId, startDate: { $lte: end }, endDate: { $gte: start }, $or: [{ sectionIds: { $exists: false } }, { sectionIds: { $size: 0 } }] }).lean();
+  return events.map((e) => ({ id: String(e._id), title: e.title, type: e.type, kind: e.kind || 'school', date: e.startDate, endDate: e.endDate, description: e.description, source: 'event' })).sort((a, b) => a.date.localeCompare(b.date));
+}
+
 /** One merged feed for a viewer: school events + exam dates + homework deadlines, limited to what they may see. */
 export async function feed(ctx, { from, to }, { sectionIds, classIds, teacherId }) {
   const start = from || addDays(ctx.today, -30);

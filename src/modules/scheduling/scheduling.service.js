@@ -5,7 +5,7 @@ import {
 import { notFound, conflict, bad, forbidden, isoDay, addDays } from '../../core/utils.js';
 import { notifyUsers } from '../../services/notify.js';
 import { createSubstitution, deleteSubstitution } from '../timetable/timetable.service.js';
-import { countDays } from '../leave/leave.service.js';
+import { leaveDays } from '../leave/leave.service.js';
 import { isHoliday } from '../attendance/attendance.service.js';
 
 const mk = (a) => new Map(a.map((x) => [String(x._id), x]));
@@ -235,13 +235,13 @@ export async function editTeacherLeave(ctx, id, patch, user) {
   if (!l) throw notFound('Leave application not found');
   if (l.status === 'cancelled') throw conflict('A cancelled application cannot be edited');
   const next = { ...l.toObject(), ...patch };
+  if (next.halfDay && patch.startDate && patch.endDate === undefined) next.endDate = patch.startDate;
   if (next.endDate < next.startDate) throw bad('End date cannot be before start date');
-  const days = countDays(ctx.settings, next.startDate, next.endDate);
-  if (days < 1) throw bad('The selected dates contain no working days');
+  const days = leaveDays(ctx.settings, next);
   const overlap = await LeaveApplication.exists({ tenantId: ctx.tenantId, teacherId: l.teacherId, _id: { $ne: l._id }, status: { $in: ['submitted', 'approved'] }, startDate: { $lte: next.endDate }, endDate: { $gte: next.startDate } });
   if (overlap) throw conflict('That overlaps another leave of the same teacher');
   const before = `${l.leaveType} ${l.startDate}–${l.endDate}`;
-  Object.assign(l, patch, { days });
+  Object.assign(l, patch, { days, endDate: next.endDate, halfSession: next.halfDay ? next.halfSession || 'second' : undefined });
   await l.save();
   const t = await Teacher.findById(l.teacherId).select('userId');
   await notifyUsers(ctx.tenantId, [t?.userId], { category: 'leave', title: 'Your leave was changed by the office', body: `${before} is now ${l.leaveType} ${l.startDate}–${l.endDate}${patch.editNote ? `: ${patch.editNote}` : ''}`, link: { type: 'leave', id: String(l._id) }, dedupeKey: `leavee:${l._id}:${Date.now()}` });
@@ -252,12 +252,12 @@ export async function editStaffLeave(ctx, group, id, patch) {
   if (!l || l.group !== group) throw notFound('Leave application not found');
   if (l.status === 'cancelled') throw conflict('A cancelled application cannot be edited');
   const next = { ...l.toObject(), ...patch };
+  if (next.halfDay && patch.startDate && patch.endDate === undefined) next.endDate = patch.startDate;
   if (next.endDate < next.startDate) throw bad('End date cannot be before start date');
-  const days = countDays(ctx.settings, next.startDate, next.endDate);
-  if (days < 1) throw bad('The selected dates contain no working days');
+  const days = leaveDays(ctx.settings, next);
   const overlap = await StaffLeave.exists({ tenantId: ctx.tenantId, staffId: l.staffId, _id: { $ne: l._id }, status: { $in: ['submitted', 'approved'] }, startDate: { $lte: next.endDate }, endDate: { $gte: next.startDate } });
   if (overlap) throw conflict('That overlaps another leave of the same person');
-  Object.assign(l, patch, { days });
+  Object.assign(l, patch, { days, endDate: next.endDate, halfSession: next.halfDay ? next.halfSession || 'second' : undefined });
   return l.save();
 }
 export { ClassTeacherAssignment, addDays };

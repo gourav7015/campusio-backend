@@ -19,7 +19,7 @@ export const rolloverBody = z.object({
 export const yearPatch = z.object({ name: z.string().trim().min(3), startDate: date, endDate: date, classWindows }).partial();
 
 // Only LKG, UKG and Class 1-12 exist. The level is derived from the name, so it is not accepted from the client.
-export const classBody = z.object({ name: z.preprocess(canonicalGrade, z.enum(GRADE_NAMES, { errorMap: () => ({ message: 'Choose LKG, UKG or a class from 1 to 12' }) })) });
+export const classBody = z.object({ name: z.preprocess(canonicalGrade, z.enum(GRADE_NAMES, { errorMap: () => ({ message: 'Choose LKG, UKG, a class from 1 to 12, or a Class 11 or 12 stream' }) })) });
 export const classPatch = z.object({ status: z.enum(['active', 'archived']) });
 
 export const sectionBody = z.object({
@@ -52,6 +52,7 @@ export const settingsBody = z.object({
   passwordFormat: z.string().max(80).refine((f) => f === '' || PASSWORD_FORMAT_RE.test(f), 'Use tokens such as {NAME4}{DDMMYYYY}, plus letters, digits or @ # _ -').refine((f) => f === '' || /\{(NAME4|NAME3|name4|DDMMYYYY|DDMM|YYYY|YY|PHONE4)\}/.test(f), 'Include at least one token, or leave it empty for random passwords'),
   admissionFormat: z.string().refine((f) => /\{SEQ:\d\}/.test(f), 'Must contain {SEQ:n}, e.g. ADM{YYYY}{SEQ:4}'),
   leaveBalances: z.object({ casual: z.number().min(0), sick: z.number().min(0), earned: z.number().min(0), other: z.number().min(0) }).partial(),
+  transportLeaveApprover: z.enum(['officer', 'admin']),
   staffLeaveBalances: z.object({ casual: z.number().min(0), sick: z.number().min(0), earned: z.number().min(0), other: z.number().min(0) }).partial(),
   staffAttendance: z.object({
     shiftStart: time, shiftEnd: time, graceMinutes: z.number().int().min(0).max(120), fullDayHours: z.number().min(1).max(16), halfDayHours: z.number().min(0.5).max(12),

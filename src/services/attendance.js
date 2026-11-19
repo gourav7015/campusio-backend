@@ -1,13 +1,14 @@
 import { AttendanceRecord, AttendanceSession } from '../models/index.js';
 import { pct } from '../core/utils.js';
 
-export const zeroCounts = () => ({ present: 0, absent: 0, late: 0, leave: 0, excused: 0 });
+export const zeroCounts = () => ({ present: 0, absent: 0, late: 0, half_day: 0, leave: 0, excused: 0 });
 
-/** Percentage from already-counted statuses. Leave and excused days never count against the student. */
+/** Percentage from already-counted statuses. Leave and excused days never count against the student; a half day counts as half a day attended. */
 export function summarizeCounts(c, settings) {
-  const counted = c.present + c.absent + c.late;
-  const attended = c.present + (settings?.attendance?.lateCountsAsPresent === false ? 0 : c.late);
-  return { ...c, workingDays: c.present + c.absent + c.late + c.leave + c.excused, percentage: pct(attended, counted) };
+  const half = c.half_day || 0;
+  const counted = c.present + c.absent + c.late + half;
+  const attended = c.present + (settings?.attendance?.lateCountsAsPresent === false ? 0 : c.late) + half / 2;
+  return { ...c, half_day: half, workingDays: c.present + c.absent + c.late + half + c.leave + c.excused, percentage: pct(attended, counted) };
 }
 
 export function summarize(records, settings) {
@@ -51,7 +52,7 @@ export async function submittedRecords(tenantId, filter) {
 }
 
 export function sessionTotals(records) {
-  const t = { total: records.length, present: 0, absent: 0, late: 0, leave: 0, excused: 0 };
+  const t = { total: records.length, present: 0, absent: 0, late: 0, half_day: 0, leave: 0, excused: 0 };
   for (const r of records) t[r.status]++;
   return t;
 }

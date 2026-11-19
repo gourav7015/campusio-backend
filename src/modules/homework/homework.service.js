@@ -141,7 +141,6 @@ export async function deleteHomework(ctx, id) {
   if (!h) throw notFound('Homework not found');
   assertScope(ctx, h.sectionId, h.subjectId);
   if (ctx.role === 'teacher' && String(h.teacherId) !== String(ctx.teacher._id)) throw forbidden('You can delete only your own homework');
-  if (h.status !== 'draft') throw conflict('Only drafts can be deleted. Archive published homework instead.');
   const files = await File.find({ tenantId: ctx.tenantId, _id: { $in: h.attachments } });
   for (const f of files) { await removeFileBytes(f); await f.deleteOne(); }
   await h.deleteOne();

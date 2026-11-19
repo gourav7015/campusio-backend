@@ -14,6 +14,8 @@ r.get('/sections/:id/homework', async (req, res) => {
   const { date } = parse(z.object({ date: z.string().refine(isDateStr).optional() }), req.query);
   res.json(await svc.sectionHomework(req.ctx, req.params.id, date || req.ctx.today));
 });
+r.get('/analysis/overview', async (req, res) => res.json(await svc.examOverview(req.ctx)));
+r.get('/analysis/students/:id', async (req, res) => res.json(await svc.studentMarks(req.ctx, req.params.id)));
 r.get('/analysis/exams', async (req, res) => res.json(await svc.classAnalysis(req.ctx, parse(analysisQuery, req.query))));
 r.get('/teachers/:id/overview', async (req, res) => res.json(await svc.teacherOverview(req.ctx, req.params.id)));
 r.get('/students/:id/overview', async (req, res) => res.json(await svc.studentOverview(req.ctx, req.params.id)));

@@ -10,7 +10,8 @@
     "seed": "node src/seed.js",
     "test": "vitest run",
     "lint": "eslint src test",
-    "dump": "node src/bulk-seed.js"
+    "dump": "node src/bulk-seed.js",
+    "sample:school-info": "node src/sample-school-info.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

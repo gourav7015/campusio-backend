@@ -5,6 +5,7 @@ import { notifyUsers, studentUserIdsInSections } from '../../services/notify.js'
 import { Teacher } from '../../models/index.js';
 import * as v from './timetable.validation.js';
 import * as svc from './timetable.service.js';
+import { loadTimetables, timetableCsv, timetablePdf, fileName } from './timetable.export.js';
 
 const r = Router();
 
@@ -22,6 +23,18 @@ r.post('/timetable/periods', async (req, res) => {
 r.patch('/timetable/periods/:id', async (req, res) => res.json(await svc.updatePeriod(req.tenantId, req.params.id, parse(v.periodPatch, req.body))));
 r.delete('/timetable/periods/:id', async (req, res) => { await svc.deletePeriod(req.tenantId, req.params.id); res.json({ ok: true }); });
 
+/** Download the timetable: every section, one class, or one section; as a PDF (a page per section) or a CSV. */
+r.get('/timetable/export', async (req, res) => {
+  const q = parse(v.exportQuery, req.query);
+  const t = await loadTimetables(req.ctx, q);
+  const name = fileName(t, q);
+  if (q.format === 'csv') {
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8'); res.setHeader('Content-Disposition', `attachment; filename="${name}.csv"`);
+    return res.send(timetableCsv(t));
+  }
+  res.setHeader('Content-Type', 'application/pdf'); res.setHeader('Content-Disposition', `attachment; filename="${name}.pdf"`);
+  await timetablePdf(req.ctx, t, res);
+});
 r.get('/timetable/entries', async (req, res) => res.json(await svc.listEntries(req.tenantId, parse(v.entriesQuery, req.query))));
 r.get('/timetable/unresolved', async (req, res) => res.json(await svc.unresolvedEntries(req.tenantId)));
 r.get('/timetable/section/:id', async (req, res) => res.json(await svc.sectionTimetable(req.tenantId, req.params.id, parse(v.dateQuery, req.query).date)));

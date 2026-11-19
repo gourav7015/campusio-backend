@@ -19,7 +19,7 @@ export const bankFields = z.object({
 export const teacherBody = bankFields.extend({
   name: z.string().trim().min(2).max(100), employeeId: z.string().trim().min(1).max(30),
   email: z.string().email().optional().or(z.literal('')), phone: z.string().max(20).optional(), dob: date.optional(),
-  qualification: z.string().max(120).optional(), designation: z.string().max(80).optional(), joiningDate: date.optional(), address: z.string().max(300).optional(),
+  qualification: z.string().max(120).optional(), designation: z.string().max(80).optional(), designationId: z.string().regex(/^[a-f0-9]{24}$/i).optional().or(z.literal('')), house: z.string().trim().max(40).optional(), joiningDate: date.optional(), address: z.string().max(300).optional(),
   subjects: z.array(z.string().trim().min(2).max(40)).max(10).optional(), loginId: z.string().optional(), password: z.string().optional(),
 });
 export const teacherPatch = teacherBody.omit({ loginId: true, password: true }).partial();

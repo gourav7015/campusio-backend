@@ -28,9 +28,13 @@ export const assignBody = z.object({
 
 export const chargeBody = z.object({ studentId: id, label: z.string().trim().min(3).max(80), amount: money, dueDate: date.optional() });
 export const concessionBody = z.object({ amount: money, reason: z.string().trim().min(3).max(200) });
+/** A concession given at the counter, on the dues this receipt pays (the ticked ones, or everything outstanding). */
+export const discountBody = z.object({ type: z.enum(['amount', 'percent']), value: z.number().positive(), reason: z.string().trim().min(3).max(200) })
+  .refine((d) => d.type !== 'percent' || d.value <= 100, { message: 'A percentage must be between 0 and 100', path: ['value'] });
 export const paymentBody = z.object({
-  studentId: id, amount: money, mode: z.enum(MODES), reference: z.string().trim().max(60).optional(), paidOn: date.optional(), note: z.string().max(200).optional(), chargeIds: z.array(id).max(50).optional(),
-});
+  studentId: id, amount: money.optional(), mode: z.enum(MODES), reference: z.string().trim().max(60).optional(), paidOn: date.optional(), note: z.string().max(200).optional(), chargeIds: z.array(id).max(50).optional(),
+  discount: discountBody.optional(),
+}).refine((b) => b.amount != null || b.discount, { message: 'Enter the amount received', path: ['amount'] });
 export const reverseBody = z.object({ reason: z.string().trim().min(3).max(200) });
 export const duesQuery = z.object({
   q: z.string().optional(), sectionId: id.optional(), classId: id.optional(), status: z.enum(['all', 'overdue', 'pending', 'clear']).default('all'),

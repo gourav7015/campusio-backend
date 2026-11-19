@@ -1,4 +1,4 @@
-import { Ticket, User, School } from '../../models/index.js';
+import { Ticket, User, School, StaffMember } from '../../models/index.js';
 import { notifyUsers } from '../../services/notify.js';
 import { nextSeq } from '../../services/context.js';
 import { sendNotificationEmail } from '../../services/email.js';
@@ -25,7 +25,8 @@ const pageFor = (scope) => (scope === 'platform' ? '/platform/helpdesk' : '/help
 /** School admins who handle school tickets: the full admins, and sub-admins who hold the communication permission. */
 async function schoolHandlerIds(tenantId) {
   const admins = await User.find({ tenantId, role: 'school_admin', status: 'active' }).select('adminLevel permissions').lean();
-  return admins.filter((a) => a.adminLevel !== 'sub' || (a.permissions || []).includes('communication')).map((a) => a._id);
+  const desk = await StaffMember.find({ tenantId, status: 'active', canMarkAttendance: true, userId: { $ne: null } }).select('userId').lean(); // the office desk answers teachers' queries too
+  return [...admins.filter((a) => a.adminLevel !== 'sub' || (a.permissions || []).includes('communication') || (a.permissions || []).includes('staff_attendance')).map((a) => a._id), ...desk.map((s) => s.userId)];
 }
 
 /** Tell the handling side about something the requester did (a new ticket or a new reply). */

@@ -14,3 +14,5 @@ export const entryPatch = z.object({ assignmentId: id, room: z.string().max(20) 
 export const entriesQuery = z.object({ sectionId: id.optional(), teacherId: id.optional(), yearId: id.optional() });
 export const substitutionBody = z.object({ entryId: id, date, substituteTeacherId: id, reason: z.string().max(200).optional(), leaveId: id.optional() });
 export const dateQuery = z.object({ date: date.optional(), yearId: id.optional() });
+
+export const exportQuery = z.object({ format: z.enum(['pdf', 'csv']).default('pdf'), classId: z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id').optional(), sectionId: z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id').optional() });

@@ -359,6 +359,43 @@ export async function collectPayment(ctx, body, byName) {
   }
 }
 
+/**
+ * Collect a payment, optionally with a discount given at the counter. The discount is a concession on the dues being paid (oldest first), kept
+ * on each charge with its reason, exactly like a concession added from the student's account. If the payment then fails, the discount is taken back.
+ * When the discount clears everything that is due, there is nothing to pay and no receipt is made.
+ */
+export async function collectWithDiscount(ctx, body, byName) {
+  const { discount, ...pay } = body;
+  if (!discount) return collectPayment(ctx, pay, byName);
+  const f = { tenantId: ctx.tenantId, studentId: pay.studentId, status: 'open' };
+  if (pay.chargeIds?.length) f._id = { $in: pay.chargeIds };
+  const open = (await StudentCharge.find(f).lean()).sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999') || String(a._id).localeCompare(String(b._id)));
+  const total = sumOf(open, outstanding);
+  if (!open.length) throw conflict('This student has nothing outstanding');
+  const off = discount.type === 'percent' ? money(total * discount.value / 100) : money(discount.value);
+  if (off <= 0 || off > total + 0.001) throw bad(`The discount must be more than 0 and at most ${total}, which is what is due`);
+  const remaining = money(total - off);
+  if (remaining > 0 && (pay.amount == null || pay.amount > remaining + 0.001)) throw bad(`After the discount of ${off}, ${remaining} is due`);
+  const applied = [];
+  try {
+    let left = off;
+    for (const c of open) {
+      if (left <= 0) break;
+      const take = Math.min(left, outstanding(c));
+      await addConcession(ctx, c._id, { amount: take, reason: `Discount at the counter — ${discount.reason}` }, byName);
+      applied.push({ id: c._id, amount: take }); left = money(left - take);
+    }
+    if (remaining <= 0) return { discountOnly: true, discount: off, remaining: 0 };
+    return await collectPayment(ctx, { ...pay, chargeIds: pay.chargeIds?.length ? pay.chargeIds : undefined, note: pay.note || `Paid after a discount of ${off}` }, byName);
+  } catch (e) {
+    for (const w of applied) {
+      const c = await StudentCharge.findById(w.id);
+      if (c) { c.concession = money(c.concession - w.amount); c.concessions.pop(); c.status = 'open'; await c.save(); }
+    }
+    throw e;
+  }
+}
+
 /** Never delete or edit a receipt: reverse it. The original is flagged and a reversal entry is added. */
 export async function reversePayment(ctx, paymentId, reason, byName) {
   const p = await Payment.findOne({ _id: paymentId, tenantId: ctx.tenantId });

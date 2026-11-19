@@ -16,6 +16,12 @@ export function leaveDeskRoutes(group) {
     await audit(req, 'staff_leave.recorded', 'StaffLeave', l._id, `Recorded ${l.leaveType} leave ${l.startDate} to ${l.endDate}`);
     res.status(201).json(l);
   });
+  r.get('/policy', (req, res) => res.json({ approver: svc.adminKeepsTransportLeave(req.ctx) && group === 'transport' ? 'admin' : 'self' }));
+  r.post('/:id/pass-to-admin', async (req, res) => {
+    const l = await svc.passToAdmin(req.ctx, group, req.params.id);
+    await audit(req, 'staff_leave.passed_to_admin', 'StaffLeave', l._id, `Passed ${l.startDate} to ${l.endDate} leave to the School Admin`);
+    res.json(l);
+  });
   r.post('/:id/decide', async (req, res) => {
     const l = await svc.decide(req.ctx, group, req.params.id, parse(v.decideBody, req.body));
     await audit(req, `staff_leave.${l.status}`, 'StaffLeave', l._id, `Leave ${l.status}: ${l.startDate} to ${l.endDate}`);
@@ -23,7 +29,7 @@ export function leaveDeskRoutes(group) {
   });
   r.patch('/:id', async (req, res) => {
     const date = z.string().refine(isDateStr, 'Use YYYY-MM-DD');
-    const b = parse(z.object({ leaveType: z.enum(['casual', 'sick', 'earned', 'other', 'unpaid']), startDate: date, endDate: date, reason: z.string().trim().min(3).max(500) }).partial(), req.body);
+    const b = parse(z.object({ leaveType: z.enum(['casual', 'sick', 'earned', 'other', 'unpaid']), startDate: date, endDate: date, reason: z.string().trim().min(3).max(500), halfDay: z.boolean().optional(), halfSession: z.enum(['first', 'second']).optional() }).partial(), req.body);
     const l = await editStaffLeave(req.ctx, group, req.params.id, b);
     await audit(req, 'staff_leave.edited', 'StaffLeave', l._id, `Edited leave: ${l.leaveType} ${l.startDate} to ${l.endDate}`);
     res.json(l);
@@ -33,3 +39,4 @@ export function leaveDeskRoutes(group) {
 
 export const adminRoutes = Router();
 adminRoutes.use('/staff-leave', leaveDeskRoutes('general'));
+adminRoutes.use('/transport-leave', leaveDeskRoutes('transport')); // transport staff leave that came to the School Admin to decide (and the rest, for information)

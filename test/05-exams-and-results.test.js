@@ -305,4 +305,38 @@ describe('examinations with configurable mark fields → approval → publish �
     expect((await A(`sectionId=${W.sec8B._id}`)).body).toMatchObject({ examsHeld: 0 });
     expect((await api().get(`/api/school/analysis/exams?classId=${W.c8._id}`).set(W.teacher1.h)).status).toBe(403);
   });
+
+  it('School Admin: the whole-school overview adds up with the class analysis, and is for the admin only', async () => {
+    const o = (await api().get('/api/school/analysis/overview').set(W.h)).body;
+    const cls = (await api().get(`/api/school/analysis/exams?classId=${W.c8._id}`).set(W.h)).body;
+    expect(o.totals).toMatchObject({ examsWithResults: 2, passMark: 33 });
+    expect(o.totals.students).toBe(3); // only the students with published results (the one in section B has none)
+    expect(o.totals.results).toBe(cls.exams.reduce((n, e) => n + e.students, 0));
+    expect(o.classes).toHaveLength(1);
+    expect(o.classes[0]).toMatchObject({ className: 'Class 8', students: 3 });
+    expect(o.exams.map((e) => e.name).sort()).toEqual(['Class Test 1', 'Unit Test 2']);
+    expect(o.subjects.map((x) => x.subject)).toEqual(expect.arrayContaining(['English', 'Mathematics']));
+    expect(o.top[0]).toMatchObject({ name: 'Aarav Singh' });
+    expect(o.needSupport[0].average).toBeLessThanOrEqual(o.top[0].average);
+    expect(o.grades.reduce((n, g) => n + g.count, 0)).toBe(o.totals.results);
+    expect(o.totals.passRate).toBeLessThan(100); // Chirag failed
+    expect((await api().get('/api/school/analysis/overview').set(W.teacher1.h)).status).toBe(403);
+  });
+
+  it('School Admin: one student\'s marks page has basic details and marks, and nothing about fees, library or attendance', async () => {
+    const aarav = W.students.find((x) => x.student.name === 'Aarav Singh').student._id;
+    const m = (await api().get(`/api/school/analysis/students/${aarav}`).set(W.h)).body;
+    expect(m.profile).toMatchObject({ name: 'Aarav Singh', className: 'Class 8', section: 'A' });
+    expect(Array.isArray(m.profile.guardians)).toBe(true);
+    expect(m.profile).toHaveProperty('bus'); // null when the student has no bus
+    expect(m.summary).toMatchObject({ examsTaken: 2, passMark: 33 });
+    expect(m.exams.map((e) => e.exam).sort()).toEqual(['Class Test 1', 'Unit Test 2']);
+    const ut = m.exams.find((e) => e.exam === 'Unit Test 2');
+    expect(ut).toMatchObject({ percentage: 82.5, rank: 1, outOf: 3 });
+    expect(ut.subjects.map((x) => x.subject).sort()).toEqual(['English', 'Mathematics']);
+    expect(m.subjectAverages.map((x) => x.subject)).toEqual(['English', 'Mathematics']);
+    for (const k of ['fees', 'library', 'attendance', 'homework', 'remarks']) expect(m, k).not.toHaveProperty(k); // only marks
+    expect((await api().get(`/api/school/analysis/students/${aarav}`).set(W.teacher1.h)).status).toBe(403);
+    expect((await api().get(`/api/school/analysis/students/${'0'.repeat(24)}`).set(W.h)).status).toBe(404);
+  });
 });

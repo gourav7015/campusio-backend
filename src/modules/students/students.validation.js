@@ -37,6 +37,6 @@ export const listQuery = z.object({
   page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 export const bulkBody = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('house'), studentIds: z.array(id).min(1).max(500), house: z.string().trim().min(1).max(30) }),
+  z.object({ action: z.literal('house'), studentIds: z.array(id).min(1).max(500), house: z.string().trim().max(30) }),
   z.object({ action: z.literal('transfer'), studentIds: z.array(id).min(1).max(500), toSectionId: id, effectiveDate: date.optional(), reason: z.string().trim().min(3).max(200) }),
 ]);

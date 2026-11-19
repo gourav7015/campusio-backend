@@ -72,7 +72,7 @@ export async function getExam(ctx, id) {
 
 const overlaps = (a, b) => a.startTime < b.endTime && b.startTime < a.endTime;
 
-export async function upsertExamSubject(ctx, examId, body) {
+export async function upsertExamSubject(ctx, examId, body, { ignoreIds = [] } = {}) {
   const exam = await owned(Examination, ctx.tenantId, examId, 'Examination');
   if (!exam.classIds.map(String).includes(String(body.classId))) throw bad('That class is not part of this examination');
   const offering = await SubjectOffering.findOne({ tenantId: ctx.tenantId, yearId: exam.yearId, classId: body.classId, subjectId: body.subjectId });
@@ -89,7 +89,8 @@ export async function upsertExamSubject(ctx, examId, body) {
     throw conflict('Marks entry has started; the marks fields can no longer change');
   }
   if (merged.date && merged.startTime && merged.endTime) {
-    const sameDay = await ExaminationSubject.find({ tenantId: ctx.tenantId, examId, date: merged.date, ...(existing ? { _id: { $ne: existing._id } } : {}) }).lean();
+    const skip = [...ignoreIds, ...(existing ? [existing._id] : [])]; // a date sheet saves many rows of one class together: they are checked against each other first
+    const sameDay = await ExaminationSubject.find({ tenantId: ctx.tenantId, examId, date: merged.date, ...(skip.length ? { _id: { $nin: skip } } : {}) }).lean();
     for (const o of sameDay) {
       if (!o.startTime || !o.endTime || !overlaps(merged, o)) continue;
       if (String(o.classId) === String(merged.classId)) throw conflict('This class already has an exam at that time', { type: 'class' });

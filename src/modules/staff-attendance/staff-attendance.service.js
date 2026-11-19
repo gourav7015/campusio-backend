@@ -1,6 +1,7 @@
 import { Teacher, StaffMember, Designation, LeaveApplication, StaffLeave, CalendarEvent, StaffAttendanceSession, StaffAttendanceRecord } from '../../models/index.js';
 import { notFound, conflict, bad, eachDate, isoDay, round1 } from '../../core/utils.js';
 import { punchesFor, evaluate, setTimes, importPunches } from '../staff-punch/staff-punch.service.js';
+import { ensureDeskStaff } from '../support-staff/support-staff.service.js';
 
 /**
  * Daily attendance of everyone who works at the school but is not a student.
@@ -15,9 +16,12 @@ export async function peopleOf(ctx, group) {
     return (await Teacher.find({ tenantId: ctx.tenantId, status: 'active' }).sort({ name: 1 }).select('name employeeId designation joiningDate').lean())
       .map((t) => ({ personType: 'teacher', personId: t._id, name: t.name, code: t.employeeId, designation: t.designation || 'Teacher', joiningDate: t.joiningDate }));
   }
+  if (group === 'office') await ensureDeskStaff(ctx.tenantId); // every finance, library and transport officer is an employee, so each has a row
   const designations = await Designation.find({ tenantId: ctx.tenantId, group: group === 'transport' ? 'transport' : 'general' }).lean();
   const D = new Map(designations.map((d) => [String(d._id), d]));
-  return (await StaffMember.find({ tenantId: ctx.tenantId, status: 'active', designationId: { $in: designations.map((d) => d._id) } }).sort({ name: 1 }).select('name staffId designationId joiningDate').lean())
+  // 'office' is the officers (a desk role is set); 'general' is every other non-teaching employee
+  const desk = group === 'office' ? { deskRole: { $exists: true, $ne: null } } : group === 'general' ? { deskRole: null } : {};
+  return (await StaffMember.find({ tenantId: ctx.tenantId, status: 'active', ...desk, designationId: { $in: designations.map((d) => d._id) } }).sort({ name: 1 }).select('name staffId designationId joiningDate').lean())
     .map((s) => ({ personType: 'staff', personId: s._id, name: s.name, code: s.staffId, designation: D.get(String(s.designationId))?.name, joiningDate: s.joiningDate }));
 }
 
@@ -36,8 +40,10 @@ async function blockedReason(ctx, date) {
 /** Everyone on approved leave that day: teachers (their applications) and staff (theirs, or recorded by a desk). */
 async function approvedLeaveOn(ctx, date) {
   const f = { tenantId: ctx.tenantId, status: 'approved', startDate: { $lte: date }, endDate: { $gte: date } };
-  const [teachers, staff] = await Promise.all([LeaveApplication.find(f).select('teacherId leaveType').lean(), StaffLeave.find(f).select('staffId leaveType').lean()]);
-  return new Map([...teachers.map((l) => [String(l.teacherId), l.leaveType]), ...staff.map((l) => [String(l.staffId), l.leaveType])]);
+  const [teachers, staff] = await Promise.all([LeaveApplication.find(f).select('teacherId leaveType halfDay halfSession').lean(), StaffLeave.find(f).select('staffId leaveType halfDay halfSession').lean()]);
+  // a half day of leave: the person is away for halfSession, so the half they attend is the other one
+  const info = (l) => ({ type: l.leaveType, half: l.halfDay ? (l.halfSession === 'first' ? 'second' : 'first') : null });
+  return new Map([...teachers.map((l) => [String(l.teacherId), info(l)]), ...staff.map((l) => [String(l.staffId), info(l)])]);
 }
 
 export async function getRegister(ctx, group, date) {
@@ -51,9 +57,10 @@ export async function getRegister(ctx, group, date) {
     const r = R.get(String(p.personId)); const leave = leaves.get(String(p.personId)); const punch = punches.get(String(p.personId));
     const ev = evaluate(ctx.settings, punch);
     const fromTimes = ev && ev.suggested !== 'present' ? ev.suggested : null; // late or short hours, as the clock says
+    const status = r?.status || (leave ? (leave.half ? 'half_day' : 'leave') : fromTimes || 'present');
     return {
-      ...p, status: r?.status || (leave ? 'leave' : fromTimes || 'present'),
-      remark: r?.remark || (leave && !r ? `Approved ${leave} leave` : ev?.late && !r ? `Arrived ${punch.checkIn}, ${ev.minutesLate} min late` : ''),
+      ...p, status, halfSession: status === 'half_day' ? r?.halfSession || (!r && leave?.half) || 'first' : null,
+      remark: r?.remark || (leave && !r ? `Approved ${leave.type} ${leave.half ? 'half-day ' : ''}leave` : ev?.late && !r ? `Arrived ${punch.checkIn}, ${ev.minutesLate} min late` : ''),
       source: r ? 'register' : leave ? 'leave' : fromTimes ? 'times' : 'default', corrected: !!r?.history?.length,
       checkIn: r?.checkIn ?? punch?.checkIn ?? null, checkOut: r?.checkOut ?? punch?.checkOut ?? null, hours: ev?.hours ?? null, punchSource: punch?.source || null,
     };
@@ -82,24 +89,25 @@ export async function saveRegister(ctx, { group, date, entries, submit }) {
   let final = entries;
   if (submit) {
     const leaves = await approvedLeaveOn(ctx, date);
-    const draft = new Map((await StaffAttendanceRecord.find({ tenantId: ctx.tenantId, sessionId: session._id }).lean()).map((r) => [String(r.personId), { personId: String(r.personId), status: r.status, remark: r.remark }]));
+    const draft = new Map((await StaffAttendanceRecord.find({ tenantId: ctx.tenantId, sessionId: session._id }).lean()).map((r) => [String(r.personId), { personId: String(r.personId), status: r.status, halfSession: r.halfSession, remark: r.remark }]));
     // what was just sent wins, then what was saved earlier as a draft, then the default (present, or on leave if an approved leave covers the day)
-    final = people.map((p) => given.get(String(p.personId)) || draft.get(String(p.personId)) || { personId: String(p.personId), status: leaves.has(String(p.personId)) ? 'leave' : 'present', remark: leaves.has(String(p.personId)) ? `Approved ${leaves.get(String(p.personId))} leave` : undefined });
+    final = people.map((p) => given.get(String(p.personId)) || draft.get(String(p.personId)) || (() => { const lv = leaves.get(String(p.personId)); return { personId: String(p.personId), status: lv ? (lv.half ? 'half_day' : 'leave') : 'present', ...(lv?.half ? { halfSession: lv.half } : {}), remark: lv ? `Approved ${lv.type} ${lv.half ? 'half-day ' : ''}leave` : undefined }; })());
   }
   const punches = await punchesFor(ctx, group, date);
-  if (final.length) await StaffAttendanceRecord.bulkWrite(final.map((e) => { const pu = punches.get(String(e.personId)); return { updateOne: { filter: { tenantId: ctx.tenantId, sessionId: session._id, personId: e.personId }, update: { $set: { group, date, personType: P.get(e.personId).personType, status: e.status, remark: e.remark, ...(pu?.checkIn ? { checkIn: pu.checkIn } : {}), ...(pu?.checkOut ? { checkOut: pu.checkOut } : {}) } }, upsert: true } }; }));
+  if (final.length) await StaffAttendanceRecord.bulkWrite(final.map((e) => { const pu = punches.get(String(e.personId)); return { updateOne: { filter: { tenantId: ctx.tenantId, sessionId: session._id, personId: e.personId }, update: { $set: { group, date, personType: P.get(e.personId).personType, status: e.status, halfSession: e.status === 'half_day' ? e.halfSession || 'first' : null, remark: e.remark, ...(pu?.checkIn ? { checkIn: pu.checkIn } : {}), ...(pu?.checkOut ? { checkOut: pu.checkOut } : {}) } }, upsert: true } }; }));
   if (submit) { session.status = 'submitted'; session.submittedBy = ctx.actorId; session.submittedAt = new Date(); await session.save(); }
   return getRegister(ctx, group, date);
 }
 
-export async function correct(ctx, { group, date, personId, status, reason }) {
+export async function correct(ctx, { group, date, personId, status, halfSession, reason }) {
   const session = await StaffAttendanceSession.findOne({ tenantId: ctx.tenantId, group, date });
   if (!session || session.status !== 'submitted') throw conflict('Only a submitted register needs a correction. Edit the draft instead.');
   const rec = await StaffAttendanceRecord.findOne({ tenantId: ctx.tenantId, sessionId: session._id, personId });
   if (!rec) throw notFound('That person is not in this register');
-  if (rec.status === status) return getRegister(ctx, group, date);
+  const part = status === 'half_day' ? halfSession || 'first' : null;
+  if (rec.status === status && (rec.halfSession || null) === part) return getRegister(ctx, group, date);
   rec.history.push({ from: rec.status, to: status, reason, by: ctx.actorId });
-  rec.status = status;
+  rec.status = status; rec.halfSession = part || undefined;
   await rec.save();
   return getRegister(ctx, group, date);
 }
@@ -142,7 +150,7 @@ export async function personAttendance(ctx, personType, personId, { joiningDate,
   const leaveRows = personType === 'teacher'
     ? await LeaveApplication.find({ tenantId: ctx.tenantId, teacherId: personId, status: 'approved', endDate: { $gte: year.startDate }, startDate: { $lte: to } }).lean()
     : await StaffLeave.find({ tenantId: ctx.tenantId, staffId: personId, status: 'approved', endDate: { $gte: year.startDate }, startDate: { $lte: to } }).lean();
-  for (const l of leaveRows) for (const d of eachDate(l.startDate, l.endDate)) leaveOn.set(d, l.leaveType);
+  for (const l of leaveRows) for (const d of eachDate(l.startDate, l.endDate)) leaveOn.set(d, { type: l.leaveType, half: !!l.halfDay });
   const useRegisters = sessions.length > 0;
   const days = eachDate(year.startDate, to).map((date) => {
     const working = ctx.settings.workingDays.includes(isoDay(date)) && !holidaySet.has(date);
@@ -150,7 +158,8 @@ export async function personAttendance(ctx, personType, personId, { joiningDate,
     const base = { date, working: working && employed, holiday: holidaySet.has(date) ? 'Holiday' : undefined };
     if (!working || !employed) return { ...base, status: null };
     if (useRegisters) { const r = R.get(date); return { ...base, status: r ? (r.status === 'half_day' ? 'late' : r.status) : null, rawStatus: r?.status, remark: r?.remark }; }
-    const lt = leaveOn.get(date);
+    const lv = leaveOn.get(date); const lt = lv?.type;
+    if (lv?.half) return { ...base, status: 'late', rawStatus: 'half_day', leaveType: lt, derived: true }; // half the day away: shown as a half day
     return { ...base, status: lt ? (lt === 'unpaid' ? 'absent' : 'leave') : 'present', leaveType: lt, derived: true };
   });
   const counts = { present: 0, absent: 0, late: 0, half_day: 0, leave: 0 };

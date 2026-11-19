@@ -55,3 +55,13 @@ export const importBody = z.object({
 });
 export const listQuery = z.object({ yearId: id.optional() });
 export const resultsQuery = z.object({ sectionId: id.optional() });
+
+const blank = (v) => (v === '' || v === null ? undefined : v);
+export const datesheetQuery = z.object({ classId: id });
+export const datesheetBody = z.object({
+  classId: id,
+  rows: z.array(z.object({
+    subjectId: id, date: z.preprocess(blank, date.optional()), startTime: z.preprocess(blank, time.optional()), endTime: z.preprocess(blank, time.optional()), room: z.preprocess(blank, z.string().max(20).optional()),
+  }).refine((r) => !r.startTime || !r.endTime || r.endTime > r.startTime, { message: 'End time must be after start time', path: ['endTime'] })).max(60),
+});
+export const addSubjectBody = z.object({ classId: id, name: z.string().trim().min(2).max(60) });

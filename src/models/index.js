@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { GRADE_NAMES, levelOf } from '../core/grades.js';
+import { GRADE_NAMES, levelOf, streamOf } from '../core/grades.js';
 
 const { Schema } = mongoose;
 const ObjectId = Schema.Types.ObjectId;
@@ -31,6 +31,8 @@ export const defaultSettings = () => ({
   passwordFormat: '{NAME4}{DDMMYYYY}',
   leaveBalances: { casual: 12, sick: 10, earned: 0, other: 0 },
   staffLeaveBalances: { casual: 12, sick: 10, earned: 0, other: 0 },
+  // who approves the leave of transport staff: the Transport officer ('officer'), or the School Admin ('admin': the officer can only pass applications on)
+  transportLeaveApprover: 'officer',
   // working hours for staff. A check-in after shiftStart + graceMinutes is late; less than halfDayHours is a half day.
   // location (optional): staff may check in from their own login only within radiusMeters of the school.
   staffAttendance: { shiftStart: '08:00', shiftEnd: '15:00', graceMinutes: 10, fullDayHours: 6, halfDayHours: 3, checkInOpensBeforeMinutes: 60, checkInClosesAtShiftEnd: true, location: null },
@@ -120,10 +122,10 @@ export const AcademicYear = model('AcademicYear', (() => {
 
 export const ClassModel = model('Class', (() => {
   const s = new Schema({
-    tenantId: tenant, name: { type: String, required: true, trim: true, enum: GRADE_NAMES }, level: { type: Number },
+    tenantId: tenant, name: { type: String, required: true, trim: true, enum: GRADE_NAMES }, level: { type: Number }, stream: { type: String, enum: ['medical', 'non_medical', 'commerce', 'arts'] }, // Class 11 and 12 only
     status: { type: String, enum: ['active', 'archived'], default: 'active' },
   }, opts);
-  s.pre('validate', function setLevel(next) { this.level = levelOf(this.name); next(); }); // level always follows the name
+  s.pre('validate', function setLevel(next) { this.level = levelOf(this.name); this.stream = streamOf(this.name) || undefined; next(); }); // level always follows the name
   s.index({ tenantId: 1, name: 1 }, { unique: true });
   return s;
 })());
@@ -135,6 +137,16 @@ export const Section = model('Section', (() => {
     status: { type: String, enum: ['active', 'archived'], default: 'active' },
   }, opts);
   s.index({ tenantId: 1, yearId: 1, classId: 1, name: 1 }, { unique: true });
+  return s;
+})());
+
+/** A house of the school (the school names its own: there are no built-in houses). Students and teachers each belong to at most one; a teacher in a house mentors its students. */
+export const House = model('House', (() => {
+  const s = new Schema({
+    tenantId: tenant, name: { type: String, required: true, trim: true, maxlength: 30 }, color: { type: String, trim: true, match: /^#[0-9a-f]{6}$/i }, motto: { type: String, trim: true, maxlength: 80 },
+    status: { type: String, enum: ['active', 'archived'], default: 'active' },
+  }, opts);
+  s.index({ tenantId: 1, name: 1 }, { unique: true, collation: { locale: 'en', strength: 2 } });
   return s;
 })());
 
@@ -200,7 +212,7 @@ export const Teacher = model('Teacher', (() => {
     tenantId: tenant, userId: ref('User'), employeeId: { type: String, required: true }, name: { type: String, required: true, trim: true },
     bank: { accountName: String, accountNo: String, ifsc: String, bankName: String, upi: String },
     statutory: { uan: String, esiNo: String, pan: String },
-    email: String, phone: String, dob: String, qualification: String, designation: String, joiningDate: String, address: String,
+    email: String, phone: String, dob: String, qualification: String, designation: String, designationId: ref('Designation'), house: String, joiningDate: String, address: String, // designation: always the name of a registered teaching designation; house: one of the school's houses
     subjectIds: [ref('Subject')], photoFileId: ref('File'),
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
     importBatchId: ref('ImportBatch'),
@@ -275,7 +287,8 @@ export const AttendanceRecord = model('AttendanceRecord', (() => {
     tenantId: tenant, sessionId: ref('AttendanceSession', { required: true, index: true }),
     studentId: ref('Student', { required: true }), enrolmentId: ref('StudentEnrolment'), sectionId: ref('Section'), yearId: ref('AcademicYear'),
     date: String,
-    status: { type: String, enum: ['present', 'absent', 'late', 'leave', 'excused'], required: true },
+    status: { type: String, enum: ['present', 'absent', 'late', 'half_day', 'leave', 'excused'], required: true },
+    halfSession: { type: String, enum: ['first', 'second'] }, // for a half day: the session the person attended (the other half they were away)
     remarks: String, regularised: { type: Boolean, default: false },
     history: [new Schema({ from: String, to: String, by: ref('User'), byName: String, reason: String, kind: String, at: { type: Date, default: Date.now } }, { _id: false })],
   }, opts);
@@ -449,9 +462,21 @@ export const LeaveApplication = model('LeaveApplication', new Schema({
   tenantId: tenant, teacherId: ref('Teacher', { required: true, index: true }), userId: ref('User'),
   leaveType: { type: String, enum: ['casual', 'sick', 'earned', 'other', 'unpaid'], default: 'casual' },
   startDate: { type: String, required: true }, endDate: { type: String, required: true }, days: Number, reason: String, attachmentFileId: ref('File'),
+  halfDay: { type: Boolean, default: false }, halfSession: { type: String, enum: ['first', 'second'] }, // a half day is one date; halfSession is the half the person is away
   status: { type: String, enum: ['draft', 'submitted', 'approved', 'rejected', 'cancelled'], default: 'submitted' },
   decisionBy: ref('User'), decisionRemark: String, decidedAt: Date,
 }, opts));
+
+/** Extra leave the school gives one person on top of the yearly allowance in the school settings (e.g. a compensatory day for working on a holiday). Counted in the year named by yearKey. */
+export const LeaveGrant = model('LeaveGrant', (() => {
+  const s = new Schema({
+    tenantId: tenant, personType: { type: String, enum: ['teacher', 'staff'], required: true }, personId: { type: ObjectId, required: true }, yearKey: { type: String, required: true },
+    leaveType: { type: String, enum: ['casual', 'sick', 'earned', 'other'], required: true }, days: { type: Number, required: true, min: 0.5, max: 60 }, reason: { type: String, required: true, trim: true, maxlength: 300 },
+    grantedBy: ref('User'),
+  }, opts);
+  s.index({ tenantId: 1, personType: 1, personId: 1, yearKey: 1 });
+  return s;
+})());
 
 // ───────────── Payroll (teachers) ─────────────
 const payItemSchema = new Schema({ label: { type: String, required: true, trim: true }, kind: { type: String, enum: ['fixed', 'percent'], default: 'fixed' }, value: { type: Number, required: true, min: 0 } }, { _id: false });
@@ -655,7 +680,7 @@ export const StudentTransport = model('StudentTransport', (() => {
 export const Designation = model('Designation', (() => {
   const s = new Schema({
     tenantId: tenant, name: { type: String, required: true, trim: true },
-    group: { type: String, enum: ['transport', 'general'], default: 'general' }, // transport = managed by the Transport officer
+    group: { type: String, enum: ['transport', 'general', 'teaching'], default: 'general' }, // transport = managed by the Transport officer; teaching = ranks of teachers (PGT, TGT, Head of Department…); general = everyone else who works at the school
     busRole: { type: String, enum: ['driver', 'conductor'], default: null },   // which seat on a bus this title can fill
     status: { type: String, enum: ['active', 'archived'], default: 'active' },
   }, opts);
@@ -672,6 +697,8 @@ export const StaffMember = model('StaffMember', (() => {
     phone: { type: String, trim: true }, address: String, designationId: ref('Designation', { required: true, index: true }), joiningDate: String,
     licenseNo: String, licenseExpiry: String, idProof: String, emergencyContact: { name: String, phone: String }, notes: String,
     status: { type: String, enum: ['active', 'inactive'], default: 'active' }, createdBy: ref('User'),
+    deskRole: { type: String, enum: ['finance', 'library', 'transport'] }, // set for the school's own officers (finance, librarian, transport officer): they are employees too, kept in step with their desk login
+    canMarkAttendance: { type: Boolean, default: false }, // may take the attendance of teachers and staff from the Staff portal
   }, opts);
   s.index({ tenantId: 1, staffId: 1 }, { unique: true });
   return s;
@@ -681,7 +708,7 @@ export const StaffMember = model('StaffMember', (() => {
 /** One register per group per day. Teachers and general staff are marked by the School Admin, transport staff by the Transport officer. */
 export const StaffAttendanceSession = model('StaffAttendanceSession', (() => {
   const s = new Schema({
-    tenantId: tenant, group: { type: String, enum: ['teachers', 'general', 'transport'], required: true }, date: { type: String, required: true },
+    tenantId: tenant, group: { type: String, enum: ['teachers', 'general', 'office', 'transport'], required: true }, date: { type: String, required: true },
     status: { type: String, enum: ['draft', 'submitted'], default: 'draft' }, markedBy: ref('User'), submittedBy: ref('User'), submittedAt: Date,
   }, opts);
   s.index({ tenantId: 1, group: 1, date: 1 }, { unique: true });
@@ -692,7 +719,7 @@ export const StaffAttendanceRecord = model('StaffAttendanceRecord', (() => {
   const s = new Schema({
     tenantId: tenant, sessionId: ref('StaffAttendanceSession', { required: true, index: true }), group: String, date: { type: String, required: true },
     personType: { type: String, enum: ['teacher', 'staff'], required: true }, personId: { type: ObjectId, required: true },
-    status: { type: String, enum: ['present', 'absent', 'late', 'half_day', 'leave'], required: true }, remark: String, checkIn: String, checkOut: String,
+    status: { type: String, enum: ['present', 'absent', 'late', 'half_day', 'leave'], required: true }, halfSession: { type: String, enum: ['first', 'second'] }, remark: String, checkIn: String, checkOut: String,
     history: [new Schema({ from: String, to: String, reason: String, by: ref('User'), at: { type: Date, default: Date.now } }, { _id: false })],
   }, opts);
   s.index({ tenantId: 1, sessionId: 1, personId: 1 }, { unique: true });
@@ -706,8 +733,10 @@ export const StaffLeave = model('StaffLeave', new Schema({
   tenantId: tenant, staffId: ref('StaffMember', { required: true, index: true }), userId: ref('User'), group: { type: String, enum: ['general', 'transport'], required: true },
   leaveType: { type: String, enum: ['casual', 'sick', 'earned', 'other', 'unpaid'], default: 'casual' },
   startDate: { type: String, required: true }, endDate: { type: String, required: true }, days: Number, reason: String,
+  halfDay: { type: Boolean, default: false }, halfSession: { type: String, enum: ['first', 'second'] }, // a half day is one date; halfSession is the half the person is away
   status: { type: String, enum: ['submitted', 'approved', 'rejected', 'cancelled'], default: 'submitted' },
   recordedBy: ref('User'), decisionBy: ref('User'), decisionRemark: String, decidedAt: Date,
+  awaitingAdmin: { type: Boolean, default: false }, // a transport desk leave that the School Admin has to decide (the officer passed it on, or the school keeps that right)
 }, opts));
 
 /** When a person arrived and left on a day. Written by self check-in, by the desk, or imported from a biometric machine's export. */
@@ -793,7 +822,7 @@ export const PeriodAttendanceSession = model('PeriodAttendanceSession', (() => {
   const s = new Schema({
     tenantId: tenant, yearId: ref('AcademicYear'), sectionId: ref('Section', { required: true }), periodId: ref('TimetablePeriod', { required: true }), date: { type: String, required: true },
     teacherId: ref('Teacher'), subjectId: ref('Subject'), markedBy: ref('User'),
-    records: [new Schema({ studentId: ref('Student', { required: true }), status: { type: String, enum: ['present', 'absent', 'late', 'leave', 'excused'], required: true } }, { _id: false })],
+    records: [new Schema({ studentId: ref('Student', { required: true }), status: { type: String, enum: ['present', 'absent', 'late', 'half_day', 'leave', 'excused'], required: true } }, { _id: false })],
   }, opts);
   s.index({ tenantId: 1, sectionId: 1, date: 1, periodId: 1 }, { unique: true });
   return s;

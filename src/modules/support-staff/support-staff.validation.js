@@ -6,7 +6,7 @@ const date = z.string().refine(isDateStr, 'Use YYYY-MM-DD');
 const text = (n) => z.string().trim().max(n);
 
 export const designationBody = z.object({
-  name: z.string().trim().min(2).max(40), group: z.enum(['transport', 'general']).default('general'), busRole: z.enum(['driver', 'conductor']).nullable().optional(),
+  name: z.string().trim().min(2).max(40), group: z.enum(['transport', 'general', 'teaching']).default('general'), busRole: z.enum(['driver', 'conductor']).nullable().optional(),
 }).refine((d) => !d.busRole || d.group === 'transport', { message: 'Only a transport designation can be a driver or conductor', path: ['busRole'] });
 export const designationPatch = z.object({ name: z.string().trim().min(2).max(40), status: z.enum(['active', 'archived']), busRole: z.enum(['driver', 'conductor']).nullable() }).partial();
 
@@ -14,7 +14,7 @@ import { bankFields } from '../teachers/teachers.validation.js';
 export const staffBody = bankFields.extend({
   name: z.string().trim().min(2).max(100), designationId: id, phone: text(20).optional(), gender: z.enum(['male', 'female', 'other']).optional(), dob: date.optional(), bloodGroup: text(5).optional(),
   address: text(300).optional(), joiningDate: date.optional(), licenseNo: text(40).optional(), licenseExpiry: date.optional(), idProof: text(60).optional(),
-  emergencyContact: z.object({ name: text(80).optional(), phone: text(20).optional() }).optional(), notes: text(300).optional(),
+  emergencyContact: z.object({ name: text(80).optional(), phone: text(20).optional() }).optional(), notes: text(300).optional(), canMarkAttendance: z.boolean().optional(),
 });
 export const staffPatch = staffBody.partial();
 export const listQuery = z.object({

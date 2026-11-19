@@ -3,14 +3,16 @@ import { isDateStr } from '../../core/utils.js';
 
 const id = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id');
 const date = z.string().refine(isDateStr, 'Use YYYY-MM-DD');
-export const status = z.enum(['present', 'absent', 'late', 'leave', 'excused']);
+export const status = z.enum(['present', 'absent', 'late', 'half_day', 'leave', 'excused']);
+/** For a half day: which session the student attended. */
+export const halfSession = z.enum(['first', 'second']).optional();
 
 export const registerQuery = z.object({ sectionId: id, date });
 export const saveBody = z.object({
   sectionId: id, date, remarks: z.string().max(300).optional(),
-  entries: z.array(z.object({ studentId: id, status, remarks: z.string().max(200).optional() })).max(300),
+  entries: z.array(z.object({ studentId: id, status, halfSession, remarks: z.string().max(200).optional() })).max(300),
 });
-export const correctBody = z.object({ sectionId: id, date, studentId: id, status, reason: z.string().trim().min(3).max(300) });
+export const correctBody = z.object({ sectionId: id, date, studentId: id, status, halfSession, reason: z.string().trim().min(3).max(300) });
 export const historyQuery = z.object({ sectionId: id, from: date.optional(), to: date.optional() });
 export const overviewQuery = z.object({ date: date.optional(), yearId: id.optional() });
 export const monthQuery = z.object({ month: z.string().regex(/^\d{4}-\d{2}$/).optional(), yearId: id.optional() });

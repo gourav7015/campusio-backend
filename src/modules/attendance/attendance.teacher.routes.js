@@ -7,14 +7,20 @@ import * as svc from './attendance.service.js';
 const r = Router();
 
 r.get('/attendance/register', async (req, res) => res.json(await svc.getRegister(req.ctx, parse(v.registerQuery, req.query))));
-r.put('/attendance/register', async (req, res) => res.json(await svc.saveRegister(req.ctx, parse(v.saveBody, req.body), { submit: false })));
-r.post('/attendance/register/submit', async (req, res) => {
+r.put('/attendance/register', async (req, res) => {
   const body = parse(v.saveBody, req.body);
-  const out = await svc.saveRegister(req.ctx, body, { submit: true });
-  await audit(req, 'attendance.submitted', 'AttendanceSession', out.session._id, `Attendance submitted for ${body.date}`);
+  const out = await svc.saveRegister(req.ctx, body, { submit: false, byName: req.user.name });
+  if (out.edited) await audit(req, 'attendance.edited', 'AttendanceSession', out.session._id, `Class teacher changed ${out.changed} entr${out.changed === 1 ? 'y' : 'ies'} in the register of ${body.date}`);
   res.json(out);
 });
-// Submitted registers are locked for teachers; they ask the admin to correct them.
+r.post('/attendance/register/submit', async (req, res) => {
+  const body = parse(v.saveBody, req.body);
+  const out = await svc.saveRegister(req.ctx, body, { submit: true, byName: req.user.name });
+  if (out.edited) await audit(req, 'attendance.edited', 'AttendanceSession', out.session._id, `Class teacher changed ${out.changed} entr${out.changed === 1 ? 'y' : 'ies'} in the register of ${body.date}`);
+  else await audit(req, 'attendance.submitted', 'AttendanceSession', out.session._id, `Attendance submitted for ${body.date}`);
+  res.json(out);
+});
+// (Kept for older clients: the class teacher can now change a submitted register directly.)
 r.post('/attendance/request-correction', async (req, res) => {
   const body = parse(v.requestCorrectionBody, req.body);
   const m = await svc.requestCorrection(req.ctx, req.user, body);

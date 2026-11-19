@@ -30,7 +30,11 @@ export async function preview(tenantId, { fromYearId, toYearId }) {
   const sorted = enrols.filter((e) => students.has(String(e.studentId))).sort((a, b) => students.get(String(a.studentId)).name.localeCompare(students.get(String(b.studentId)).name));
   for (const e of sorted) {
     const cur = CL.get(String(e.classId));
-    const next = classes.find((c) => c.level > (cur?.level ?? 0));
+    // the next level up; in Classes 11 and 12 a student stays in the same stream. From Class 10 the stream is chosen (the plain Class 11 is proposed if the school has no streams)
+    const nextLevel = classes.map((c) => c.level).filter((l) => l > (cur?.level ?? 0)).sort((a, b) => a - b)[0];
+    const atNext = classes.filter((c) => c.level === nextLevel);
+    const next = (cur?.stream && atNext.find((c) => c.stream === cur.stream)) || atNext.find((c) => !c.stream) || atNext[0];
+    const needsStream = !!next && !cur?.stream && atNext.length > 1 && !atNext.some((c) => !c.stream);
     const action = next ? 'promote' : 'complete';
     const item = { enrolmentId: e._id, studentId: e.studentId, name: students.get(String(e.studentId)).name, admissionNo: students.get(String(e.studentId)).admissionNo, fromClass: cur?.name, fromSection: FS.get(String(e.sectionId))?.name, action, warnings: [] };
     if (action === 'promote') {
@@ -38,6 +42,7 @@ export async function preview(tenantId, { fromYearId, toYearId }) {
       const sameName = candidates.find((s) => s.name === FS.get(String(e.sectionId))?.name && (used.get(String(s._id)) || 0) < s.capacity);
       const pick = sameName || [...candidates].sort((a, b) => (used.get(String(a._id)) || 0) / a.capacity - (used.get(String(b._id)) || 0) / b.capacity).find((s) => (used.get(String(s._id)) || 0) < s.capacity);
       item.toClassId = next._id; item.toClass = next.name;
+      if (needsStream) item.warnings.push('Choose this student\'s stream: Medical, Non-Medical, Commerce or Arts (pick the section)');
       if (pick) { item.toSectionId = pick._id; item.toSection = pick.name; used.set(String(pick._id), (used.get(String(pick._id)) || 0) + 1); }
       else item.warnings.push(candidates.length ? `No room in ${next.name} sections` : `No sections created for ${next.name} in ${to.name}`);
     }

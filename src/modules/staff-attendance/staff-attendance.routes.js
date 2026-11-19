@@ -31,6 +31,9 @@ export function attendanceRoutes(allowed) {
   return r;
 }
 
-/** Mounted inside the School Admin portal: teachers and general staff. */
+/** The registers the School Admin and the Staff attendance desk may take: teachers, non-teaching staff and office officers. Transport crew are marked by the Transport officer. */
+export const DESK_GROUPS = ['teachers', 'general', 'office'];
+
+/** Mounted inside the School Admin portal. */
 export const adminRoutes = Router();
-adminRoutes.use('/staff-attendance', attendanceRoutes(['teachers', 'general']));
+adminRoutes.use('/staff-attendance', attendanceRoutes(DESK_GROUPS));

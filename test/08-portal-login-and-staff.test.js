@@ -14,11 +14,12 @@ describe('one login page per role, staff accounts, heat map', () => {
     expect((await api().post('/api/auth/login').send({ loginId: 'admin@prt.test', password: 'Admin@12345' })).status).toBe(400); // portal is required
     expect((await tryLogin('admin@prt.test', 'Admin@12345', 'admin')).status).toBe(200);
     const wrong = await tryLogin('admin@prt.test', 'Admin@12345', 'student');
-    expect(wrong.status).toBe(403);
-    expect(wrong.body).toMatchObject({ code: 'WRONG_PORTAL' });
-    expect(wrong.body.error).toMatch(/School Admin portal/);
-    expect((await tryLogin('admin@prt.test', 'Admin@12345', 'platform')).status).toBe(403); // an admin cannot use the platform URL
-    expect((await tryLogin('root@platform.test', 'Root@12345', 'admin')).status).toBe(403); // nor the super admin the school one
+    // the wrong door answers exactly like a wrong password, so it never confirms that the credentials are right
+    const badPw = await tryLogin('admin@prt.test', 'Wrong@12345', 'admin');
+    expect(wrong.status).toBe(401); expect(wrong.status).toBe(badPw.status);
+    expect(wrong.body).toEqual(badPw.body); expect(wrong.body.code).toBe('INVALID_CREDENTIALS');
+    expect((await tryLogin('admin@prt.test', 'Admin@12345', 'platform')).status).toBe(401); // an admin cannot use the platform URL
+    expect((await tryLogin('root@platform.test', 'Root@12345', 'admin')).status).toBe(401); // nor the super admin the school one
     expect((await tryLogin('root@platform.test', 'Root@12345', 'platform')).status).toBe(200);
     // the portal is only revealed once the password is right — a wrong password learns nothing
     const bad = await tryLogin('admin@prt.test', 'wrong', 'student');
@@ -26,9 +27,9 @@ describe('one login page per role, staff accounts, heat map', () => {
     expect(bad.body.error).toBe('Invalid login id or password');
     expect((await tryLogin('nobody@prt.test', 'x', 'teacher')).status).toBe(401);
     expect((await tryLogin(W.t1.credentials.loginId, W.t1.credentials.temporaryPassword, 'teacher')).status).toBe(200);
-    expect((await tryLogin(W.t1.credentials.loginId, W.t1.credentials.temporaryPassword, 'student')).status).toBe(403);
+    expect((await tryLogin(W.t1.credentials.loginId, W.t1.credentials.temporaryPassword, 'student')).status).toBe(401);
     expect((await tryLogin(W.students[0].credentials.loginId, W.students[0].credentials.temporaryPassword, 'student')).status).toBe(200);
-    expect((await tryLogin(W.students[0].credentials.loginId, W.students[0].credentials.temporaryPassword, 'teacher')).status).toBe(403);
+    expect((await tryLogin(W.students[0].credentials.loginId, W.students[0].credentials.temporaryPassword, 'teacher')).status).toBe(401);
     expect((await tryLogin('admin@prt.test', 'Admin@12345', 'bogus')).status).toBe(400);
   });
 
@@ -42,7 +43,7 @@ describe('one login page per role, staff accounts, heat map', () => {
     expect((await api().post('/api/school/staff').set({ ...root.h, 'X-Acting-School': W.id }).send({ name: 'Acted Clerk', email: 'acted@prt.test', role: 'finance' })).status).toBe(201);
     fin = await login(f.body.loginId, f.body.temporaryPassword, 'finance');
     lib = await login(l.body.loginId, l.body.temporaryPassword, 'library');
-    expect((await tryLogin(f.body.loginId, f.body.temporaryPassword, 'library')).status).toBe(403);
+    expect((await tryLogin(f.body.loginId, f.body.temporaryPassword, 'library')).status).toBe(401);
     expect((await api().get('/api/finance/dashboard').set(fin.h)).status).toBe(200);
     expect((await api().get('/api/library/dashboard').set(fin.h)).status).toBe(403); // finance cannot use the library desk
     expect((await api().get('/api/finance/dashboard').set(lib.h)).status).toBe(403);

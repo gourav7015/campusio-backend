@@ -7,6 +7,8 @@ import { schoolToday } from '../../services/context.js';
 import { findOrCreateSubject } from '../../services/subjects.js';
 import { clearanceFor } from '../../services/clearance.js';
 import { endTeacherAssignments } from '../assignments/assignments.service.js';
+import { resolveTeacherDesignation } from '../support-staff/support-staff.service.js';
+import { resolveHouse } from '../houses/houses.service.js';
 
 export async function listTeachers(tenantId, q) {
   const f = { tenantId };
@@ -32,6 +34,8 @@ export async function createTeacher(ctx, body) {
   const { tenantId, actorId } = ctx;
   if (await Teacher.exists({ tenantId, employeeId: body.employeeId })) throw conflict(`Employee id ${body.employeeId} already exists`);
   const subjectIds = await resolveSubjects(tenantId, body.subjects);
+  const rank = await resolveTeacherDesignation(tenantId, body); // only a rank the school has registered
+  const house = await resolveHouse(tenantId, body.house);
   const code = await schoolCode(tenantId);
   const { user, temporaryPassword } = await createUserAccount({
     role: 'teacher', tenantId, name: body.name, email: body.email || undefined,
@@ -41,7 +45,7 @@ export async function createTeacher(ctx, body) {
   });
   try {
     const { loginId: _l, password: _p, subjects: _s, ...profile } = body;
-    const teacher = await Teacher.create({ ...profile, subjectIds, tenantId, userId: user._id, importBatchId: ctx.importBatchId });
+    const teacher = await Teacher.create({ ...profile, ...(rank || {}), house: house || undefined, subjectIds, tenantId, userId: user._id, importBatchId: ctx.importBatchId });
     return { teacher, credentials: { loginId: user.loginId, temporaryPassword } };
   } catch (e) {
     await User.deleteOne({ _id: user._id });
@@ -66,8 +70,10 @@ export async function updateTeacher(tenantId, id, body) {
   if (body.employeeId && body.employeeId !== t.employeeId && (await Teacher.exists({ tenantId, employeeId: body.employeeId, _id: { $ne: t._id } }))) {
     throw conflict(`Employee id ${body.employeeId} already exists`);
   }
-  const { subjects, ...rest } = body;
+  const { subjects, designation, designationId, house, ...rest } = body;
   if (subjects) t.subjectIds = await resolveSubjects(tenantId, subjects);
+  if (designation !== undefined || designationId !== undefined) Object.assign(t, await resolveTeacherDesignation(tenantId, { designation, designationId }));
+  if (house !== undefined) t.house = (await resolveHouse(tenantId, house)) || undefined;
   Object.assign(t, rest);
   await t.save();
   if (body.name || body.email) await User.updateOne({ _id: t.userId }, { ...(body.name ? { name: body.name } : {}), ...(body.email ? { email: body.email.toLowerCase() } : {}) });

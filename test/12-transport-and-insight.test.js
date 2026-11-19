@@ -21,7 +21,7 @@ describe('Transport and the School Admin class/student views', () => {
   it('the Transport officer is created by the School Admin and signs in through its own door', async () => {
     const c = await api().post(A('/staff')).set(W.h).send({ name: 'Tara Transport', email: 'tara@trn.test', role: 'transport' });
     expect(c.status).toBe(201);
-    expect((await api().post('/api/auth/login').send({ loginId: c.body.loginId, password: c.body.temporaryPassword, portal: 'finance' })).status).toBe(403); // wrong door
+    expect((await api().post('/api/auth/login').send({ loginId: c.body.loginId, password: c.body.temporaryPassword, portal: 'finance' })).status).toBe(401); // wrong door
     tr = await login(c.body.loginId, c.body.temporaryPassword, 'transport');
     expect(tr.user.role).toBe('transport');
     expect((await api().get(T('/dashboard')).set(W.teacher1.h)).status).toBe(403);

@@ -138,7 +138,7 @@ async function holidaySet(tenantId, month) {
 function unpaidFractions(person, unpaidLeaves, marked, month, workSet) {
   const { start, end } = monthBounds(month);
   const out = new Map();
-  for (const l of unpaidLeaves) for (const d of eachDate(l.startDate < start ? start : l.startDate, l.endDate > end ? end : l.endDate)) if (workSet.has(d)) out.set(d, 1);
+  for (const l of unpaidLeaves) for (const d of eachDate(l.startDate < start ? start : l.startDate, l.endDate > end ? end : l.endDate)) if (workSet.has(d)) out.set(d, l.halfDay ? 0.5 : 1);
   if (person.joiningDate && person.joiningDate > start) for (const d of workSet) if (d < person.joiningDate) out.set(d, 1);
   for (const [d, status] of marked || []) {
     if (!workSet.has(d) || out.get(d) === 1) continue;

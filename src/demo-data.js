@@ -51,12 +51,15 @@ export async function buildDemo(base) {
   const teacherDefs = [['Rajesh Sharma', 'T001', 'sharma@gps.test', 'MATH', 'Mathematics'], ['Meera Gupta', 'T002', 'gupta@gps.test', 'ENG', 'English'], ['Anil Verma', 'T003', 'verma@gps.test', 'SCI', 'Science'], ['Sunita Singh', 'T004', 'singh@gps.test', 'HIN', 'Hindi'], ['Imran Khan', 'T005', 'khan@gps.test', 'SST', 'Social Studies'], ['Priya Rao', 'T006', 'rao@gps.test', 'CS', 'Computer Science']];
   const T = {};
   for (const [name, employeeId, email, code, subject] of teacherDefs) {
-    const t = await admin('POST', '/teachers', { name, employeeId, email, designation: 'Teacher', subjects: [subject], phone: `98765432${employeeId.slice(-2)}` });
+    const RANK = { MATH: 'PGT', ENG: 'TGT', SCI: 'PGT', HIN: 'TGT', SST: 'TGT', CS: 'Head of Department' }; // only the ranks the school has registered
+    const t = await admin('POST', '/teachers', { name, employeeId, email, designation: RANK[code] || 'TGT', subjects: [subject], phone: `98765432${employeeId.slice(-2)}` });
     await keep(t.teacher.userId, DEMO.teacherPassword);
     T[code] = { ...t.teacher, subject, token: await login(email, DEMO.teacherPassword, 'teacher') };
   }
   const asg = {};
   for (const secKey of ['8A', '8B', '7A', '6A']) for (const [, , , code, subject] of teacherDefs) asg[`${secKey}${code}`] = await admin('POST', '/teaching-assignments', { teacherId: T[code]._id, sectionId: sec[secKey]._id, subject, weeklyPeriods: code === 'MATH' ? 6 : 4, effectiveFrom: '2026-04-01' });
+  // the school names its own houses; students and teachers are placed in them below
+  for (const [name, color, motto] of [['Aravali', '#b45309', 'Strong as the hills'], ['Nilgiri', '#1d4ed8', 'Rise above'], ['Himalaya', '#0f766e', 'Reach the summit'], ['Vindhya', '#7c3aed', 'Courage always']]) await admin('POST', '/houses', { name, color, motto });
   const subj = Object.fromEntries((await admin('GET', '/subjects')).map((s) => [s.name, s]));
   await admin('PUT', `/sections/${sec['8A']._id}/class-teacher`, { teacherId: T.MATH._id, effectiveFrom: '2026-04-01' });
   await admin('PUT', `/sections/${sec['8B']._id}/class-teacher`, { teacherId: T.ENG._id, effectiveFrom: '2026-04-01' });
@@ -101,12 +104,13 @@ export async function buildDemo(base) {
   for (const [key, count, cls] of [['8A', 14, 8], ['8B', 10, 8], ['7A', 6, 7], ['6A', 4, 6]]) for (let i = 0; i < count; i++) {
     const name = `${first[n % first.length]} ${last[(n * 7 + i) % last.length]}`;
     const dob = `${2026 - cls - 5}-${String((n % 12) + 1).padStart(2, '0')}-${String((n % 27) + 1).padStart(2, '0')}`;
-    const out = await admin('POST', '/students', { name, dob, gender: n % 2 ? 'female' : 'male', sectionId: sec[key]._id, admissionDate: '2026-04-10', house: ['Red', 'Blue', 'Green', 'Yellow'][n % 4], phone: `90000000${String(n).padStart(2, '0')}`,
+    const out = await admin('POST', '/students', { name, dob, gender: n % 2 ? 'female' : 'male', sectionId: sec[key]._id, admissionDate: '2026-04-10', phone: `90000000${String(n).padStart(2, '0')}`,
       guardians: [{ name: `${last[(n * 7 + i) % last.length]} (Parent)`, relationship: n % 2 ? 'Father' : 'Mother', phone: `98200000${String(n).padStart(2, '0')}`, isPrimary: true }], confirmDuplicate: true });
     await keep(out.student.userId, DEMO.studentPassword);
     students.push({ key, ...out.student, loginId: out.credentials.loginId });
     n++;
   }
+  await admin('POST', '/houses/distribute'); // every student and teacher into one of the school's houses, evenly
   const rahul = students.find((s) => s.key === '8A');
 
   // fees: most students paid the admission fee and the first two months in cash/UPI, a few are overdue, one has a concession
@@ -214,11 +218,16 @@ export async function buildDemo(base) {
   // non-teaching staff and one bus with its crew and two riders (the Transport officer does the transport part)
   const des = Object.fromEntries([...(await admin('GET', '/designations')), ...(await transport('GET', '/designations'))].map((d) => [d.name, d._id])); // general titles come from the admin, transport titles from the officer
   const generalStaff = [];
-  for (const [name, d, phone] of [['Kamla Devi', 'Sweeper', '9000011001'], ['Ramu Kaka', 'Gardener', '9000011002'], ['Savita Ben', 'Maid', '9000011003'], ['Bhola Singh', 'Security Guard', '9000011004']]) generalStaff.push(await admin('POST', '/support-staff', { name, designationId: des[d], phone, joiningDate: '2022-06-01' }));
-  // a Staff portal login for the first sweeper, with a bank account and ESI number on record
+  // the office clerk works for the office desk (Staff portal): the only staff member with a sign-in. Everyone else is on the books and on payroll, and is looked after by the desk.
+  generalStaff.push(await admin('POST', '/support-staff', { name: 'Neha Shah', designationId: des['Office Clerk'], phone: '9000011000', joiningDate: '2021-04-01', canMarkAttendance: true }));
   const kLogin = await admin('POST', `/support-staff/${generalStaff[0]._id}/login`);
   await keep((await User.findOne({ loginId: kLogin.loginId }))._id, DEMO.staff.password);
-  await admin('PATCH', `/support-staff/${generalStaff[0]._id}`, { bank: { accountName: 'Kamla Devi', accountNo: '123456789012', ifsc: 'SBIN0001234', bankName: 'State Bank of India' }, statutory: { esiNo: '1234567890' } });
+  for (const [name, d, phone] of [['Kamla Devi', 'Sweeper', '9000011001'], ['Ramu Kaka', 'Gardener', '9000011002'], ['Savita Ben', 'Maid', '9000011003'], ['Bhola Singh', 'Security Guard', '9000011004'], ['Vikram Chauhan', 'PT Teacher', '9000011005'], ['Kiran Joshi', 'Lab Assistant', '9000011006'], ['Mukesh Parmar', 'Accountant', '9000011007'], ['Dr. Anjali Mehta', 'School Counsellor', '9000011008']]) generalStaff.push(await admin('POST', '/support-staff', { name, designationId: des[d], phone, joiningDate: '2022-06-01' }));
+  const kamla = generalStaff.find((s) => s.name === 'Kamla Devi');
+  // a bank account and an ESI number on record for the first sweeper
+  await admin('PATCH', `/support-staff/${kamla._id}`, { bank: { accountName: 'Kamla Devi', accountNo: '123456789012', ifsc: 'SBIN0001234', bankName: 'State Bank of India' }, statutory: { esiNo: '1234567890' } });
+  // a teacher asks the office about her attendance
+  await call('POST', '/api/teacher/queries', T.SCI.token, { subject: 'My attendance on Monday', body: 'I was at school the whole day but I am marked half day. Please check.', category: 'general' });
   const drv = await transport('POST', '/staff', { name: 'Harish Driver', designationId: des.Driver, phone: '9000022001', licenseNo: 'GJ0320180007', licenseExpiry: addDays(today, 400), joiningDate: '2019-04-01' });
   const cnd = await transport('POST', '/staff', { name: 'Mahesh Conductor', designationId: des.Conductor, phone: '9000022002', joiningDate: '2021-06-15' });
   const bus = await transport('POST', '/buses', { busNo: 'GPS-01', registrationNo: 'GJ03AB4321', vehicleModel: 'Tata Starbus 40-seater', capacity: 40, routeName: 'Route 1 — University Road', startTime: '06:50', endTime: '08:05',
@@ -230,7 +239,7 @@ export async function buildDemo(base) {
   const regDays = []; for (let b = 1; regDays.length < 6 && b < 14; b++) { const d = addDays(today, -b); if (isoDay(d) !== 7) regDays.push(d); }
   for (const [k, date] of regDays.entries()) {
     await admin('PUT', '/staff-attendance/register', { group: 'teachers', date, submit: true, entries: k === 1 ? [{ personId: T.SCI._id, status: 'absent', remark: 'Fever' }] : k === 3 ? [{ personId: T.ENG._id, status: 'half_day' }] : [] });
-    await admin('PUT', '/staff-attendance/register', { group: 'general', date, submit: true, entries: k === 2 ? [{ personId: generalStaff[0]._id, status: 'absent' }] : [] });
+    await admin('PUT', '/staff-attendance/register', { group: 'general', date, submit: true, entries: k === 2 ? [{ personId: kamla._id, status: 'absent' }] : [] });
     await transport('PUT', '/attendance/register', { group: 'transport', date, submit: true, entries: k === 4 ? [{ personId: cnd._id, status: 'late', remark: 'Bus breakdown' }] : [] });
   }
 

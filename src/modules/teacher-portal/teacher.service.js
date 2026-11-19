@@ -219,7 +219,7 @@ export async function dashboard(ctx) {
   const todaysSubmitted = sessions.filter((s) => s.status === 'submitted' && sectionIds.includes(String(s.sectionId)));
   const { AttendanceRecord } = await import('../../models/index.js');
   const recs = todaysSubmitted.length ? await AttendanceRecord.find({ sessionId: { $in: todaysSubmitted.map((s) => s._id) } }).select('status').lean() : [];
-  const att = { present: 0, absent: 0, leave: 0, late: 0 };
+  const att = { present: 0, absent: 0, leave: 0, late: 0, half_day: 0 };
   recs.forEach((r) => { if (att[r.status] !== undefined) att[r.status]++; if (r.status === 'excused') att.leave++; });
   const hwEnriched = hw.map((h) => ({ ...h, tab: teacherTab(h, today, new Date()), eff: effectiveStatus(h) }));
   const published = hwEnriched.filter((h) => h.eff === 'published');

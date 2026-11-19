@@ -1,5 +1,5 @@
 import {
-  TimetableEntry, TimetablePeriod, TeachingAssignment, Subject, Teacher, Section, ClassModel, Substitution, StudentEnrolment, AttendanceSession,
+  TimetableEntry, TimetablePeriod, TeachingAssignment, Subject, Teacher, Section, ClassModel, Substitution, StudentEnrolment, AttendanceSession, ClassTeacherAssignment,
 } from '../models/index.js';
 import { isoDay, addDays, nowTimeStr } from '../core/utils.js';
 import { inForce } from './context.js';
@@ -104,7 +104,12 @@ export async function teacherDay({ tenantId, yearId, teacherId, date, today, tz 
   ]);
   const cm = new Map(counts.map((c) => [String(c._id), c.n]));
   const sm = new Map(sessions.map((s) => [String(s.sectionId), s.status]));
-  rows.forEach((r) => { r.studentCount = cm.get(String(r.sectionId)) || 0; r.attendance = sm.get(String(r.sectionId)) || 'not_marked'; r.covering = r.substitute; });
+  // the daily register is the class teacher's; a subject teacher's period does not show it
+  const mineAsClassTeacher = new Set((await ClassTeacherAssignment.find({ tenantId, yearId, teacherId }).lean()).filter((a) => inForce(a, date)).map((a) => String(a.sectionId)));
+  rows.forEach((r) => {
+    r.studentCount = cm.get(String(r.sectionId)) || 0; r.covering = r.substitute;
+    if (mineAsClassTeacher.has(String(r.sectionId))) { r.attendance = sm.get(String(r.sectionId)) || 'not_marked'; r.classTeacher = true; }
+  });
   void sectionIds;
   rows.sort((a, b) => a.periodOrder - b.periodOrder);
   return markNext(rows);

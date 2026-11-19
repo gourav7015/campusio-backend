@@ -5,7 +5,7 @@ import * as v from './support-staff.validation.js';
 import * as svc from './support-staff.service.js';
 
 /** Non-teaching staff. scope 'general' = School Admin (maids, sweepers, gardeners, guards, clerks…); scope 'transport' = Transport officer (drivers, conductors, maintainers). */
-const groupOf = (scope) => (scope === 'transport' ? 'transport' : 'general');
+const groupOf = (scope) => (scope === 'transport' ? 'transport' : scope === 'teaching' ? 'teaching' : 'general');
 export function staffRoutes(scope) {
   const r = Router();
   r.get('/', async (req, res) => res.json(await svc.listStaff(req.ctx, scope, parse(v.listQuery, req.query))));
@@ -24,6 +24,11 @@ export function staffRoutes(scope) {
     const out = await svc.createLogin(req.ctx, scope, req.params.id);
     await audit(req, 'staff_member.login_created', 'StaffMember', req.params.id, `Created a Staff portal login (${out.loginId})`);
     res.status(201).json(out);
+  });
+  r.post('/:id/remove-login', async (req, res) => {
+    const out = await svc.removeLogin(req.ctx, scope, req.params.id);
+    await audit(req, 'staff_member.login_removed', 'StaffMember', req.params.id, 'Removed the office desk sign-in');
+    res.json(out);
   });
   r.post('/:id/reset-password', async (req, res) => {
     const out = await svc.resetLogin(req.ctx, scope, req.params.id);
@@ -57,3 +62,4 @@ export function designationRoutes(scope) {
 export const adminRoutes = Router();
 adminRoutes.use('/support-staff', staffRoutes('general'));
 adminRoutes.use('/designations', designationRoutes('general'));
+adminRoutes.use('/teacher-designations', designationRoutes('teaching')); // the ranks of teachers: PGT, TGT, Head of Department…

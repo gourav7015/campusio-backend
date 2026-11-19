@@ -87,3 +87,7 @@ adminRoutes.patch('/events/:id', async (req, res) => res.json(await cal.updateEv
 adminRoutes.delete('/events/:id', async (req, res) => { await cal.deleteEvent(req.ctx, req.params.id); res.json({ ok: true }); });
 adminRoutes.get('/messages', async (req, res) => res.json(await notif.inbox(req.ctx)));
 adminRoutes.post('/messages/:id/read', async (req, res) => res.json(await notif.markMessageRead(req.ctx, req.params.id)));
+
+/** Read-only calendar for the desks and staff, who have no class of their own. The School Admin keeps it up to date. */
+export const calendarRead = Router();
+calendarRead.get('/calendar', async (req, res) => res.json(await cal.schoolFeed(req.ctx, parse(v.calendarQuery, req.query))));

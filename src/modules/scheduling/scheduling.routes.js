@@ -46,7 +46,7 @@ t.get('/period-attendance', async (req, res) => {
 });
 t.get('/period-attendance/register', async (req, res) => res.json(await svc.periodRegister(req.ctx, parse(z.object({ entryId: id, date }), req.query))));
 t.put('/period-attendance/register', async (req, res) => {
-  const b = parse(z.object({ entryId: id, date, entries: z.array(z.object({ studentId: id, status: z.enum(['present', 'absent', 'late', 'leave', 'excused']) })).max(300) }), req.body);
+  const b = parse(z.object({ entryId: id, date, entries: z.array(z.object({ studentId: id, status: z.enum(['present', 'absent', 'late', 'half_day', 'leave', 'excused']) })).max(300) }), req.body);
   res.json(await svc.savePeriodRegister(req.ctx, req.user, b));
 });
 
@@ -74,7 +74,7 @@ a.post('/approvals/attendance-exceptions/:id', async (req, res) => {
 });
 a.get('/period-attendance', async (req, res) => { const q = parse(z.object({ sectionId: id, date: date.optional() }), req.query); res.json(await svc.adminPeriodOverview(req.ctx, { sectionId: q.sectionId, date: q.date || req.ctx.today })); });
 a.patch('/leave/:id', async (req, res) => {
-  const b = parse(z.object({ leaveType: z.enum(['casual', 'sick', 'earned', 'other', 'unpaid']), startDate: date, endDate: date, reason: z.string().trim().min(3).max(500), editNote: z.string().trim().max(200) }).partial(), req.body);
+  const b = parse(z.object({ leaveType: z.enum(['casual', 'sick', 'earned', 'other', 'unpaid']), startDate: date, endDate: date, reason: z.string().trim().min(3).max(500), editNote: z.string().trim().max(200), halfDay: z.boolean().optional(), halfSession: z.enum(['first', 'second']).optional() }).partial(), req.body);
   const l = await svc.editTeacherLeave(req.ctx, req.params.id, b, req.user);
   await audit(req, 'leave.edited', 'LeaveApplication', l._id, `Admin edited a leave: ${l.leaveType} ${l.startDate} to ${l.endDate}`);
   res.json(l);

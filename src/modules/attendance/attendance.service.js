@@ -76,7 +76,7 @@ export async function getRegister(ctx, { sectionId, date }) {
   else if (holiday && !allowedDay) blocked = `holiday:${holiday.title}`;
   const students = list.map(({ enrolment, student }) => {
     const rec = rm.get(String(student._id));
-    return { studentId: student._id, name: student.name, admissionNo: student.admissionNo, rollNo: enrolment.rollNo, status: rec?.status || null, remarks: rec?.remarks || '', corrected: (rec?.history?.length || 0) > 0, regularised: !!rec?.regularised, monitor: monitors.has(String(student._id)) };
+    return { studentId: student._id, name: student.name, admissionNo: student.admissionNo, rollNo: enrolment.rollNo, status: rec?.status || null, halfSession: rec?.status === 'half_day' ? rec.halfSession || 'first' : null, remarks: rec?.remarks || '', corrected: (rec?.history?.length || 0) > 0, regularised: !!rec?.regularised, monitor: monitors.has(String(student._id)) };
   });
   const marked = students.filter((s) => s.status);
   const mayMark = isClassTeacherOf(ctx, sectionId);
@@ -85,18 +85,42 @@ export async function getRegister(ctx, { sectionId, date }) {
     session: session && { id: session._id, status: session.status, submittedAt: session.submittedAt, remarks: session.remarks },
     totals: { ...sessionTotals(marked), total: students.length, unmarked: students.length - marked.length },
     isClassTeacher: mayMark, specialDay: !!allowedDay,
-    // before submission only the class teacher (or admin) edits; once submitted only the admin may correct, with a reason
-    canEdit: mayMark && !blocked && (!session || session.status === 'draft'),
+    // the class teacher can open any earlier register and change it (every change is kept in the history and the student is told); the admin corrects with a reason
+    canEdit: mayMark && !blocked && (!session || session.status === 'draft' || ctx.role === 'teacher'),
     canCorrect: ctx.role !== 'teacher' && !blocked && session?.status === 'submitted',
   };
 }
 
-export async function saveRegister(ctx, { sectionId, date, entries, remarks }, { submit }) {
+/** The class teacher changes a submitted register. Nothing is overwritten silently: each change goes into the record's history, and the student is told. */
+async function editSubmitted(ctx, session, date, entries, remarks, byName) {
+  const existing = new Map((await AttendanceRecord.find({ sessionId: session._id })).map((r) => [String(r.studentId), r]));
+  let changed = 0;
+  for (const e of entries) {
+    const rec = existing.get(String(e.studentId));
+    if (!rec) continue; // someone who was never marked cannot be added to a submitted register here
+    const half = e.status === 'half_day' ? e.halfSession || 'first' : null;
+    const statusChanged = rec.status !== e.status || (rec.halfSession || null) !== half;
+    const remarkChanged = (rec.remarks || '') !== (e.remarks || '');
+    if (!statusChanged && !remarkChanged) continue;
+    if (statusChanged) rec.history.push({ from: rec.status, to: e.status, by: ctx.actorId, byName, reason: 'Changed by the class teacher', at: new Date() });
+    rec.status = e.status; rec.halfSession = half || undefined; rec.remarks = e.remarks || '';
+    await rec.save(); changed += 1;
+    if (statusChanged) {
+      const stu = await Student.findById(e.studentId).select('userId');
+      await notifyUsers(ctx.tenantId, [stu?.userId], { category: 'attendance', title: 'Attendance corrected', body: `Your attendance for ${date} was changed to ${e.status === 'half_day' ? `half day (${half} session)` : e.status}.`, link: { type: 'attendance', id: date }, dedupeKey: `attc:${rec._id}:${rec.history.length}` });
+    }
+  }
+  const records = await AttendanceRecord.find({ sessionId: session._id }).lean();
+  return { session, totals: sessionTotals(records), submitted: true, edited: true, changed };
+}
+
+export async function saveRegister(ctx, { sectionId, date, entries, remarks }, { submit, byName }) {
   assertCanMark(ctx, sectionId);
   const section = await loadSection(ctx.tenantId, sectionId);
   await assertMarkableDate(ctx, section, date);
   let session = await AttendanceSession.findOne({ tenantId: ctx.tenantId, sectionId, date });
-  if (session?.status === 'submitted') throw conflict('This register is already submitted. Use a correction with a reason.');
+  // the class teacher may go back and change a register that was already submitted; the admin uses a correction with a reason
+  if (session?.status === 'submitted' && ctx.role !== 'teacher') throw conflict('This register is already submitted. Use a correction with a reason.');
 
   const list = await registerStudents(ctx.tenantId, sectionId, date);
   const allowed = new Map(list.map((x) => [String(x.student._id), x]));
@@ -106,6 +130,7 @@ export async function saveRegister(ctx, { sectionId, date, entries, remarks }, {
     if (seen.has(String(e.studentId))) throw bad('A student appears twice in the list');
     seen.add(String(e.studentId));
   }
+  if (session?.status === 'submitted') return editSubmitted(ctx, session, date, entries, remarks, byName);
   if (!session) session = new AttendanceSession({ tenantId: ctx.tenantId, yearId: section.yearId, sectionId, date });
   session.markedBy = ctx.actorId; session.remarks = remarks ?? session.remarks;
   await session.save();
@@ -114,7 +139,7 @@ export async function saveRegister(ctx, { sectionId, date, entries, remarks }, {
     await AttendanceRecord.bulkWrite(entries.map((e) => ({
       updateOne: {
         filter: { sessionId: session._id, studentId: e.studentId },
-        update: { $set: { tenantId: ctx.tenantId, status: e.status, remarks: e.remarks || '', enrolmentId: allowed.get(String(e.studentId)).enrolment._id, sectionId, yearId: section.yearId, date } },
+        update: { $set: { tenantId: ctx.tenantId, status: e.status, halfSession: e.status === 'half_day' ? e.halfSession || 'first' : null, remarks: e.remarks || '', enrolmentId: allowed.get(String(e.studentId)).enrolment._id, sectionId, yearId: section.yearId, date } },
         upsert: true,
       },
     })));
@@ -130,7 +155,7 @@ export async function saveRegister(ctx, { sectionId, date, entries, remarks }, {
     await Promise.all(records.map((rec) => {
       const stu = allowed.get(String(rec.studentId))?.student;
       return notifyUsers(ctx.tenantId, [stu?.userId], {
-        category: 'attendance', title: 'Attendance marked', body: `You were marked ${rec.status} on ${date}.`, link: { type: 'attendance', id: date }, dedupeKey: `att:${date}:${rec.studentId}`,
+        category: 'attendance', title: 'Attendance marked', body: `You were marked ${rec.status === 'half_day' ? `half day (${rec.halfSession || 'first'} session)` : rec.status} on ${date}.`, link: { type: 'attendance', id: date }, dedupeKey: `att:${date}:${rec.studentId}`,
       });
     }));
   }
@@ -138,16 +163,17 @@ export async function saveRegister(ctx, { sectionId, date, entries, remarks }, {
 }
 
 /** Corrections never overwrite silently: every change is appended to the record's history with who/why/when. */
-export async function correctRecord(ctx, { sectionId, date, studentId, status, reason }, byName) {
+export async function correctRecord(ctx, { sectionId, date, studentId, status, halfSession, reason }, byName) {
   if (ctx.role === 'teacher') throw forbidden('Submitted attendance is locked. Ask the school admin to correct it (use "Request correction").');
   const session = await AttendanceSession.findOne({ tenantId: ctx.tenantId, sectionId, date });
   if (!session) throw notFound('No attendance register for that date');
   if (session.status !== 'submitted') throw conflict('The register is still a draft; edit it directly');
   const rec = await AttendanceRecord.findOne({ sessionId: session._id, studentId });
   if (!rec) throw notFound('Student is not on that register');
-  if (rec.status === status) throw bad('The status is unchanged');
+  const session2 = status === 'half_day' ? halfSession || 'first' : null;
+  if (rec.status === status && (rec.halfSession || null) === session2) throw bad('The status is unchanged');
   rec.history.push({ from: rec.status, to: status, by: ctx.actorId, byName, reason, at: new Date() });
-  rec.status = status;
+  rec.status = status; rec.halfSession = session2 || undefined;
   await rec.save();
   const stu = await Student.findById(studentId).select('userId');
   await notifyUsers(ctx.tenantId, [stu?.userId], {
@@ -185,7 +211,7 @@ export async function overview(ctx, date) {
   const sum = (k) => submitted.reduce((n, r) => n + (r.totals?.[k] || 0), 0);
   return {
     date, working, rows,
-    totals: { sections: rows.length, submitted: submitted.length, pending: working ? rows.length - submitted.length : 0, present: sum('present'), absent: sum('absent'), late: sum('late'), leave: sum('leave'), excused: sum('excused'), students: sum('total') },
+    totals: { sections: rows.length, submitted: submitted.length, pending: working ? rows.length - submitted.length : 0, present: sum('present'), absent: sum('absent'), late: sum('late'), half_day: sum('half_day'), leave: sum('leave'), excused: sum('excused'), students: sum('total') },
   };
 }
 

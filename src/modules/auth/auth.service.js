@@ -21,7 +21,6 @@ export async function schoolBrief(tenantId, withSettings = false) {
   return { id: s._id, name: s.name, code: s.code, timezone: s.settings?.timezone, academicYear: year?.name || null };
 }
 
-const PORTAL_NAME = { student: 'Student', teacher: 'Teacher', finance: 'Finance', library: 'Library', transport: 'Transport', staff: 'Staff', school_admin: 'School Admin', super_admin: 'Platform Admin' };
 
 export async function login({ loginId, password, portal }, { userAgent, ip }) {
   const user = await User.findOne({ loginId: loginId.trim().toLowerCase() });
@@ -37,8 +36,8 @@ export async function login({ loginId, password, portal }, { userAgent, ip }) {
     throw invalid();
   }
   if (user.status !== 'active') throw new HttpError(403, 'This account has been disabled', 'DISABLED');
-  // Each role signs in through its own portal. Only revealed after the password is right, so it leaks nothing.
-  if (PORTALS[portal] !== user.role) throw new HttpError(403, `This login belongs to the ${PORTAL_NAME[user.role]} portal. Please sign in from the ${PORTAL_NAME[user.role]} login page.`, 'WRONG_PORTAL');
+  // Each role signs in through its own portal. A right password at the wrong door gets the same answer as a wrong password: saying "wrong portal" would confirm the credentials are valid.
+  if (PORTALS[portal] !== user.role) throw invalid();
   user.failedLogins = 0; user.lockedUntil = undefined; user.lastLoginAt = new Date();
   if (needsRehash(user.passwordHash)) user.passwordHash = await hashPassword(password); // quietly upgrade old, cheaper hashes
   await user.save();

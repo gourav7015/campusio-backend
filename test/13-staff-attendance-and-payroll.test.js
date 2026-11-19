@@ -97,19 +97,19 @@ describe('Staff attendance registers feed payroll, and payroll covers non-teachi
     expect(bulk.body).toMatchObject({ updated: 2, failed: [] });
     expect((await api().post(P(`/salaries/${t1}`)).set(W.h).send({ levelId: prt._id, effectiveFrom: '2026-04-01' })).status).toBe(201);
     const all = (await api().get(P('/salaries')).set(W.h)).body;
-    expect(all.items.map((x) => [x.name, x.personType]).sort()).toEqual([['Kamla Devi', 'staff'], ['Mr Sharma', 'teacher'], ['Mrs Gupta', 'teacher'], ['Ramesh Bhai', 'staff']]);
-    expect(all).toMatchObject({ withSalary: 3, withoutSalary: 1 });
-    expect((await api().get(P('/salaries?type=staff')).set(W.h)).body.items.map((x) => x.name).sort()).toEqual(['Kamla Devi', 'Ramesh Bhai']);
+    expect(all.items.map((x) => [x.name, x.personType]).sort()).toEqual([['Kamla Devi', 'staff'], ['Mr Sharma', 'teacher'], ['Mrs Gupta', 'teacher'], ['Ramesh Bhai', 'staff'], ['Tara Transport', 'staff']]); // the Transport officer is an employee too
+    expect(all).toMatchObject({ withSalary: 3, withoutSalary: 2 }); // Mrs Gupta and the officer have none yet
+    expect((await api().get(P('/salaries?type=staff')).set(W.h)).body.items.map((x) => x.name).sort()).toEqual(['Kamla Devi', 'Ramesh Bhai', 'Tara Transport']);
     expect((await api().get(P('/salaries?type=teachers&status=without')).set(W.h)).body.items.map((x) => x.name)).toEqual(['Mrs Gupta']);
     expect((await api().get(P(`/salaries/${kamla._id}`)).set(W.h)).body.person).toMatchObject({ name: 'Kamla Devi', designation: 'Sweeper', personType: 'staff' });
-    expect((await api().get(P('/summary')).set(W.h)).body).toMatchObject({ people: 4, teachers: 2, staff: 2, withSalary: 3, withoutSalary: 1 });
+    expect((await api().get(P('/summary')).set(W.h)).body).toMatchObject({ people: 5, teachers: 2, staff: 3, withSalary: 3, withoutSalary: 2 });
     expect((await api().post(P(`/salaries/${kamla._id}`)).set(tr.h).send({ basic: 1, effectiveFrom: '2026-04-01' })).status).toBe(403); // the transport officer does not run payroll
   });
 
   it('absences from the registers reduce pay automatically: a day absent costs a day, a half day costs half', async () => {
     const run = (await api().post(P('/runs')).set(W.h).send({ month: MONTH })).body;
     expect(run).toMatchObject({ month: MONTH, workingDays: 26, totals: { count: 3 } });
-    expect(run.skipped.map((s) => [s.name, s.reason])).toEqual([['Mrs Gupta', 'No salary set']]);
+    expect(run.skipped.map((s) => [s.name, s.reason]).sort()).toEqual([['Mrs Gupta', 'No salary set'], ['Tara Transport', expect.stringMatching(/^Joins on /)]]); // the officer started after this month
     const { payslips } = (await api().get(P(`/runs/${run._id}`)).set(W.h)).body;
     const by = (n) => payslips.find((p) => p.personName === n);
     // Mr Sharma: 26000 a month, absent 5 Oct (1 day) + half day 6 Oct = 1.5 days => 26000 x 1.5 / 26 = 1500

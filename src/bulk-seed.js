@@ -153,7 +153,7 @@ async function buildSchool(cfg, hashes, superAdmin) {
   const BANKS = [['SBIN', 'State Bank of India'], ['HDFC', 'HDFC Bank'], ['ICIC', 'ICICI Bank'], ['UTIB', 'Axis Bank'], ['PUNB', 'Punjab National Bank']];
   const bankOf = (name) => { if (rnd() < 0.08) return undefined; const [code, bankName] = pick(BANKS); return { accountName: name, accountNo: String(between(100000000000, 999999999999)), ifsc: `${code}0${String(between(0, 999999)).padStart(6, '0')}`, bankName }; };
   const idsOf = (esi) => ({ uan: rnd() < 0.85 ? String(between(100000000000, 999999999999)) : undefined, esiNo: esi && rnd() < 0.7 ? String(between(1000000000, 9999999999)) : undefined, pan: rnd() < 0.6 ? `${pick('ABCDEFGHJK')}${pick('ABCDEFGHJK')}${pick('ABCDEFGHJK')}P${pick('ABCDEFGHJK')}${between(1000, 9999)}${pick('ABCDEFGHJK')}` : undefined });
-  await bulk(M.Teacher, teachers.map((t) => ({ bank: bankOf(t.name), statutory: idsOf(false), _id: t._id, tenantId, userId: t.userId, employeeId: t.employeeId, name: t.name, email: `${t.employeeId.toLowerCase()}@${cfg.code}.school`, phone: `98${between(10000000, 99999999)}`, designation: t.designation, qualification: pick(['B.Ed', 'M.Sc, B.Ed', 'M.A, B.Ed', 'M.Com, B.Ed', 'B.Sc, B.Ed']), joiningDate: t.joiningDate, subjectIds: [subjects.get(t.subjectName)._id], status: 'active' })));
+  await bulk(M.Teacher, teachers.map((t, ix) => ({ house: HOUSE_NAMES[ix % HOUSE_NAMES.length], bank: bankOf(t.name), statutory: idsOf(false), _id: t._id, tenantId, userId: t.userId, employeeId: t.employeeId, name: t.name, email: `${t.employeeId.toLowerCase()}@${cfg.code}.school`, phone: `98${between(10000000, 99999999)}`, designation: t.designation, qualification: pick(['B.Ed', 'M.Sc, B.Ed', 'M.A, B.Ed', 'M.Com, B.Ed', 'B.Sc, B.Ed']), joiningDate: t.joiningDate, subjectIds: [subjects.get(t.subjectName)._id], status: 'active' })));
   const assignments = pairs.map((p) => ({ _id: oid(), tenantId, yearId, teacherId: p.teacher._id, sectionId: p.section._id, classId: p.cls._id, subjectId: subjects.get(p.subject)._id, offeringId: p.off._id, effectiveFrom: '2026-04-01', open: true }));
   pairs.forEach((p, i) => { p.assignmentId = assignments[i]._id; });
   await bulk(M.TeachingAssignment, assignments);
@@ -194,6 +194,11 @@ async function buildSchool(cfg, hashes, superAdmin) {
   await bulk(M.TimetableEntry, entries);
 
   // ── students (+ users, enrolments) ──
+  // each school names its own houses; the students and teachers are shared out among them
+  const HOUSE_SETS = { dpsr: ['Aravali', 'Nilgiri', 'Himalaya', 'Vindhya'], sunr: ['Ganga', 'Yamuna', 'Godavari', 'Kaveri'], gwvs: ['Ashoka', 'Akbar', 'Shivaji', 'Rana Pratap'] };
+  const HOUSE_NAMES = HOUSE_SETS[cfg.code] || HOUSE_SETS.dpsr;
+  const HOUSE_COLORS = ['#b45309', '#1d4ed8', '#0f766e', '#7c3aed'];
+  await bulk(M.House, HOUSE_NAMES.map((name, i) => ({ tenantId, name, color: HOUSE_COLORS[i % 4], status: 'active' })));
   const students = []; const enrolments = []; let adm = 1;
   for (const s of sections) {
     const names = [];
@@ -212,7 +217,7 @@ async function buildSchool(cfg, hashes, superAdmin) {
     });
   }
   await bulk(M.User, users);
-  await bulk(M.Student, students.map((st) => ({ _id: st._id, tenantId, userId: st.userId, admissionNo: st.admissionNo, name: st.name, dob: st.dob, gender: st.female ? 'female' : 'male', address: `${between(1, 99)}, ${pick(['Station Road', 'MG Road', 'Park Street', 'Nehru Nagar', 'Gandhi Marg'])}, ${cfg.city}`, phone: `97${between(10000000, 99999999)}`, admissionDate: '2026-04-10', house: pick(['Red', 'Blue', 'Green', 'Yellow']),
+  await bulk(M.Student, students.map((st, ix) => ({ _id: st._id, tenantId, userId: st.userId, admissionNo: st.admissionNo, name: st.name, dob: st.dob, gender: st.female ? 'female' : 'male', address: `${between(1, 99)}, ${pick(['Station Road', 'MG Road', 'Park Street', 'Nehru Nagar', 'Gandhi Marg'])}, ${cfg.city}`, phone: `97${between(10000000, 99999999)}`, admissionDate: '2026-04-10', house: HOUSE_NAMES[ix % HOUSE_NAMES.length],
     guardians: [{ name: `${pick(FIRST)} ${st.name.split(' ')[1]}`, relationship: pick(['Father', 'Mother']), phone: `98${between(10000000, 99999999)}`, isPrimary: true }], status: 'active' })));
   await bulk(M.StudentEnrolment, enrolments);
   stats.students = students.length; stats.teachers = teachers.length; stats.sections = sections.length; stats.timetable = entries.length;
@@ -393,7 +398,7 @@ async function buildSchool(cfg, hashes, superAdmin) {
   const D = (n) => desDocs.find((d) => d.name === n);
   const staffDocs = []; let staffNo = 1;
   const mkStaff = (designation, extra = {}) => { const d = D(designation); const st = { _id: oid(), tenantId, staffId: `S${String(staffNo++).padStart(4, '0')}`, name: `${pick(FIRST)} ${pick(LAST)}`, gender: pick(['male', 'female']), phone: `9${between(100000000, 999999999)}`, designationId: d._id, joiningDate: `${between(2012, 2025)}-0${between(1, 9)}-${between(10, 28)}`, address: `${between(1, 99)}, ${pick(['Kalawad Road', 'Mavdi', 'Raiya Road', 'Gondal Road'])}, ${cfg.city}`, idProof: `XXXX-XXXX-${between(1000, 9999)}`, status: 'active', createdBy: adminId, ...extra }; st.bank = bankOf(st.name); st.statutory = idsOf(true); st.userId = oid(); staffDocs.push(st); return st; };
-  for (const [name, n] of [['Sweeper', 12], ['Maid', 8], ['Gardener', 5], ['Security Guard', 6], ['Peon', 10], ['Office Clerk', 4], ['Lab Assistant', 4], ['Transport Maintainer', 3], ...(EXTRA[cfg.code] || []).filter((e) => e.group === 'general').map((e) => [e.name, 3])]) for (let k = 0; k < n; k++) mkStaff(name);
+  for (const [name, n] of [['Sweeper', 12], ['Maid', 8], ['Gardener', 5], ['Security Guard', 6], ['Peon', 10], ['Office Clerk', 4], ['Lab Assistant', 4], ['PT Teacher', 3], ['Accountant', 2], ['School Counsellor', 1], ['School Nurse', 1], ['Computer Operator', 2], ['Transport Maintainer', 3], ...(EXTRA[cfg.code] || []).filter((e) => e.group === 'general').map((e) => [e.name, 3])]) for (let k = 0; k < n; k++) mkStaff(name);
   const driverNo = () => `GJ0320${between(10, 24)}${between(100000, 999999)}`;
   const busDocs = []; const rideDocs = [];
   const exp = (days) => addDays(today, days);
@@ -415,9 +420,13 @@ async function buildSchool(cfg, hashes, superAdmin) {
   const running = busDocs.filter((b) => b.status === 'active');
   riders.forEach((st, i) => { const b = running[Math.floor(i / perBus) % running.length]; rideDocs.push({ tenantId, studentId: st._id, busId: b._id, stop: pick(b.stops).name, since: '2026-04-05', student: st }); });
   mkStaff('Driver', { licenseNo: driverNo(), licenseExpiry: exp(between(100, 600)) }); mkStaff('Conductor'); // spare crew, not yet on a bus
-  // a Staff portal login for everyone: staff.<code>.s0001 ... (they sign in at /staff/login)
-  await bulk(M.User, staffDocs.map((st) => ({ _id: st.userId, tenantId, role: 'staff', name: st.name, loginId: `${cfg.code}.${st.staffId.toLowerCase()}`, passwordHash: hashes.staff, mustChangePassword: false, status: 'active', failedLogins: 0, language: 'en', notificationPrefs: {}, createdBy: superAdmin })));
-  await bulk(M.Designation, desDocs); await bulk(M.StaffMember, staffDocs); await bulk(M.Counter, [{ tenantId, key: 'staff', seq: staffNo - 1 }]);
+  // the Staff portal is the office desk: only the office clerks have a sign-in (staff.<code>.s0001 ...); everyone else is on the books and on payroll
+  const deskStaff = staffDocs.filter((st) => D('Office Clerk') && String(st.designationId) === String(D('Office Clerk')._id)).slice(0, 2);
+  deskStaff.forEach((st) => { st.canMarkAttendance = true; });
+  staffDocs.forEach((st) => { if (!st.canMarkAttendance) delete st.userId; });
+  await bulk(M.User, deskStaff.map((st) => ({ _id: st.userId, tenantId, role: 'staff', name: st.name, loginId: `${cfg.code}.${st.staffId.toLowerCase()}`, passwordHash: hashes.staff, mustChangePassword: false, status: 'active', failedLogins: 0, language: 'en', notificationPrefs: {}, createdBy: superAdmin })));
+  await bulk(M.Designation, desDocs); await bulk(M.StaffMember, staffDocs);
+  for (const d of desDocs.filter((x) => x.group === 'teaching')) await M.Teacher.updateMany({ tenantId, designation: d.name }, { designationId: d._id }); // every teacher's rank is one the school has registered await bulk(M.Counter, [{ tenantId, key: 'staff', seq: staffNo - 1 }]);
   await bulk(M.Bus, busDocs); await bulk(M.StudentTransport, rideDocs.map(({ student: _student, ...r }) => r));
   // monthly transport fare for every rider (Finance bills it; each rider pays like they pay tuition)
   const busOfRide = new Map(busDocs.map((b) => [String(b._id), b]));

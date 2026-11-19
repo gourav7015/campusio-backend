@@ -17,7 +17,7 @@ import { teacherRoutes as leaveTeacher, adminRoutes as leaveAdmin } from './leav
 import { adminRoutes as homeworkAdmin, teacherRoutes as homeworkTeacher, studentRoutes as homeworkStudent } from './homework/homework.routes.js';
 import { adminRoutes as materialsAdmin, teacherRoutes as materialsTeacher, studentRoutes as materialsStudent } from './materials/materials.routes.js';
 import { adminRoutes as examsAdmin, teacherRoutes as examsTeacher, studentRoutes as examsStudent } from './exams/exams.routes.js';
-import { adminRoutes as commsAdmin, teacherRoutes as commsTeacher, studentRoutes as commsStudent } from './comms/comms.routes.js';
+import { adminRoutes as commsAdmin, teacherRoutes as commsTeacher, studentRoutes as commsStudent, calendarRead } from './comms/comms.routes.js';
 import { linkRoutes, downloadRoutes } from './files/files.routes.js';
 import adminTools from './admin-tools/admin.routes.js';
 import staffRoutes from './staff/staff.routes.js';
@@ -25,6 +25,8 @@ import { adminRoutes as payrollAdmin, teacherRoutes as payrollTeacher } from './
 import { transportRouter, studentRoutes as transportStudent } from './transport/transport.routes.js';
 import { adminRoutes as supportStaffAdmin } from './support-staff/support-staff.routes.js';
 import { adminRoutes as staffAttendanceAdmin } from './staff-attendance/staff-attendance.routes.js';
+import { adminRoutes as leaveGrantsAdmin } from './leave-grants/leave-grants.routes.js';
+import { adminRoutes as housesAdmin, teacherRoutes as housesTeacher } from './houses/houses.routes.js';
 import { adminRoutes as staffLeaveAdmin } from './staff-leave/staff-leave.routes.js';
 import staffPortal from './staff-portal/staff.routes.js';
 import insightRoutes from './insight/insight.routes.js';
@@ -41,18 +43,24 @@ import { teacherRoutes as schedTeacher, studentRoutes as schedStudent, adminRout
 import subAdminRoutes from './sub-admins/sub-admins.routes.js';
 import { subAdminGate } from './sub-admins/permissions.js';
 import { studentRoutes as paymentsStudent, webhookRoutes as paymentsWebhook } from './payments/payments.routes.js';
-import { requesterRoutes as ticketRequester, at } from './helpdesk/helpdesk.routes.js';
+import { adminRoutes as employeesAdmin } from './employees/employees.routes.js';
+import { attendanceRoutes, DESK_GROUPS } from './staff-attendance/staff-attendance.routes.js';
+import { requesterRoutes as ticketRequester, handlerRoutes as ticketHandler, at } from './helpdesk/helpdesk.routes.js';
+import { leaveDeskRoutes } from './staff-leave/staff-leave.routes.js';
 
 /** School Admin portal (and Super Admin acting on a chosen school). */
 const adminRouters = [
-  at('/helpdesk', ticketRequester('platform')),
-  subAdminRoutes, schedAdmin, classLifeAdmin, approvalRoutes, schoolInfoRead, schoolInfoAdmin, adminTools, staffRoutes, structureRoutes, studentsRoutes, teachersRoutes, assignmentsRoutes, timetableRoutes, attendanceAdmin, leaveAdmin,
+  at('/helpdesk', ticketRequester('platform')), at('/queries', ticketHandler('school')), employeesAdmin,
+  subAdminRoutes, schedAdmin, classLifeAdmin, approvalRoutes, schoolInfoRead, schoolInfoAdmin, adminTools, staffRoutes, structureRoutes, studentsRoutes, teachersRoutes, assignmentsRoutes, timetableRoutes, attendanceAdmin, leaveAdmin, leaveGrantsAdmin, housesAdmin,
   homeworkAdmin, materialsAdmin, examsAdmin, commsAdmin, payrollAdmin, supportStaffAdmin, staffAttendanceAdmin, staffLeaveAdmin, insightRoutes,
 ];
 /** Teacher portal: every query is scoped server-side to the teacher's own active assignments. */
-const teacherRouters = [at('/tickets', ticketRequester('platform')), schedTeacher, classLifeTeacher, schoolInfoRead, selfRoutes('teacher'), teacherPortal, attendanceTeacher, leaveTeacher, homeworkTeacher, materialsTeacher, examsTeacher, commsTeacher, payrollTeacher];
+const teacherRouters = [at('/tickets', ticketRequester('platform')), at('/queries', ticketRequester('school')), schedTeacher, classLifeTeacher, schoolInfoRead, selfRoutes('teacher'), teacherPortal, attendanceTeacher, leaveTeacher, housesTeacher, homeworkTeacher, materialsTeacher, examsTeacher, commsTeacher, payrollTeacher];
 /** Student portal: every query is scoped server-side to the signed-in student's own records. */
 const studentRouters = [paymentsStudent, at('/tickets', ticketRequester('platform')), schedStudent, classLifeStudent, schoolInfoRead, transportStudent, financeStudent, selfRoutes('student'), studentPortal, attendanceStudent, homeworkStudent, materialsStudent, examsStudent, commsStudent];
+
+/** The Staff portal is the office desk: only staff the School Admin has given the desk can use any of it. */
+const deskGate = (req, _res, next) => { if (!req.ctx.staff?.canMarkAttendance) throw forbidden('This account has not been given the office desk. Ask the School Admin.'); next(); };
 
 /** School Admin sees finance and library data but cannot change it. */
 const viewOnly = (req, _res, next) => {
@@ -72,10 +80,10 @@ export function mountModules(app, authenticate) {
   app.use('/api/school/transport', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, subAdminGate('transport'), adminContext, viewOnly, transportRouter);
   app.use('/api/school/library', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, subAdminGate('library'), adminContext, viewOnly, libraryRoutes);
   app.use('/api/school', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, subAdminGate(), adminContext, stack(adminRouters));
-  app.use('/api/finance', authenticate, requireRole('finance'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, financeRoutes]));
-  app.use('/api/library', authenticate, requireRole('library'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, libraryRoutes]));
-  app.use('/api/transport', authenticate, requireRole('transport'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, transportRouter]));
-  app.use('/api/staff', authenticate, requireRole('staff'), rejectActing, requireTenant, staffContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, staffPortal]));
+  app.use('/api/finance', authenticate, requireRole('finance'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, financeRoutes]));
+  app.use('/api/library', authenticate, requireRole('library'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, libraryRoutes]));
+  app.use('/api/transport', authenticate, requireRole('transport'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, transportRouter]));
+  app.use('/api/staff', authenticate, requireRole('staff'), rejectActing, requireTenant, staffContext, deskGate, stack([at('/attendance-desk', attendanceRoutes(DESK_GROUPS)), at('/leave', leaveDeskRoutes('general')), at('/queries', ticketHandler('school')), at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, staffPortal]));
   app.use('/api/teacher', authenticate, requireRole('teacher'), rejectActing, requireTenant, teacherContext, stack(teacherRouters));
   app.use('/api/student', authenticate, requireRole('student'), rejectActing, requireTenant, studentContext, stack(studentRouters));
   // The school's academic years (names and dates only), so any signed-in person can look back at a past session.

@@ -95,7 +95,7 @@ export async function dashboard(ctx) {
     },
     timetable: { rows: timetableRows, empty: !timetableRows.some((r) => !r.isBreak && !r.free) },
     attendance: { summary: att, calendar: calendarMonth },
-    homework: hwAll.slice(0, 5), overdueHomework: hwAll.filter((h) => h.state === 'overdue').length,
+    homework: hwAll.filter((h) => h.state !== 'overdue').slice(0, 10).map((h) => ({ _id: h._id, subject: h.subject, title: h.title, description: h.description, dueDate: h.dueDate, state: h.state, attachmentFiles: h.attachmentFiles })),
     fees: acct.charges.length ? { pending: acct.totals.pending, overdue: acct.totals.overdue, nextDue: acct.totals.nextDue } : null,
     toDo: { remarksToAcknowledge: pendingRemarks, unreadChats },
     library: { onLoan: loans.length, overdue: loans.filter((l) => l.dueDate < today).length },

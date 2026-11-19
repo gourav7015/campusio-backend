@@ -3,6 +3,16 @@ import rateLimit from 'express-rate-limit';
 import { config } from '../../core/config.js';
 import { authenticate } from '../../middleware/auth.js';
 import { publicUser } from '../../services/users.js';
+import { StaffMember, School } from '../../models/index.js';
+
+/** The signed-in person as the app sees them. A staff member also says whether they have been given the attendance desk. */
+async function shaped(u) {
+  const pu = publicUser(u);
+  if (u.role === 'staff') pu.canMarkAttendance = !!(await StaffMember.findOne({ userId: u._id, tenantId: u.tenantId }).select('canMarkAttendance').lean())?.canMarkAttendance;
+  // a teacher sees "Period attendance" only in a school that takes attendance period by period
+  if (u.role === 'teacher') pu.periodWise = !!(await School.findById(u.tenantId).select('settings.attendance.periodWise').lean())?.settings?.attendance?.periodWise;
+  return pu;
+}
 import { audit } from '../../services/audit.js';
 import { parse } from '../../core/utils.js';
 import * as v from './auth.validation.js';
@@ -18,12 +28,12 @@ r.post('/login', loginLimiter, async (req, res) => {
   const { user, token } = await svc.login(parse(v.loginBody, req.body), { userAgent: req.headers['user-agent'], ip: req.ip });
   req.user = user; req.tenantId = user.tenantId;
   await audit(req, 'auth.login', 'User', user._id, `${user.name} signed in`);
-  res.json({ token, user: publicUser(user), school: await svc.schoolBrief(user.tenantId) });
+  res.json({ token, user: await shaped(user), school: await svc.schoolBrief(user.tenantId) });
 });
 
 r.use(authenticate);
 
-r.get('/me', async (req, res) => res.json({ user: publicUser(req.user), school: await svc.schoolBrief(req.user.tenantId, true) }));
+r.get('/me', async (req, res) => res.json({ user: await shaped(req.user), school: await svc.schoolBrief(req.user.tenantId, true) }));
 
 r.post('/logout', async (req, res) => {
   req.session.revokedAt = new Date();

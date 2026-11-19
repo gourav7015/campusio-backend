@@ -6,10 +6,10 @@ import { forbidden } from '../../core/utils.js';
  */
 export const PERMISSIONS = {
   academics: { label: 'Years, classes, sections, subjects, timetable, promotion', paths: ['years', 'classes', 'sections', 'subjects', 'offerings', 'class-teachers', 'teaching-assignments', 'timetable', 'substitutions', 'promotions'] },
-  students: { label: 'Students and admissions', paths: ['students', 'imports', 'documents', 'remarks'] },
-  teachers: { label: 'Teachers and teacher leave', paths: ['teachers', 'leave', 'swaps', 'attendance-exceptions'] },
+  students: { label: 'Students and admissions', paths: ['students', 'houses', 'imports', 'documents', 'remarks'] },
+  teachers: { label: 'Teachers and teacher leave', paths: ['teachers', 'teacher-designations', 'employees', 'leave', 'leave-balances', 'swaps', 'attendance-exceptions'] },
   attendance: { label: 'Student attendance', paths: ['attendance', 'attendance-overview', 'monitors', 'period-attendance'] },
-  staff_attendance: { label: 'Staff and teacher attendance, staff leave, non-teaching staff', paths: ['staff-attendance', 'staff-leave', 'support-staff', 'designations', 'correct', 'month', 'punches', 'register'] },
+  staff_attendance: { label: 'Staff and teacher attendance, staff leave, non-teaching staff', paths: ['staff-attendance', 'staff-leave', 'transport-leave', 'leave-balances', 'employees', 'support-staff', 'designations', 'correct', 'month', 'punches', 'register'] },
   exams: { label: 'Examinations, homework and study materials', paths: ['exams', 'marks', 'report-cards', 'sheets', 'homework', 'materials'] },
   communication: { label: 'Announcements, calendar, messages', paths: ['announcements', 'events', 'messages', 'school-info', 'licenses'] },
   payroll: { label: 'Payroll and salaries', paths: ['payroll'] },

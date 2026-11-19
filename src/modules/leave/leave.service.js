@@ -1,4 +1,4 @@
-import { LeaveApplication, Teacher } from '../../models/index.js';
+import { LeaveApplication, LeaveGrant, Teacher } from '../../models/index.js';
 import { notFound, conflict, bad, forbidden, eachDate, isoDay } from '../../core/utils.js';
 import { notifyUsers } from '../../services/notify.js';
 
@@ -6,14 +6,30 @@ export function countDays(settings, start, end) {
   return eachDate(start, end).filter((d) => settings.workingDays.includes(isoDay(d))).length;
 }
 
+/** Working days a leave takes. A half day is one working date and counts 0.5. */
+export function leaveDays(settings, { startDate, endDate, halfDay }) {
+  if (halfDay) {
+    if (startDate !== endDate) throw bad('A half day is for one date: use the same start and end date');
+    if (countDays(settings, startDate, endDate) < 1) throw bad('That date is not a working day');
+    return 0.5;
+  }
+  const days = countDays(settings, startDate, endDate);
+  if (days < 1) throw bad('The selected dates contain no working days');
+  return days;
+}
+
 export async function balances(ctx, teacherId) {
   const approved = await LeaveApplication.find({
     tenantId: ctx.tenantId, teacherId, status: 'approved', startDate: { $gte: ctx.year.startDate }, endDate: { $lte: ctx.year.endDate },
   }).lean();
+  const extra = await LeaveGrant.find({ tenantId: ctx.tenantId, personType: 'teacher', personId: teacherId, yearKey: String(ctx.year._id) }).lean();
   const out = {};
-  for (const [type, allowance] of Object.entries(ctx.settings.leaveBalances)) {
+  // allowance = what the school settings give everyone + any extra leave the admin gave this teacher (granted, shown separately)
+  for (const [type, base] of Object.entries(ctx.settings.leaveBalances)) {
     const used = approved.filter((l) => l.leaveType === type).reduce((n, l) => n + (l.days || 0), 0);
-    out[type] = { allowance, used, remaining: Math.max(allowance - used, 0) };
+    const granted = extra.filter((g) => g.leaveType === type).reduce((n, g) => n + g.days, 0);
+    const allowance = base + granted;
+    out[type] = { allowance, base, granted, used, remaining: Math.max(allowance - used, 0) };
   }
   return out;
 }
@@ -21,8 +37,7 @@ export async function balances(ctx, teacherId) {
 export const listMine = (ctx) => LeaveApplication.find({ tenantId: ctx.tenantId, teacherId: ctx.teacher._id }).sort({ createdAt: -1 }).lean();
 
 export async function apply(ctx, body) {
-  const days = countDays(ctx.settings, body.startDate, body.endDate);
-  if (days < 1) throw bad('The selected dates contain no working days');
+  const days = leaveDays(ctx.settings, body);
   const overlap = await LeaveApplication.exists({
     tenantId: ctx.tenantId, teacherId: ctx.teacher._id, status: { $in: ['submitted', 'approved'] }, startDate: { $lte: body.endDate }, endDate: { $gte: body.startDate },
   });
@@ -30,7 +45,7 @@ export async function apply(ctx, body) {
   const bal = (await balances(ctx, ctx.teacher._id))[body.leaveType];
   if (bal && bal.allowance > 0 && days > bal.remaining) throw conflict(`Only ${bal.remaining} day(s) of ${body.leaveType} leave remain`);
   const leave = await LeaveApplication.create({
-    tenantId: ctx.tenantId, teacherId: ctx.teacher._id, userId: ctx.actorId, leaveType: body.leaveType, startDate: body.startDate, endDate: body.endDate,
+    tenantId: ctx.tenantId, teacherId: ctx.teacher._id, userId: ctx.actorId, leaveType: body.leaveType, startDate: body.startDate, endDate: body.endDate, halfDay: !!body.halfDay, halfSession: body.halfDay ? body.halfSession || 'second' : undefined,
     days, reason: body.reason, status: body.draft ? 'draft' : 'submitted',
   });
   return leave;

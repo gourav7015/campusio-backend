@@ -155,8 +155,9 @@ describe('timetable, substitutions, attendance and leave', () => {
       const ok = await api().post('/api/teacher/attendance/register/submit').set(W.teacher1.h).send({ sectionId: W.sec8A._id, date: d, entries: all });
       expect(ok.status).toBe(200);
       expect(ok.body.totals).toMatchObject({ present: 1, absent: 1, late: 1 });
-      // submitted registers are locked
-      expect((await api().put('/api/teacher/attendance/register').set(W.teacher1.h).send({ sectionId: W.sec8A._id, date: d, entries: all })).status).toBe(409);
+      // the class teacher may reopen a submitted register; saving it unchanged changes nothing
+      const same = await api().put('/api/teacher/attendance/register').set(W.teacher1.h).send({ sectionId: W.sec8A._id, date: d, entries: all });
+      expect(same.status).toBe(200); expect(same.body).toMatchObject({ edited: true, changed: 0 });
       const sum = (await api().get('/api/student/attendance/summary').set(W.studentLogins[0].h)).body;
       expect(sum).toMatchObject({ absent: 1, workingDays: 1, percentage: 0 });
       const lateStudent = (await api().get('/api/student/attendance/summary').set(W.studentLogins[1].h)).body;
@@ -166,16 +167,16 @@ describe('timetable, substitutions, attendance and leave', () => {
       W.attDate = d;
     });
 
-    it('submitted attendance is locked for teachers; the admin corrects it with a reason and full history', async () => {
+    it('the admin corrects a submitted register with a reason and full history; the teacher has the same register editable', async () => {
       const d = W.attDate;
       const sid = W.students[0].student._id;
       const body = { sectionId: W.sec8A._id, date: d, studentId: sid, status: 'present', reason: 'Parent brought a note' };
-      // teacher: no direct edit, not even the class teacher, not even today
-      expect((await api().put('/api/teacher/attendance/register').set(W.teacher1.h).send({ sectionId: W.sec8A._id, date: d, entries: [] })).status).toBe(409);
+      // the class teacher edits her own register directly (see 42-teacher-edits-register); the other teachers cannot
+      expect((await api().put('/api/teacher/attendance/register').set(W.teacher2.h).send({ sectionId: W.sec8A._id, date: d, entries: [] })).status).toBe(403);
       expect((await api().post('/api/teacher/attendance/correct').set(W.teacher1.h).send(body)).status).toBe(404); // the route no longer exists
       expect((await api().post('/api/school/attendance/correct').set(W.teacher1.h).send(body)).status).toBe(403);
       const reg = (await api().get(regQ(W.sec8A._id, d)).set(W.teacher1.h)).body;
-      expect(reg).toMatchObject({ canEdit: false, canCorrect: false });
+      expect(reg).toMatchObject({ canEdit: true, canCorrect: false });
       // the class teacher asks the admin instead
       const reqCorr = await api().post('/api/teacher/attendance/request-correction').set(W.teacher1.h).send({ sectionId: W.sec8A._id, date: d, note: 'Aarav was present, I marked him absent by mistake' });
       expect(reqCorr.status).toBe(201);

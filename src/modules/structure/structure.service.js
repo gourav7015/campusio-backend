@@ -5,7 +5,7 @@ import {
 } from '../../models/index.js';
 import { notFound, conflict, bad } from '../../core/utils.js';
 import { settingsOf } from '../../services/context.js';
-import { levelOf } from '../../core/grades.js';
+import { levelOf, streamOf } from '../../core/grades.js';
 import { normaliseComponents } from '../../core/components.js';
 
 const owned = async (Model, tenantId, id, label) => {
@@ -53,7 +53,7 @@ export async function closeYear(tenantId, id) {
 export const listClasses = (tenantId) => ClassModel.find({ tenantId }).sort({ level: 1, name: 1 });
 export async function createClass(tenantId, body) {
   if (await ClassModel.exists({ tenantId, name: body.name })) throw conflict(`${body.name} already exists`);
-  return ClassModel.create({ tenantId, name: body.name, level: levelOf(body.name) });
+  return ClassModel.create({ tenantId, name: body.name, level: levelOf(body.name), stream: streamOf(body.name) || undefined });
 }
 export async function updateClass(tenantId, id, body) {
   const c = await owned(ClassModel, tenantId, id, 'Class');

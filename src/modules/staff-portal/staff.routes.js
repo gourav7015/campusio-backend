@@ -1,21 +1,23 @@
 import { Router } from 'express';
-import { parse } from '../../core/utils.js';
 import { z } from 'zod';
-import * as v from '../staff-leave/staff-leave.validation.js';
-import * as leave from '../staff-leave/staff-leave.service.js';
-import * as pay from '../payroll/payroll.service.js';
-import { personAttendance } from '../staff-attendance/staff-attendance.service.js';
-import { StaffLeave } from '../../models/index.js';
-import { selfPunchRoutes } from '../staff-punch/staff-punch.routes.js';
+import { parse, forbidden } from '../../core/utils.js';
+import { StaffLeave, LeaveApplication } from '../../models/index.js';
+import { getRegister } from '../staff-attendance/staff-attendance.service.js';
+import { listEmployees } from '../employees/employees.service.js';
+import { handlerSummary } from '../helpdesk/helpdesk.service.js';
+import { listStaff } from '../support-staff/support-staff.service.js';
 
-/** The Staff portal: a drivers', conductors', maids' or sweepers' own record. Everything is scoped to the signed-in person. */
+/**
+ * The Staff portal is the office desk: a member of staff the School Admin has given the desk works for the admin from here.
+ * They take the attendance of teachers and non-teaching staff, record and look after the leave of non-teaching staff, look people up
+ * in the employee list, and answer the queries teachers send to the office. It is not a personal portal: there is no check-in,
+ * no own attendance, no payslips. Transport crew are never part of it. Every route here is behind the desk gate (modules/index.js).
+ */
 const r = Router();
-const me = (req) => req.ctx.staff;
 
 r.get('/profile', async (req, res) => {
   const { staff, designation } = req.ctx;
-  res.json({ name: staff.name, staffId: staff.staffId, designation: designation?.name, group: req.ctx.group, phone: staff.phone, address: staff.address, joiningDate: staff.joiningDate, licenseNo: staff.licenseNo, licenseExpiry: staff.licenseExpiry,
-    bank: staff.bank?.accountNo ? { bankName: staff.bank.bankName, accountNo: `••••${String(staff.bank.accountNo).slice(-4)}`, ifsc: staff.bank.ifsc } : null, statutory: { uan: staff.statutory?.uan, esiNo: staff.statutory?.esiNo } });
+  res.json({ name: staff.name, staffId: staff.staffId, designation: designation?.name, phone: staff.phone, address: staff.address, joiningDate: staff.joiningDate });
 });
 r.patch('/profile', async (req, res) => {
   const b = parse(z.object({ phone: z.string().trim().max(20).optional(), address: z.string().trim().max(300).optional() }), req.body);
@@ -24,32 +26,33 @@ r.patch('/profile', async (req, res) => {
   res.json({ ok: true });
 });
 
-r.use(selfPunchRoutes((req) => ({ type: 'staff', id: req.ctx.staff._id, group: req.ctx.group })));
-r.get('/my-attendance', async (req, res) => res.json(await personAttendance(req.ctx, 'staff', me(req)._id, { joiningDate: me(req).joiningDate, group: req.ctx.group })));
-
+/** Where each register stands today, what waits for a decision, and how many queries are open. */
 r.get('/dashboard', async (req, res) => {
-  const { ctx } = req; const staff = me(req);
-  const [att, balances, pending, last, revised] = await Promise.all([
-    personAttendance({ ...ctx, year: ctx.year || { startDate: `${ctx.today.slice(0, 4)}-01-01`, endDate: `${ctx.today.slice(0, 4)}-12-31` } }, 'staff', staff._id, { joiningDate: staff.joiningDate, group: ctx.group }),
-    leave.balances(ctx, staff._id), StaffLeave.countDocuments({ tenantId: ctx.tenantId, staffId: staff._id, status: 'submitted' }),
-    pay.myPayslips(ctx).then((x) => x[0] || null),
-    pay.mySalary(ctx).then((x) => x.revisedAfterLatest).catch(() => null),
+  const { ctx } = req;
+  const groups = [['teachers', 'Teachers'], ['general', 'Non-teaching staff'], ['office', 'Officers']];
+  const regs = await Promise.all(groups.map(async ([g, name]) => {
+    const x = await getRegister(ctx, g, ctx.today);
+    return { group: g, name, people: x.totals.people, present: x.totals.present + x.totals.late + x.totals.halfDay, absent: x.totals.absent, leave: x.totals.leave, submitted: x.session?.status === 'submitted', blocked: x.blocked || null };
+  }));
+  const [staffLeave, teacherLeave, queries] = await Promise.all([
+    StaffLeave.countDocuments({ tenantId: ctx.tenantId, group: 'general', status: 'submitted' }),
+    LeaveApplication.countDocuments({ tenantId: ctx.tenantId, status: 'submitted' }),
+    handlerSummary('school', ctx.tenantId),
   ]);
-  res.json({ today: ctx.today, name: staff.name, designation: ctx.designation?.name, attendance: att.summary, balances, pendingLeave: pending, lastPayslip: last && { id: last._id, month: last.month, net: last.net, status: last.status }, salaryRevision: revised });
+  res.json({ today: ctx.today, name: ctx.staff.name, designation: ctx.designation?.name, registers: regs, pendingStaffLeave: staffLeave, pendingTeacherLeave: teacherLeave, openQueries: queries.count });
 });
 
-// leave
-r.get('/leave', async (req, res) => res.json({ balances: await leave.balances(req.ctx, me(req)._id), applications: await leave.listMine(req.ctx) }));
-r.post('/leave', async (req, res) => res.status(201).json(await leave.apply(req.ctx, parse(v.applyBody, req.body))));
-r.post('/leave/:id/cancel', async (req, res) => res.json(await leave.cancel(req.ctx, req.params.id)));
+/** The non-teaching staff, for choosing whose leave to record. */
+r.get('/people', async (req, res) => res.json(await listStaff(req.ctx, 'general', { status: 'active', page: 1, limit: 200 })));
 
-// pay
-r.get('/salary', async (req, res) => res.json(await pay.mySalary(req.ctx)));
-r.get('/payslips', async (req, res) => res.json(await pay.myPayslips(req.ctx)));
-r.get('/payslips/:id/pdf', async (req, res) => {
-  const p = await pay.ownPayslip(req.ctx, req.params.id);
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="payslip-${p.payslipNo}.pdf"`);
-  await pay.renderPayslip(req.tenantId, p, res);
+/** The employee list: teachers, non-teaching staff and officers. The transport crew belong to the Transport officer, and what anyone earns is not here. */
+const query = z.object({
+  category: z.enum(['teaching', 'non_teaching', 'office']).default('teaching'), q: z.string().trim().max(100).optional(), designation: z.string().trim().max(60).optional(),
+  status: z.enum(['active', 'inactive', 'all']).default('active'), limit: z.coerce.number().int().min(1).max(1000).default(500),
 });
+r.get('/employees', async (req, res) => {
+  if (req.query.category === 'transport') throw forbidden('The transport crew are looked after by the Transport officer');
+  res.json(await listEmployees(req.ctx, parse(query, req.query)));
+});
+
 export default r;

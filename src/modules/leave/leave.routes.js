@@ -3,10 +3,11 @@ import { parse } from '../../core/utils.js';
 import { audit } from '../../services/audit.js';
 import * as v from './leave.validation.js';
 import * as svc from './leave.service.js';
+import { grantsOf } from '../leave-grants/leave-grants.service.js';
 import { affectedPeriods } from '../timetable/timetable.service.js';
 
 export const teacherRoutes = Router();
-teacherRoutes.get('/leave', async (req, res) => res.json({ applications: await svc.listMine(req.ctx), balances: await svc.balances(req.ctx, req.ctx.teacher._id) }));
+teacherRoutes.get('/leave', async (req, res) => res.json({ applications: await svc.listMine(req.ctx), balances: await svc.balances(req.ctx, req.ctx.teacher._id), grants: await grantsOf(req.ctx, 'teacher', req.ctx.teacher._id) }));
 teacherRoutes.post('/leave', async (req, res) => {
   const l = await svc.apply(req.ctx, parse(v.applyBody, req.body));
   await audit(req, 'leave.applied', 'LeaveApplication', l._id, `Leave ${l.startDate} to ${l.endDate}`);

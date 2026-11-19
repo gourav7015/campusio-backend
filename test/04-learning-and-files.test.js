@@ -50,7 +50,8 @@ describe('homework, study materials, files and announcements', () => {
       expect(detail.editHistory.length).toBeGreaterThanOrEqual(2);
       expect((await api().patch(`/api/teacher/homework/${hwId}`).set(W.teacher2.h).send({ title: 'Hacked title' })).status).toBe(403);
       expect((await api().get(`/api/teacher/homework/${hwId}`).set(W.teacher2.h)).status).toBe(403);
-      expect((await api().delete(`/api/teacher/homework/${hwId}`).set(W.teacher1.h)).status).toBe(409); // published → archive instead
+      // another teacher cannot delete it; its own teacher can, whatever its state (homework is kept simple)
+      expect((await api().delete(`/api/teacher/homework/${hwId}`).set(W.teacher2.h)).status).toBe(403);
       const adminEdit = await api().patch(`/api/school/homework/${hwId}`).set(W.h).send({ instructions: 'Show working' });
       expect(adminEdit.status).toBe(200);
     });
