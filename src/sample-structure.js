@@ -11,7 +11,7 @@
 const [base = 'http://localhost:4000', loginId, password, housesArg] = process.argv.slice(2);
 if (!loginId || !password) { console.error('Usage: node src/sample-structure.js <api url> <admin login id> <password> [houses]'); process.exit(1); }
 const HOUSES = (housesArg ? housesArg.split(',').map((x) => x.trim()) : ['Aravali', 'Nilgiri', 'Himalaya', 'Vindhya']);
-const COLORS = ['#b45309', '#1d4ed8', '#0f766e', '#7c3aed', '#be123c', '#0369a1'];
+const COLORS = ['#dc2626', '#2563eb', '#16a34a', '#eab308'];
 
 let token;
 async function call(method, path, body) {

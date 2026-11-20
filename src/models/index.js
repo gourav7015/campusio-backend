@@ -784,6 +784,19 @@ export const SchoolProfile = model('SchoolProfile', new Schema({
   finance: { gstin: String, pan: String, tan: String, bankName: String, accountName: String, accountNo: String, ifsc: String, branch: String, upi: String },
 }, opts));
 
+/**
+ * How the school's printed documents (fee receipt, payslip) look: its letterhead, and which uploaded stamp and signature goes on which document.
+ * Stamps and signatures are images the School Admin uploads once to a small library and then assigns per document.
+ */
+export const DocumentSettings = model('DocumentSettings', new Schema({
+  tenantId: { type: ObjectId, ref: 'School', required: true, unique: true },
+  schoolName: String, addressLine: String, affiliationNo: String, contactLine: String, color: { type: String, default: '#1e3a8a' },
+  logoFileId: ref('File'),
+  assets: [new Schema({ kind: { type: String, enum: ['stamp', 'signature'], required: true }, name: { type: String, required: true }, fileId: ref('File', { required: true }) }, { _id: true })],
+  receipt: { signatureId: ObjectId, caption: String, stampId: ObjectId, note: { type: Boolean, default: true } },
+  payslip: { leftSignatureId: ObjectId, leftCaption: String, rightSignatureId: ObjectId, rightCaption: String, stampId: ObjectId, note: { type: Boolean, default: true } },
+}, opts));
+
 export const License = model('License', new Schema({
   tenantId: tenant, name: { type: String, required: true, trim: true }, authority: { type: String, enum: ['state', 'central', 'local', 'other'], default: 'state' },
   issuedBy: String, number: String, issuedOn: String, validUntil: String, fileId: ref('File'), notes: String,

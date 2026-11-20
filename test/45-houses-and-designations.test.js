@@ -12,10 +12,14 @@ describe('Houses and ranks are the school\'s own', () => {
     const r = (await api().get(A('/houses')).set(W.h)).body;
     expect(r.houses).toEqual([]); expect(r.unplaced.students).toBe(3);
     houses = [];
-    for (const name of ['Aravali', 'Nilgiri']) {
-      const c = await api().post(A('/houses')).set(W.h).send({ name, color: '#1d4ed8', motto: 'Together' });
+    for (const [name, color] of [['Aravali', '#1d4ed8'], ['Nilgiri', '#dc2626']]) {
+      const c = await api().post(A('/houses')).set(W.h).send({ name, color, motto: 'Together' });
       expect(c.status).toBe(201); houses.push(c.body);
     }
+    // each house has its own colour
+    expect((await api().post(A('/houses')).set(W.h).send({ name: 'Vindhya', color: '#DC2626' })).status).toBe(409);
+    expect((await api().patch(A(`/houses/${houses[0]._id}`)).set(W.h).send({ color: '#dc2626' })).status).toBe(409);
+    expect((await api().patch(A(`/houses/${houses[0]._id}`)).set(W.h).send({ color: '#1d4ed8', motto: 'Together' })).status).toBe(200); // keeping its own is fine
     expect((await api().post(A('/houses')).set(W.h).send({ name: 'aravali' })).status).toBe(409); // the same name in other capitals
     expect((await api().post(A('/houses')).set(W.teacher1.h).send({ name: 'Himalaya' })).status).toBe(403);
   });

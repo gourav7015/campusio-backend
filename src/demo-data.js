@@ -59,7 +59,7 @@ export async function buildDemo(base) {
   const asg = {};
   for (const secKey of ['8A', '8B', '7A', '6A']) for (const [, , , code, subject] of teacherDefs) asg[`${secKey}${code}`] = await admin('POST', '/teaching-assignments', { teacherId: T[code]._id, sectionId: sec[secKey]._id, subject, weeklyPeriods: code === 'MATH' ? 6 : 4, effectiveFrom: '2026-04-01' });
   // the school names its own houses; students and teachers are placed in them below
-  for (const [name, color, motto] of [['Aravali', '#b45309', 'Strong as the hills'], ['Nilgiri', '#1d4ed8', 'Rise above'], ['Himalaya', '#0f766e', 'Reach the summit'], ['Vindhya', '#7c3aed', 'Courage always']]) await admin('POST', '/houses', { name, color, motto });
+  for (const [name, color, motto] of [['Aravali', '#dc2626', 'Strong as the hills'], ['Nilgiri', '#2563eb', 'Rise above'], ['Himalaya', '#16a34a', 'Reach the summit'], ['Vindhya', '#eab308', 'Courage always']]) await admin('POST', '/houses', { name, color, motto });
   const subj = Object.fromEntries((await admin('GET', '/subjects')).map((s) => [s.name, s]));
   await admin('PUT', `/sections/${sec['8A']._id}/class-teacher`, { teacherId: T.MATH._id, effectiveFrom: '2026-04-01' });
   await admin('PUT', `/sections/${sec['8B']._id}/class-teacher`, { teacherId: T.ENG._id, effectiveFrom: '2026-04-01' });

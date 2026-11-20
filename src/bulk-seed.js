@@ -197,7 +197,7 @@ async function buildSchool(cfg, hashes, superAdmin) {
   // each school names its own houses; the students and teachers are shared out among them
   const HOUSE_SETS = { dpsr: ['Aravali', 'Nilgiri', 'Himalaya', 'Vindhya'], sunr: ['Ganga', 'Yamuna', 'Godavari', 'Kaveri'], gwvs: ['Ashoka', 'Akbar', 'Shivaji', 'Rana Pratap'] };
   const HOUSE_NAMES = HOUSE_SETS[cfg.code] || HOUSE_SETS.dpsr;
-  const HOUSE_COLORS = ['#b45309', '#1d4ed8', '#0f766e', '#7c3aed'];
+  const HOUSE_COLORS = ['#dc2626', '#2563eb', '#16a34a', '#eab308'];
   await bulk(M.House, HOUSE_NAMES.map((name, i) => ({ tenantId, name, color: HOUSE_COLORS[i % 4], status: 'active' })));
   const students = []; const enrolments = []; let adm = 1;
   for (const s of sections) {

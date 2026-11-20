@@ -1,4 +1,7 @@
 import PDFDocument from 'pdfkit';
+import { loadLook } from '../../services/documents/look.js';
+import { drawPayslip } from '../../services/documents/payslip.js';
+import { niceDate } from '../../services/documents/common.js';
 import { StaffLeave, PayLevel, SalaryRevision, PayrollRun, Payslip, Teacher, LeaveApplication, CalendarEvent, School, StaffMember, Designation, StaffAttendanceSession, StaffAttendanceRecord } from '../../models/index.js';
 import { bad, conflict, notFound, forbidden, eachDate, escapeRegex, round2, toCsv, monthOf } from '../../core/utils.js';
 import { notifyUsers } from '../../services/notify.js';
@@ -380,30 +383,40 @@ export async function ownPayslip(ctx, id) {
   return p;
 }
 
-const inr = (n) => `Rs ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const MODE_LABEL = { cash: 'cash', upi: 'UPI', cheque: 'cheque', bank_transfer: 'bank transfer', card: 'card', other: 'other' };
+const mask = (no) => (no ? `···· ${String(no).slice(-4)}` : '');
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** Everything printed on one payslip: the slip, the person's own details, and this financial year (April to March) up to the slip's month. */
+export async function payslipDocument(tenantId, p) {
+  const Person = p.personType === 'staff' ? StaffMember : Teacher;
+  const person = await Person.findById(p.personId).select('joiningDate bank statutory').lean();
+  const [yy, mm] = p.month.split('-').map(Number);
+  const fyStartYear = mm >= 4 ? yy : yy - 1; const fyStart = `${fyStartYear}-04`;
+  const slips = await Payslip.find({ tenantId, personId: p.personId, month: { $gte: fyStart, $lte: p.month } }).select('gross net status paidAmount').lean();
+  const ytdLabel = fyStartYear === yy ? `Apr – ${MON[mm - 1]} ${yy}` : `Apr ${fyStartYear} – ${MON[mm - 1]} ${yy}`;
+  const lastDay = new Date(Date.UTC(yy, mm, 0)).getUTCDate();
+  const bank = person?.bank?.accountNo ? `${person.bank.bankName ? `${person.bank.bankName} ` : ''}${mask(person.bank.accountNo)}` : '';
+  const pan = person?.statutory?.pan ? `${person.statutory.pan.slice(0, 5)}••••${person.statutory.pan.slice(-1)}` : '';
+  const inr = (n) => `₹ ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const paymentLine = p.status === 'paid' ? `Paid by ${MODE_LABEL[p.mode] || String(p.mode || '').replace('_', ' ')} on ${niceDate(p.paidOn)}${p.reference ? ` · Ref ${p.reference}` : ''}`
+    : p.status === 'partial' ? `Part paid: ${inr(p.paidAmount)} of ${inr(p.net)}; balance ${inr(p.net - p.paidAmount)}` : 'Payment pending';
+  return {
+    month: p.month, payslipNo: p.payslipNo, name: p.personName, employeeId: p.employeeId, designation: p.designation, levelName: p.levelName, joinedOn: person?.joiningDate, pan, bank,
+    period: `1 – ${lastDay} ${MON[mm - 1]} ${yy}`, workingDays: p.workingDays, paidDays: p.paidDays, unpaidDays: p.unpaidDays,
+    earnings: p.earnings || [], deductions: p.deductions || [], adjustments: p.adjustments || [], lossOfPay: p.lossOfPay, gross: p.gross, totalDeductions: p.totalDeductions, net: p.net,
+    paymentLine: p.payments?.length > 1 ? `${paymentLine} (${p.payments.length} payments)` : paymentLine,
+    employerPf: p.statutory?.pf?.employer ?? null, employerEsi: p.statutory?.esi?.employer ?? null,
+    ytdLabel, ytdGross: round2(slips.reduce((n, x) => n + (x.gross || 0), 0)), ytdNet: round2(slips.reduce((n, x) => n + (x.status === 'paid' ? x.net : x.paidAmount || 0), 0)),
+    generatedOn: new Date().toLocaleDateString('en-CA'),
+  };
+}
+
 export async function renderPayslip(tenantId, p, res) {
-  const school = await School.findById(tenantId);
-  const doc = new PDFDocument({ size: 'A4', margin: 48 });
+  const [look, data] = await Promise.all([loadLook(tenantId), payslipDocument(tenantId, p)]);
+  const doc = new PDFDocument({ size: 'A4', margin: 0, info: { Title: `Payslip ${p.payslipNo}` } });
   doc.pipe(res);
-  const monthLabel = new Date(`${p.month}-01T00:00:00Z`).toLocaleString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
-  doc.fontSize(16).text(school?.name || 'School', { align: 'center' }).fontSize(12).text(`PAYSLIP — ${monthLabel}`, { align: 'center' }).moveDown();
-  doc.fontSize(10).text(`Payslip no: ${p.payslipNo}`).text(`Name: ${p.personName} (${p.employeeId})`).text(`Designation: ${p.designation || '-'}${p.levelName ? ` · Level ${p.levelName}` : ''}`);
-  doc.text(`Working days: ${p.workingDays} · Unpaid days: ${p.unpaidDays} · Paid days: ${p.paidDays}`).moveDown();
-  const row = (a, b, bold) => { doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').text(a, 48, doc.y, { continued: true }).text(b, { align: 'right' }); };
-  row('Earnings', 'Amount', true);
-  for (const e of p.earnings) row(e.label, inr(e.amount));
-  for (const a of p.adjustments.filter((x) => x.type === 'earning')) row(`${a.label}${a.reason ? ` (${a.reason})` : ''}`, inr(a.amount));
-  row('Gross earnings', inr(p.gross), true);
-  doc.moveDown(0.5); row('Deductions', 'Amount', true);
-  for (const d of p.deductions) row(d.label, inr(d.amount));
-  if (p.lossOfPay) row(`Loss of pay (${p.unpaidDays} day${p.unpaidDays === 1 ? '' : 's'})`, inr(p.lossOfPay));
-  for (const a of p.adjustments.filter((x) => x.type === 'deduction')) row(`${a.label}${a.reason ? ` (${a.reason})` : ''}`, inr(a.amount));
-  row('Total deductions', inr(p.totalDeductions), true);
-  doc.moveDown().fontSize(12); row('NET PAY', inr(p.net), true);
-  doc.fontSize(10).font('Helvetica').moveDown();
-  doc.text(p.status === 'paid' ? `Paid on ${p.paidOn} by ${String(p.mode || '').replace('_', ' ')}${p.reference ? ` · Ref ${p.reference}` : ''}` : p.status === 'partial' ? `Part paid: ${inr(p.paidAmount)} of ${inr(p.net)}; balance ${inr(p.net - p.paidAmount)}` : 'Payment pending');
-  if (p.payments?.length > 1 || (p.payments?.length === 1 && p.status !== 'paid')) for (const x of p.payments) doc.text(`  ${x.paidOn}: ${inr(x.amount)} (${String(x.mode || '').replace('_', ' ')})`);
-  doc.moveDown().fontSize(9).fillColor('#555').text('This is a computer generated payslip.');
+  drawPayslip(doc, look, data);
   doc.end();
 }
 

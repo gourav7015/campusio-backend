@@ -33,8 +33,16 @@ export async function listHouses(ctx) {
   return { houses: houses.map((h) => ({ ...h, students: s.get(h.name) || 0, teachers: t.get(h.name) || 0 })), unplaced: { students: unplacedStudents, teachers: unplacedTeachers } };
 }
 
+/** Each house has its own colour: two houses cannot share one. */
+async function ensureColourFree(tenantId, color, exceptId) {
+  if (!color) return;
+  const other = await House.findOne({ tenantId, color: new RegExp(`^${escapeRegex(color)}$`, 'i'), ...(exceptId ? { _id: { $ne: exceptId } } : {}) }).lean();
+  if (other) throw conflict(`That colour already belongs to ${other.name}. Pick a different one.`);
+}
+
 export async function createHouse(ctx, body) {
   if (await byName(ctx.tenantId, body.name)) throw conflict(`"${body.name}" already exists`);
+  await ensureColourFree(ctx.tenantId, body.color);
   return House.create({ tenantId: ctx.tenantId, ...body });
 }
 
@@ -43,6 +51,7 @@ export async function updateHouse(ctx, id, patch) {
   const h = await House.findOne({ _id: id, tenantId: ctx.tenantId });
   if (!h) throw notFound('House not found');
   if (patch.name && patch.name.toLowerCase() !== h.name.toLowerCase() && await byName(ctx.tenantId, patch.name)) throw conflict(`"${patch.name}" already exists`);
+  if (patch.color && patch.color.toLowerCase() !== (h.color || '').toLowerCase()) await ensureColourFree(ctx.tenantId, patch.color, h._id);
   if (patch.status === 'archived' && (await Student.exists({ tenantId: ctx.tenantId, house: h.name, status: 'active' }) || await Teacher.exists({ tenantId: ctx.tenantId, house: h.name, status: 'active' }))) throw conflict('People are still in this house. Move them first.');
   const old = h.name;
   Object.assign(h, patch);

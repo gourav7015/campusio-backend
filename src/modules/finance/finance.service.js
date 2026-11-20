@@ -7,6 +7,8 @@ import {
 import { notFound, conflict, bad, round2, escapeRegex, eachDate, addDays, daysBetween, toCsv } from '../../core/utils.js';
 import { nextSeq, settingsOf, loadSchool } from '../../services/context.js';
 import { notifyUsers } from '../../services/notify.js';
+import { loadLook } from '../../services/documents/look.js';
+import { drawReceipt } from '../../services/documents/receipt.js';
 
 const money = round2;
 export const outstanding = (c) => money(c.amount - (c.concession || 0) - (c.paidAmount || 0));
@@ -582,22 +584,32 @@ export async function exportDues(ctx, q) {
 }
 
 // ───────────── receipts ─────────────
+const MODE_LABEL = { cash: 'cash', upi: 'UPI', cheque: 'cheque', bank_transfer: 'bank transfer', card: 'card', online: 'online payment', other: 'other' };
 export async function renderReceipt(tenantId, payment, res) {
-  const [school, student] = await Promise.all([School.findById(tenantId), Student.findById(payment.studentId)]);
-  const enr = await StudentEnrolment.findOne({ tenantId, studentId: payment.studentId, status: 'active' }).sort({ createdAt: -1 });
-  const [sec, cls] = enr ? await Promise.all([Section.findById(enr.sectionId), ClassModel.findById(enr.classId)]) : [];
-  const doc = new PDFDocument({ size: 'A5', margin: 40 });
+  const [look, student] = await Promise.all([loadLook(tenantId), Student.findById(payment.studentId).lean()]);
+  const enr = await StudentEnrolment.findOne({ tenantId, studentId: payment.studentId, status: 'active' }).sort({ createdAt: -1 }).lean();
+  const [sec, cls, year, charges, open] = await Promise.all([
+    enr ? Section.findById(enr.sectionId).lean() : null, enr ? ClassModel.findById(enr.classId).lean() : null, enr?.yearId ? AcademicYear.findById(enr.yearId).select('name').lean() : null,
+    StudentCharge.find({ tenantId, _id: { $in: payment.allocations.map((a) => a.chargeId).filter(Boolean) } }).select('period').lean(),
+    StudentCharge.find({ tenantId, studentId: payment.studentId, status: 'open' }).sort({ dueDate: 1 }).lean(),
+  ]);
+  const period = new Map(charges.map((c) => [String(c._id), c.period]));
+  const pending = outstanding;
+  const due = open.filter((c) => pending(c) > 0);
+  const first = due.find((c) => c.dueDate);
+  const reversal = payment.kind === 'reversal';
+  const today = new Date().toLocaleDateString('en-CA');
+  const doc = new PDFDocument({ size: 'A5', margin: 0, info: { Title: `Receipt ${payment.receiptNo}` } });
   doc.pipe(res);
-  doc.fontSize(16).text(school?.name || 'School', { align: 'center' });
-  doc.fontSize(12).text(payment.kind === 'reversal' ? 'PAYMENT REVERSAL' : 'FEE RECEIPT', { align: 'center' }).moveDown();
-  doc.fontSize(10).text(`Receipt no: ${payment.receiptNo}`).text(`Date: ${payment.paidOn}`).text(`Student: ${student?.name} (${student?.admissionNo})`).text(`Class: ${cls?.name || '-'} ${sec?.name || ''}`).moveDown();
-  doc.font('Helvetica-Bold').text('Particulars', 40, doc.y, { continued: true }).text('Amount', { align: 'right' }).font('Helvetica');
-  for (const a of payment.allocations) doc.text(a.label, 40, doc.y, { continued: true }).text(`${a.amount.toFixed(2)}`, { align: 'right' });
-  doc.moveDown().font('Helvetica-Bold').text(`${payment.kind === 'reversal' ? 'Reversed' : 'Total received'}: ${payment.amount.toFixed(2)}`, { align: 'right' }).font('Helvetica');
-  doc.text(`Mode: ${payment.mode.replace('_', ' ')}${payment.reference ? ` · Ref ${payment.reference}` : ''}`);
-  if (payment.status === 'reversed') doc.fillColor('red').text(`This receipt was reversed: ${payment.reversalReason}`).fillColor('black');
-  if (payment.kind === 'reversal') doc.text(`Reason: ${payment.reversalReason}`);
-  doc.moveDown().fontSize(9).fillColor('#555').text(`Received by ${payment.receivedByName || '-'}. This is a computer generated receipt.`);
+  drawReceipt(doc, look, {
+    kind: payment.kind, receiptNo: payment.receiptNo, paidOn: payment.paidOn, student: student?.name, guardian: student?.guardians?.[0]?.name, admissionNo: student?.admissionNo,
+    classLabel: cls ? `${cls.name}${sec ? `-${sec.name}` : ''}` : '', yearName: year?.name ? String(year.name).replace('-', ' – ') : '',
+    allocations: payment.allocations.map((a) => ({ label: a.label, period: period.get(String(a.chargeId)) || '', amount: a.amount })), total: payment.amount,
+    payLine: `${reversal ? 'Refunded' : 'Paid'} by ${MODE_LABEL[payment.mode] || payment.mode}${payment.reference ? ` · Ref ${payment.reference}` : ''} · ${reversal ? 'Recorded' : 'Received'} by ${payment.receivedByName || '—'}`,
+    reversalReason: reversal || payment.status === 'reversed' ? payment.reversalReason : '', showBalance: !reversal, balanceOn: today,
+    outstanding: money(due.reduce((n, c) => n + pending(c), 0)),
+    next: first ? { label: first.label, dueDate: first.dueDate, amount: money(due.filter((c) => c.dueDate === first.dueDate).reduce((n, c) => n + pending(c), 0)) } : null,
+  });
   doc.end();
 }
 

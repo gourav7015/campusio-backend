@@ -236,12 +236,16 @@ export async function studentMarks(ctx, studentId) {
 }
 
 // ───────────── homework of a day, by subject ─────────────
-export async function sectionHomework(ctx, sectionId, date) {
+const mondayOf = (d) => { const wd = new Date(`${d}T00:00:00Z`).getUTCDay(); return addDays(d, -((wd + 6) % 7)); };
+
+/** The strip of days is a fixed week (Mon–Sun, `weekStart` or the week of `date`), so picking a day never moves it. */
+export async function sectionHomework(ctx, sectionId, date, weekStart) {
+  const start = mondayOf(weekStart || date);
   const section = await loadSection(ctx, sectionId);
   const base = { tenantId: ctx.tenantId, sectionId: section._id, status: { $in: ['published', 'archived'] } };
   const [rows, counts] = await Promise.all([
     Homework.find({ ...base, $or: [{ assignedDate: date }, { dueDate: date }] }).populate('subjectId', 'name').populate('teacherId', 'name').lean(),
-    Homework.aggregate([{ $match: { ...base, assignedDate: { $gte: addDays(date, -13), $lte: date } } }, { $group: { _id: '$assignedDate', n: { $sum: 1 } } }]),
+    Homework.aggregate([{ $match: { ...base, assignedDate: { $gte: start, $lte: addDays(start, 6) } } }, { $group: { _id: '$assignedDate', n: { $sum: 1 } } }]),
   ]);
   const n = new Map(counts.map((c) => [c._id, c.n]));
   const offered = await TeachingAssignment.find({ tenantId: ctx.tenantId, sectionId: section._id, open: true }).populate('subjectId', 'name').lean();
@@ -250,7 +254,7 @@ export async function sectionHomework(ctx, sectionId, date) {
   // subjects that set nothing that day are shown too, so the admin sees at a glance who did and did not give homework
   const given = new Set(items.filter((i) => i.kind !== 'due').map((i) => i.subject));
   return {
-    date, items, days: Array.from({ length: 14 }, (_, i) => { const d = addDays(date, -13 + i); return { date: d, count: n.get(d) || 0 }; }),
+    date, items, weekStart: start, days: Array.from({ length: 7 }, (_, i) => { const d = addDays(start, i); return { date: d, count: n.get(d) || 0 }; }),
     subjectsWithout: [...new Set(offered.map((a) => a.subjectId?.name))].filter((s) => s && !given.has(s)).sort(),
   };
 }

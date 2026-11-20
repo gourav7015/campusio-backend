@@ -169,7 +169,13 @@ describe('Transport and the School Admin class/student views', () => {
     const day = (await api().get(A(`/sections/${sec}/homework?date=${TODAY}`)).set(W.h)).body;
     expect(day.items.map((i) => [i.subject, i.title, i.kind])).toEqual([['Mathematics', 'Algebra worksheet', 'assigned']]);
     expect(day.subjectsWithout).toEqual(['English']);
-    expect(day.days).toHaveLength(14); expect(day.days[13]).toEqual({ date: TODAY, count: 1 });
+    // the strip is one fixed Monday–Sunday week: picking another day in it, or asking for another week, never moves it
+    expect(day.days).toHaveLength(7); expect(new Date(`${day.weekStart}T00:00:00Z`).getUTCDay()).toBe(1);
+    expect(day.days.find((d) => d.date === TODAY)).toEqual({ date: TODAY, count: 1 });
+    const other = (await api().get(A(`/sections/${sec}/homework?date=${day.weekStart}`)).set(W.h)).body;
+    expect(other.days.map((d) => d.date)).toEqual(day.days.map((d) => d.date));
+    const prev = (await api().get(A(`/sections/${sec}/homework?date=${addDays(day.weekStart, -7)}&weekStart=${addDays(day.weekStart, -7)}`)).set(W.h)).body;
+    expect(prev.days[0].date).toBe(addDays(day.weekStart, -7)); expect(prev.days.every((d) => d.count === 0)).toBe(true);
   });
 
   it('class-wise library borrowers: who has borrowed, who never has', async () => {
