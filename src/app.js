@@ -19,7 +19,7 @@ export function createApp() {
   app.use(apiVersionAlias);
   app.use(requestTimeout(config.requestTimeoutMs));
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
-  app.use(cors({ origin: config.corsOrigin, credentials: false, exposedHeaders: ['x-request-id', 'content-disposition'] }));
+  app.use(cors({ origin: config.corsOrigin, credentials: false, exposedHeaders: ['x-request-id', 'content-disposition'], maxAge: 86400 })); // maxAge: the browser remembers the permission check for a day, so it is not repeated before every call
   // the payment gateway's webhook is signed over the exact bytes it sent, so keep them for that one address
   app.use(express.json({ limit: '2mb', verify: (req, _res, buf) => { if (req.originalUrl.startsWith('/api/payments/webhook') || req.originalUrl.startsWith('/api/v1/payments/webhook')) req.rawBody = buf; } }));
   app.use('/api', noStore, rejectOperatorKeys, idempotency);

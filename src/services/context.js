@@ -1,5 +1,6 @@
 import { School, AcademicYear, TeachingAssignment, ClassTeacherAssignment, StudentEnrolment, Counter, Teacher, Student, defaultSettings, StaffMember } from '../models/index.js';
 import { isId, todayStr, notFound } from '../core/utils.js';
+import { memo } from '../core/memo.js';
 
 export function settingsOf(school) {
   const d = defaultSettings();
@@ -15,10 +16,14 @@ export function settingsOf(school) {
   };
 }
 
+/**
+ * The school record. Read on every request, so it is kept in memory for a few seconds (see core/memo.js). Each caller gets its own copy to read:
+ * code that changes the school loads it itself with School.findById, never through here.
+ */
 export async function loadSchool(tenantId) {
-  const school = await School.findById(tenantId);
-  if (!school) throw notFound('School not found');
-  return school;
+  const snap = await memo(`school:${tenantId}`, () => School.findById(tenantId).lean());
+  if (!snap) throw notFound('School not found');
+  return School.hydrate(snap);
 }
 
 export async function schoolToday(tenantId) {
@@ -28,7 +33,8 @@ export async function schoolToday(tenantId) {
 }
 
 export async function getCurrentYear(tenantId) {
-  return (await AcademicYear.findOne({ tenantId, isCurrent: true })) || (await AcademicYear.findOne({ tenantId }).sort({ startDate: -1 }));
+  const snap = await memo(`year:${tenantId}`, async () => (await AcademicYear.findOne({ tenantId, isCurrent: true }).lean()) || (await AcademicYear.findOne({ tenantId }).sort({ startDate: -1 }).lean()));
+  return snap ? AcademicYear.hydrate(snap) : null;
 }
 
 /** ?yearId= (must belong to tenant) else the current year */

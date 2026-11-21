@@ -9,6 +9,8 @@ import { verifyToken } from '../core/tokens.js';
 import { sealBytes, openBytes } from '../core/crypto.js';
 import { File } from '../models/index.js';
 import { bad } from '../core/utils.js';
+import { Readable } from 'node:stream';
+import { objectStoreEnabled, putObject, getObject, hasObject, deleteObject } from './objectStore.js';
 
 fs.mkdirSync(config.uploadDir, { recursive: true });
 
@@ -57,11 +59,11 @@ export async function saveFile(req, file, { kind, ownerType, ownerId, docType, v
   const enc = config.encryptFiles;
   let bytes = await fs.promises.readFile(file.path);
   if (enc) bytes = sealBytes(bytes);
-  // the bytes live in the database (GridFS), not on this server's disk: every server, and every deploy, sees the same files
-  const gridId = await putBytes(bytes, file.originalname || file.filename);
+  // the bytes live in the object store (R2) when it is set up, else in the database (GridFS): never on this server's disk, so every server and every deploy sees the same files
+  const where = await storeBytes(bytes, { name: file.originalname || file.filename, mime: file.mimetype, tenantId });
   await fs.promises.unlink(file.path).catch(() => {}); // the temporary upload
   return File.create({
-    enc, store: 'gridfs', gridId, tenantId,
+    enc, ...where, tenantId,
     originalName: file.originalname, mime: file.mimetype, size: file.size, storageKey: file.filename,
     kind, ownerType, ownerId: ownerId ? String(ownerId) : undefined, docType, visibility, uploadedBy: req.user._id,
   });
@@ -77,21 +79,31 @@ export function putBytes(buf, filename = 'file') {
     up.end(buf);
   });
 }
+/** Where new bytes go: R2 when it is configured, otherwise GridFS. Returns the fields to save on the File record. */
+export async function storeBytes(bytes, { name = 'file', mime, tenantId } = {}) {
+  if (!objectStoreEnabled()) return { store: 'gridfs', gridId: await putBytes(bytes, name) };
+  const objectKey = `t/${tenantId || 'platform'}/${crypto.randomUUID()}`;
+  await putObject(objectKey, bytes, mime);
+  return { store: 'r2', objectKey };
+}
 const collect = (stream) => new Promise((resolve, reject) => { const c = []; stream.on('data', (d) => c.push(d)); stream.on('error', reject); stream.on('end', () => resolve(Buffer.concat(c))); });
 
 export async function removeFileBytes(f) {
   try {
-    if (f.store === 'gridfs' && f.gridId) await bucket().delete(f.gridId);
+    if (f.store === 'r2' && f.objectKey) await deleteObject(f.objectKey);
+    else if (f.store === 'gridfs' && f.gridId) await bucket().delete(f.gridId);
     else await fs.promises.unlink(filePath(f));
   } catch { /* already gone */ }
 }
 /** Is the stored content still there? */
 export async function fileAvailable(f) {
+  if (f.store === 'r2') return !!f.objectKey && hasObject(f.objectKey);
   if (f.store === 'gridfs') return !!f.gridId && (await mongoose.connection.db.collection('files.files').countDocuments({ _id: f.gridId }, { limit: 1 })) > 0;
   return fs.existsSync(filePath(f));
 }
 /** The file's bytes as they are stored (encrypted, if they were). */
-async function rawBytes(f) {
+export async function rawBytes(f) {
+  if (f.store === 'r2') { const r = await getObject(f.objectKey); if (!r) throw new Error('File is no longer available'); return Buffer.from(await r.arrayBuffer()); }
   if (f.store === 'gridfs') return collect(bucket().openDownloadStream(f.gridId));
   return fs.promises.readFile(filePath(f));
 }
@@ -102,6 +114,15 @@ export async function readFileBytes(f) {
 }
 /** Sends the file's content as the answer to a request (headers are set by the caller). */
 export async function sendStoredFile(res, f) {
+  if (f.store === 'r2') {
+    const r = await getObject(f.objectKey);
+    if (!r) return res.status(404).json({ error: 'File is no longer available', code: 'NOT_FOUND' });
+    if (f.enc) return res.send(openBytes(Buffer.from(await r.arrayBuffer())));
+    const len = r.headers.get('content-length'); if (len) res.setHeader('Content-Length', len);
+    const body = Readable.fromWeb(r.body);
+    body.on('error', () => { if (!res.headersSent) res.status(404).json({ error: 'File is no longer available', code: 'NOT_FOUND' }); else res.destroy(); });
+    return body.pipe(res);
+  }
   if (f.enc || f.store !== 'gridfs') {
     if (!f.enc) return res.sendFile(filePath(f)); // an older file on this server's disk
     return res.send(await readFileBytes(f));

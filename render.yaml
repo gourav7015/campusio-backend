@@ -21,6 +21,11 @@ services:
       - { key: RESEND_API_KEY, sync: false }
       - { key: MAIL_FROM, sync: false }
       - { key: PAYMENT_PROVIDER, value: "off" }
+      # uploaded files: set all four to keep them in a private Cloudflare R2 bucket instead of the database (see docs/OPERATIONS.md)
+      - { key: R2_ACCOUNT_ID, sync: false }
+      - { key: R2_BUCKET, sync: false }
+      - { key: R2_ACCESS_KEY_ID, sync: false }
+      - { key: R2_SECRET_ACCESS_KEY, sync: false }
   - type: web
     name: campusio-api-staging
     runtime: node

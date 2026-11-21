@@ -35,6 +35,18 @@ export const config = {
   jwtSecretPrevious: process.env.JWT_SECRET_PREVIOUS || '',
   /** A request that has not answered after this long is ended with a clear message (exports and PDFs get longer). */
   requestTimeoutMs: Number(process.env.REQUEST_TIMEOUT_MS || 60000),
+  /**
+   * Where uploaded files live. With the Cloudflare R2 settings present, new files go to an R2 bucket (private: nothing is public, the app checks who may
+   * open a file and then streams it). Without them, files go into MongoDB (GridFS). FILE_STORE=gridfs forces the database even when R2 is set.
+   * R2_ENDPOINT can point at any S3-compatible store (used by the tests); otherwise it is built from R2_ACCOUNT_ID.
+   */
+  objectStore: (() => {
+    const endpoint = (process.env.R2_ENDPOINT || (process.env.R2_ACCOUNT_ID ? `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com` : '')).replace(/\/$/, '');
+    const o = { endpoint, bucket: process.env.R2_BUCKET || '', accessKeyId: process.env.R2_ACCESS_KEY_ID || '', secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '' };
+    return { ...o, enabled: !!(o.endpoint && o.bucket && o.accessKeyId && o.secretAccessKey) && process.env.FILE_STORE !== 'gridfs' };
+  })(),
+  /** Seconds the school record, subscription and current academic year are kept in memory (0 = always read the database). Off in tests unless a test turns it on. */
+  memoSeconds: Number(process.env.MEMO_SECONDS ?? (process.env.NODE_ENV === 'test' ? 0 : 20)),
   /** Where to post a short message when the server starts, fails repeatedly or is slow: a Slack, Discord or any "incoming webhook" address. */
   alertWebhook: process.env.ALERT_WEBHOOK_URL || '',
   /** Run pending database migrations when the server starts. */

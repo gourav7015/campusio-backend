@@ -10,6 +10,13 @@ API on Render (or any Node host or the Dockerfile), database on MongoDB Atlas, s
 
 ## Backups and restore (do the drill once a quarter)
 - **Make one:** `npm run backup -- ../backups/$(date +%F)` writes every collection, **including uploaded files**, which are stored in the database (GridFS) since 21 Nov 2026. Add `--files` only to also copy an old uploads folder. Keep copies away from the server and from this computer.
+- **Files in a private R2 bucket (optional, recommended once files grow):** the database holds only each file's record; the bytes live in a Cloudflare R2 bucket, so the database stays small and files stop passing through the database on every download.
+  1. Cloudflare → R2 → create a bucket (for example `atkaksha-files`), leave **public access off**.
+  2. R2 → Manage API tokens → create a token with **Object Read & Write** limited to that bucket. Note the Access Key ID, Secret Access Key and your Account ID.
+  3. In Render set `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and redeploy. New uploads now go to R2; files already in the database keep working.
+  4. To move the existing files: on a computer with the same settings in `backend/.env`, run `npm run files:migrate -- --to-r2 --dry-run`, then `npm run files:migrate -- --to-r2`. Each file is copied to R2 first and only then removed from the database (`-- --keep-source` keeps the database copy).
+  5. **Backups:** `npm run backup` covers the database only. Files in R2 are not in it. R2 keeps its own copies, but enable object versioning or copy the bucket on a schedule if you need your own backup. Unset the four settings (or `FILE_STORE=gridfs`) to send new uploads back to the database.
+  Files are always read through the app, never from a public address, and `ENCRYPT_FILES=true` still encrypts them before they reach R2.
 - **Files from before 21 Nov 2026** sit on the disk of the computer that accepted the upload and are invisible to other servers (this is why photos and licence copies could be missing on the live site). Run `npm run files:migrate -- --dry-run`, then `npm run files:migrate`, **on the computer that holds the `uploads` folder**, once. It moves each file into the database and lists any whose bytes are not there (upload those again).
 - **Check it:** `npm run backup:verify -- <folder>` confirms every collection is complete.
 - **Restore into an empty database** (a new Atlas cluster or a local one): set `MONGO_URI` to it, then `npm run backup:restore -- <folder> --files`. It refuses a database that already has data unless you add `--replace`.

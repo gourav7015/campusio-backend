@@ -34,7 +34,7 @@
 ## Still open (21 Nov 2026)
 * **Not done in code, needs an account or a person:** Atlas backups on a paid plan (the `npm run backup` command is the independent copy), error-tracking and uptime services (Platform → Errors and the alert webhook cover the basics), an outside penetration test, a lawyer's review of the privacy pages and the breach plan, a Razorpay account for live payments.
 * **MongoDB transactions:** a crash in the middle of year-end promotion or an import can still leave a partial run (re-running skips what was done). Needs a replica-set connection and a rewrite of those services.
-* **Files** are stored in the database (GridFS, optionally encrypted), so every server sees them and they are in every backup. Heavy use will make the database large (Atlas free tier is 512 MB); object storage and a virus scan are not built.
+* **Files** are stored in a private R2 bucket when the R2 settings are present (see OPERATIONS.md; R2 files are not part of `npm run backup`), otherwise in the database (GridFS, optionally encrypted), so every server sees them and they are in every backup. Heavy use will make the database large (Atlas free tier is 512 MB); object storage and a virus scan are not built.
 * **Rate-limit counters** live in each server process.
 * **Issued documents** are drawn when opened, so changing the letterhead changes old receipts and payslips.
 * **Hard deletes** still exist for some records (for example deleting a house or a draft); money, attendance and results are never deleted.

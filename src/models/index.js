@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { GRADE_NAMES, levelOf, streamOf } from '../core/grades.js';
+import { forgetOnWrite } from '../core/memo.js';
 
 const { Schema } = mongoose;
 const ObjectId = Schema.Types.ObjectId;
@@ -46,20 +47,20 @@ export const defaultSettings = () => ({
   studentCanEditProfile: [], // students only look: their details are kept up to date by the school (a school may allow phone, address or email here)
 });
 
-export const School = model('School', new Schema({
+export const School = model('School', forgetOnWrite(new Schema({
   name: { type: String, required: true, trim: true },
   code: { type: String, required: true, unique: true, lowercase: true, trim: true },
   address: String, phone: String, email: String, logoUrl: String, board: String,
   status: { type: String, enum: ['active', 'suspended', 'archived'], default: 'active' },
   settings: { type: Schema.Types.Mixed, default: defaultSettings },
-}, opts));
+}, opts)));
 
-export const Subscription = model('Subscription', new Schema({
+export const Subscription = model('Subscription', forgetOnWrite(new Schema({
   schoolId: { type: ObjectId, ref: 'School', required: true, unique: true },
   plan: { type: String, default: 'starter' },
   status: { type: String, enum: ['trial', 'active', 'expired', 'cancelled'], default: 'trial' },
   startsOn: String, expiresOn: String,
-}, opts));
+}, opts)));
 
 export const User = model('User', new Schema({
   tenantId: { type: ObjectId, ref: 'School', index: true, default: null },
@@ -119,7 +120,7 @@ export const AcademicYear = model('AcademicYear', (() => {
     classWindows: { type: [new Schema({ classId: ref('Class', { required: true }), startDate: { type: String, required: true }, endDate: { type: String, required: true } }, { _id: false })], default: [] },
   }, opts);
   s.index({ tenantId: 1, name: 1 }, { unique: true });
-  return s;
+  return forgetOnWrite(s);
 })());
 
 export const ClassModel = model('Class', (() => {
@@ -552,7 +553,7 @@ export const File = model('File', new Schema({
   kind: { type: String, enum: ['homework', 'material', 'document', 'photo', 'announcement', 'leave', 'ticket'], required: true },
   ownerType: String, ownerId: String, docType: String, visibility: { type: String, enum: ['owner', 'school'], default: 'owner' },
   uploadedBy: ref('User'), enc: { type: Boolean, default: false }, // enc: the stored bytes are encrypted with the data key
-  store: { type: String, enum: ['disk', 'gridfs'], default: 'disk' }, gridId: ObjectId, // gridfs: the bytes are in the database (collection files.files / files.chunks); disk: an older upload on one server's disk
+  store: { type: String, enum: ['disk', 'gridfs', 'r2'], default: 'disk' }, gridId: ObjectId, objectKey: String, // r2: the bytes are in the object store under objectKey; gridfs: the bytes are in the database (collection files.files / files.chunks); disk: an older upload on one server's disk
 }, opts));
 
 export const ImportBatch = model('ImportBatch', new Schema({

@@ -5,6 +5,8 @@ import { User, Session, School, Subscription, AuditLog } from '../models/index.j
 import { HttpError, forbidden, isId } from '../core/utils.js';
 import { todayStr } from '../core/utils.js';
 import { audit } from '../services/audit.js';
+import { memo } from '../core/memo.js';
+import { loadSchool } from '../services/context.js';
 
 const unauth = (m = 'Authentication required') => new HttpError(401, m, 'UNAUTHENTICATED');
 
@@ -20,9 +22,10 @@ export async function authenticate(req, _res, next) {
   if (user.status !== 'active') throw unauth('This account has been disabled');
 
   if (user.role !== 'super_admin') {
-    const school = await School.findById(user.tenantId);
+    // the school and its subscription change rarely and are read on every request: kept in memory for a few seconds (cleared whenever either is saved)
+    const school = await loadSchool(user.tenantId).catch((e) => { if (e?.status === 404) return null; throw e; });
     if (!school || school.status !== 'active') throw new HttpError(403, 'This school account is not active', 'SCHOOL_INACTIVE');
-    const sub = await Subscription.findOne({ schoolId: school._id });
+    const sub = await memo(`sub:${school._id}`, () => Subscription.findOne({ schoolId: school._id }).lean());
     if (sub && (sub.status === 'cancelled' || sub.status === 'expired' || (sub.expiresOn && sub.expiresOn < todayStr()))) {
       throw new HttpError(403, 'This school subscription is not active', 'SUBSCRIPTION_INACTIVE');
     }
