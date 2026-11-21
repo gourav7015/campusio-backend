@@ -38,6 +38,8 @@ import teacherPortal from './teacher-portal/teacher.routes.js';
 import studentPortal from './student-portal/student.routes.js';
 import { approvalRoutes } from './finance/expenses.routes.js';
 import { readRoutes as schoolInfoRead, adminRoutes as schoolInfoAdmin } from './school-info/school-info.routes.js';
+import { adminRoutes as privacyAdmin } from './privacy/privacy.routes.js';
+import { adminRoutes as authAdmin } from './auth/auth.admin.routes.js';
 import { adminRoutes as documentSettingsAdmin } from './document-settings/document-settings.routes.js';
 import { teacherRoutes as classLifeTeacher, studentRoutes as classLifeStudent, adminRoutes as classLifeAdmin } from './class-life/class-life.routes.js';
 import { teacherRoutes as schedTeacher, studentRoutes as schedStudent, adminRoutes as schedAdmin } from './scheduling/scheduling.routes.js';
@@ -52,7 +54,7 @@ import { leaveDeskRoutes } from './staff-leave/staff-leave.routes.js';
 /** School Admin portal (and Super Admin acting on a chosen school). */
 const adminRouters = [
   at('/helpdesk', ticketRequester('platform')), at('/queries', ticketHandler('school')), employeesAdmin,
-  subAdminRoutes, schedAdmin, classLifeAdmin, approvalRoutes, schoolInfoRead, schoolInfoAdmin, documentSettingsAdmin, adminTools, staffRoutes, structureRoutes, studentsRoutes, teachersRoutes, assignmentsRoutes, timetableRoutes, attendanceAdmin, leaveAdmin, leaveGrantsAdmin, housesAdmin,
+  subAdminRoutes, schedAdmin, classLifeAdmin, approvalRoutes, schoolInfoRead, schoolInfoAdmin, documentSettingsAdmin, authAdmin, privacyAdmin, adminTools, staffRoutes, structureRoutes, studentsRoutes, teachersRoutes, assignmentsRoutes, timetableRoutes, attendanceAdmin, leaveAdmin, leaveGrantsAdmin, housesAdmin,
   homeworkAdmin, materialsAdmin, examsAdmin, commsAdmin, payrollAdmin, supportStaffAdmin, staffAttendanceAdmin, staffLeaveAdmin, insightRoutes,
 ];
 /** Teacher portal: every query is scoped server-side to the teacher's own active assignments. */

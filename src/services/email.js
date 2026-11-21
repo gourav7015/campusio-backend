@@ -1,13 +1,14 @@
 import { config } from '../core/config.js';
 import { logger } from '../core/logger.js';
+import { EmailOutbox } from '../models/index.js';
 
 /**
  * Outgoing email. Emails are queued and sent one at a time in the background, so a request never waits for the mail provider and a
  * failure never breaks the action that caused the email. With no RESEND_API_KEY (and no test transport) nothing is sent.
  */
-const MAX_TRIES = 3;
-const queue = [];
+const MAX_TRIES = 4;
 let running = null;
+const creating = new Set(); // inserts still in flight, so flushEmails can wait for them
 let transport = null; // tests (or another provider) can replace this: async (msg) => ({ id })
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -19,6 +20,7 @@ async function resendTransport(msg) {
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${config.mail.resendKey}`, 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(15000),
     body: JSON.stringify({ from: config.mail.from, to: [msg.to], subject: msg.subject, html: msg.html, text: msg.text, ...(msg.replyTo ? { reply_to: msg.replyTo } : {}) }),
   });
   if (res.status === 429 || res.status >= 500) throw new RetryableError(`Resend ${res.status}`);
@@ -30,33 +32,57 @@ async function resendTransport(msg) {
 export function setMailTransport(fn) { transport = fn; }
 export const isEmailEnabled = () => !!transport || (!!config.mail.resendKey && !!config.mail.from);
 
+/** The next email that is due (or whose sender died mid-send), claimed so that no other server takes it. */
+function claimNext() {
+  const now = new Date();
+  return EmailOutbox.findOneAndUpdate(
+    { $or: [{ status: 'pending', nextAt: { $lte: now } }, { status: 'processing', leaseUntil: { $lt: now } }] },
+    { $set: { status: 'processing', leaseUntil: new Date(now.getTime() + 90 * 1000) }, $inc: { tries: 1 } },
+    { sort: { nextAt: 1 }, new: true },
+  );
+}
+
 async function drain() {
-  while (queue.length) {
-    const item = queue.shift();
+  for (let item = await claimNext(); item; item = await claimNext()) {
+    const msg = { to: item.to, subject: item.subject, html: item.html, text: item.text, replyTo: item.replyTo };
     try {
-      await (transport || resendTransport)(item.msg);
-      logger.info('email sent', { to: item.msg.to, subject: item.msg.subject });
+      await (transport || resendTransport)(msg);
+      await EmailOutbox.updateOne({ _id: item._id }, { $set: { status: 'sent', sentAt: new Date() }, $unset: { leaseUntil: 1 } });
+      logger.info('email sent', { to: item.to, subject: item.subject });
     } catch (e) {
-      item.tries += 1;
-      if (e instanceof RetryableError && item.tries < MAX_TRIES) { queue.push(item); await sleep(Math.max(config.mail.gapMs, 1) * 2 * item.tries); } else logger.error('email failed', { to: item.msg.to, subject: item.msg.subject, error: e.message });
+      if (e instanceof RetryableError && item.tries < MAX_TRIES) {
+        const wait = config.mail.gapMs ? Math.min(30000 * 2 ** (item.tries - 1), 15 * 60 * 1000) : 0; // 30 s, 1 min, 2 min…
+        await EmailOutbox.updateOne({ _id: item._id }, { $set: { status: 'pending', nextAt: new Date(Date.now() + wait), lastError: e.message }, $unset: { leaseUntil: 1 } });
+      } else {
+        await EmailOutbox.updateOne({ _id: item._id }, { $set: { status: 'failed', lastError: e.message }, $unset: { leaseUntil: 1 } });
+        logger.error('email failed', { to: item.to, subject: item.subject, error: e.message });
+      }
     }
     if (config.mail.gapMs) await sleep(config.mail.gapMs);
   }
 }
-function kick() {
-  if (running) return;
-  running = drain().finally(() => { running = null; if (queue.length) kick(); });
+/** Start sending what is waiting (a no-op if a send loop is already running here). */
+export function kick() {
+  if (running || !isEmailEnabled()) return;
+  running = drain().catch((e) => logger.warn('email loop failed', { error: e.message })).finally(() => { running = null; });
 }
 
-/** Queue an email. Returns false (and does nothing) when email is not set up or there is no address. */
+/** Queue an email in the database. Returns false (and does nothing) when email is not set up or there is no address. */
 export function enqueueEmail({ to, subject, html, text, replyTo }) {
   if (!isEmailEnabled() || !to || !/^\S+@\S+\.\S+$/.test(to)) return false;
-  queue.push({ tries: 0, msg: { to, subject: String(subject).slice(0, 200), html, text, replyTo: replyTo || config.mail.replyTo || undefined } });
-  kick();
+  const p = EmailOutbox.create({ to, subject: String(subject).slice(0, 200), html, text, replyTo: replyTo || config.mail.replyTo || undefined })
+    .then(() => kick()).catch((e) => logger.warn('email could not be queued', { error: e.message }));
+  creating.add(p); p.finally(() => creating.delete(p));
   return true;
 }
 /** Wait until everything queued so far has been sent (used by tests and on shutdown). */
-export async function flushEmails() { while (running) await running; }
+export async function flushEmails() {
+  while (creating.size || running) { await Promise.all([...creating]); if (running) await running; }
+  // anything still due (for example after a retry) gets one more pass
+  if (isEmailEnabled() && await EmailOutbox.exists({ status: 'pending', nextAt: { $lte: new Date() } })) { kick(); while (running) await running; }
+}
+/** Pick up anything left in the outbox by a restart or a retry, every few seconds. */
+export function startEmailWorker(everyMs = 15000) { const t = setInterval(kick, everyMs); t.unref(); kick(); return () => clearInterval(t); }
 
 /** A plain, readable email body in both HTML and text. */
 export function renderEmail({ heading, lines = [], button, footer }) {

@@ -1,5 +1,7 @@
 # Architecture
 
+> Written early in the project. Read together with `/ARCHITECTURE.md` in the workspace folder, which is current. Parts below that are out of date: the **Staff portal** is now a delegated office desk (no personal check-in, leave or payslips; only desk staff have logins), online fee payment, email, a help desk, houses, designations, class streams, date sheets, document settings and two-factor sign-in exist and are not described here, and the portal list has eight portals, not six.
+
 ## Layers (API)
 `routes` (HTTP + zod validation) → `service` (business rules) → `models` (Mongoose). Cross-cutting code: `core/` (config, errors, logging, dates, mark-field helpers), `middleware/` (auth, per-portal context), `services/` (audit, notifications, files, timetable/attendance/results maths, clearance, subjects).
 Each feature is `src/modules/<name>/{*.routes,*.service,*.validation}.js`; `modules/index.js` mounts them per portal:

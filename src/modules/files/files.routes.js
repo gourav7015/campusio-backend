@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as svc from './files.service.js';
+import { readFileBytes } from '../../services/files.js';
 
 /** Authenticated: ask for a short-lived signed link. Never expose a guessable public path. */
 export const linkRoutes = Router();
@@ -16,5 +17,6 @@ downloadRoutes.get('/download/:id', async (req, res) => {
   res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
   res.setHeader('Cache-Control', 'private, max-age=60');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (file.enc) return res.send(await readFileBytes(file)); // stored encrypted: decrypt for this one answer
   res.sendFile(path);
 });

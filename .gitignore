@@ -6,3 +6,4 @@ src/uploads
 coverage
 *.log
 .DS_Store
+backups/

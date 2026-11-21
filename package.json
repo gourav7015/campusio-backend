@@ -1,6 +1,6 @@
 {
   "name": "school-erp-backend",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,12 +11,21 @@
     "test": "vitest run",
     "lint": "eslint src test",
     "dump": "node src/bulk-seed.js",
-    "sample:school-info": "node src/sample-school-info.js"
+    "sample:school-info": "node src/sample-school-info.js",
+    "backup": "node src/scripts/backup-cli.js backup",
+    "backup:verify": "node src/scripts/backup-cli.js verify",
+    "backup:restore": "node src/scripts/backup-cli.js restore",
+    "migrate": "node src/scripts/migrate-cli.js",
+    "reset-2fa": "node src/scripts/reset-2fa-cli.js",
+    "loadtest": "node src/scripts/loadtest.js",
+    "docs:api": "node src/scripts/api-docs.js"
   },
   "dependencies": {
     "@fontsource/noto-sans": "^5.3.0",
+    "@fontsource/noto-sans-devanagari": "^5.3.0",
     "@fontsource/noto-serif": "^5.3.0",
     "bcryptjs": "^2.4.3",
+    "bson": "^6.10.4",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^5.1.0",
@@ -26,7 +35,8 @@
     "mongoose": "^8.9.0",
     "multer": "^2.0.0",
     "pdfkit": "^0.15.2",
-    "zod": "^3.24.1"
+    "qrcode-svg": "^1.1.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { config } from '../core/config.js';
+import { verifyToken } from '../core/tokens.js';
 import { User, Session, School, Subscription, AuditLog } from '../models/index.js';
 import { HttpError, forbidden, isId } from '../core/utils.js';
 import { todayStr } from '../core/utils.js';
@@ -12,7 +13,7 @@ export async function authenticate(req, _res, next) {
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) throw unauth();
   let payload;
-  try { payload = jwt.verify(token, config.jwtSecret); } catch { throw unauth('Session expired, please sign in again'); }
+  try { payload = verifyToken(token); } catch { throw unauth('Session expired, please sign in again'); }
   if (payload.p) throw unauth();
   const [session, user] = await Promise.all([Session.findOne({ jti: payload.jti }), User.findById(payload.sub)]);
   if (!session || session.revokedAt || !user) throw unauth('Session expired, please sign in again');

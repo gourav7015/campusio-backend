@@ -1,5 +1,7 @@
 # Known limitations (honest list)
 
+> Updated 21 Nov 2026. Several lines below were true when first written and are no longer: online payment (Razorpay and a test gateway), email and a help desk, a school logo and document templates, parent access through the student login, and a durable email queue now exist. The sections "Added in 1.0.0" in `SECURITY.md` and `docs/OPERATIONS.md` are current. What is still open is listed at the end of this file.
+
 **Not built**
 * No online payment gateway: Finance records cash/UPI/cheque/bank/card payments by hand (receipts are numbered PDFs). No advance payments or credit balances (a payment cannot exceed what is owed).
 * Online homework submission and grading (the spec defers it) — students see homework, files and deadlines only.
@@ -27,3 +29,12 @@
 * Staff leave balances are per school setting; there is no carry-forward or encashment at year end.
 * The advance-payment discount applies to tuition only (not transport or other fees). Part-paid students, or students with a concession on an open month, do not qualify.
 * A transport fare change does not alter months that are already billed.
+
+
+## Still open (21 Nov 2026)
+* **Not done in code, needs an account or a person:** Atlas backups on a paid plan (the `npm run backup` command is the independent copy), error-tracking and uptime services (Platform → Errors and the alert webhook cover the basics), an outside penetration test, a lawyer's review of the privacy pages and the breach plan, a Razorpay account for live payments.
+* **MongoDB transactions:** a crash in the middle of year-end promotion or an import can still leave a partial run (re-running skips what was done). Needs a replica-set connection and a rewrite of those services.
+* **Files** are on local disk (optionally encrypted); object storage and a virus scan are not built.
+* **Rate-limit counters** live in each server process.
+* **Issued documents** are drawn when opened, so changing the letterhead changes old receipts and payslips.
+* **Hard deletes** still exist for some records (for example deleting a house or a draft); money, attendance and results are never deleted.

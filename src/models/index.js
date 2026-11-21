@@ -75,6 +75,8 @@ export const User = model('User', new Schema({
   lastLoginAt: Date,
   failedLogins: { type: Number, default: 0 },
   lockedUntil: Date,
+  // two-factor sign-in (an authenticator app): the secret is kept sealed, recovery codes only as hashes
+  totp: { enabled: { type: Boolean, default: false }, secretSealed: String, pendingSealed: String, lastStep: { type: Number, default: 0 }, recovery: [String], enabledAt: Date },
   language: { type: String, default: 'en' },
   notificationPrefs: { type: Schema.Types.Mixed, default: () => ({ homework: true, attendance: true, examination: true, results: true, announcements: true, timetable: true }) },
   createdBy: ref('User'),
@@ -181,6 +183,10 @@ export const Student = model('Student', (() => {
     guardians: [guardian], emergencyContact: { name: String, phone: String },
     status: { type: String, enum: ['active', 'withdrawn', 'transferred_out', 'completed', 'archived'], default: 'active' },
     importBatchId: ref('ImportBatch'),
+    // the guardian's consent for the school to hold the child's details, as the school recorded it
+    consent: { givenOn: String, guardianName: String, relationship: String, note: String, recordedByName: String, recordedAt: Date },
+    // set when a former student's personal details were erased (fees, marks and attendance stay, without a name)
+    anonymisedAt: Date, anonymisedByName: String, anonymisationReason: String,
     // a discount on tuition that goes with the student and applies to every month billed (set at admission or by Finance)
     personalDiscount: { type: { type: String, enum: ['percent', 'per_month'] }, value: Number, reason: String, setByName: String, setAt: Date },
   }, opts);
@@ -545,7 +551,7 @@ export const File = model('File', new Schema({
   tenantId: tenant, originalName: String, mime: String, size: Number, storageKey: { type: String, required: true },
   kind: { type: String, enum: ['homework', 'material', 'document', 'photo', 'announcement', 'leave', 'ticket'], required: true },
   ownerType: String, ownerId: String, docType: String, visibility: { type: String, enum: ['owner', 'school'], default: 'owner' },
-  uploadedBy: ref('User'),
+  uploadedBy: ref('User'), enc: { type: Boolean, default: false }, // enc: the bytes on disk are encrypted with the data key
 }, opts));
 
 export const ImportBatch = model('ImportBatch', new Schema({
@@ -852,5 +858,48 @@ export const SwapRequest = model('SwapRequest', (() => {
     status: { type: String, enum: ['pending', 'approved', 'rejected', 'declined', 'cancelled'], default: 'pending' },
   }, opts);
   s.index({ tenantId: 1, status: 1, date: 1 });
+  return s;
+})());
+
+
+// ───────────── platform plumbing: errors, durable email, job leases, idempotency, migrations ─────────────
+/** Server and browser errors, kept for 30 days so the Platform Admin can see what broke. */
+export const ErrorLog = model('ErrorLog', (() => {
+  const s = new Schema({
+    source: { type: String, enum: ['server', 'client'], default: 'server' }, requestId: String, method: String, path: String, status: Number,
+    message: String, stack: String, tenantId: { type: ObjectId, default: null }, userId: { type: ObjectId, default: null }, userAgent: String, at: { type: Date, default: Date.now },
+  }, { timestamps: false });
+  s.index({ at: 1 }, { expireAfterSeconds: 30 * 24 * 3600 });
+  return s;
+})());
+
+/** An email waiting to be sent. Kept in the database so a restart loses nothing and two servers never send the same one. */
+export const EmailOutbox = model('EmailOutbox', (() => {
+  const s = new Schema({
+    to: String, subject: String, html: String, text: String, replyTo: String,
+    status: { type: String, enum: ['pending', 'processing', 'sent', 'failed'], default: 'pending', index: true },
+    tries: { type: Number, default: 0 }, nextAt: { type: Date, default: Date.now }, leaseUntil: Date, lastError: String, sentAt: Date,
+  }, opts);
+  s.index({ createdAt: 1 }, { expireAfterSeconds: 14 * 24 * 3600 });
+  return s;
+})());
+
+/** One named lease at a time: scheduled jobs take it so that, with several servers, only one runs each job. */
+export const JobLease = model('JobLease', new Schema({ name: { type: String, required: true, unique: true }, holder: String, until: Date }, { timestamps: false }));
+
+/** A POST that was already done once under the same Idempotency-Key: repeating it returns the first answer instead of doing it again. */
+export const IdempotencyRecord = model('IdempotencyRecord', (() => {
+  const s = new Schema({ scope: { type: String, required: true, unique: true }, bodyHash: String, state: { type: String, enum: ['processing', 'done'], default: 'processing' }, status: Number, response: Schema.Types.Mixed, expiresAt: { type: Date, required: true } }, { timestamps: false });
+  s.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+  return s;
+})());
+
+/** Which database migrations have run. */
+export const Migration = model('Migration', new Schema({ id: { type: String, required: true, unique: true }, description: String, appliedAt: { type: Date, default: Date.now } }, { timestamps: false }));
+
+/** A password-reset link sent by email. Only the hash of the token is kept; it works once, for 30 minutes. */
+export const PasswordReset = model('PasswordReset', (() => {
+  const s = new Schema({ userId: { type: ObjectId, ref: 'User', required: true, index: true }, tokenHash: { type: String, required: true, unique: true }, expiresAt: { type: Date, required: true }, usedAt: Date }, { timestamps: true });
+  s.index({ expiresAt: 1 }, { expireAfterSeconds: 24 * 3600 });
   return s;
 })());

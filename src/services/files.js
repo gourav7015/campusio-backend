@@ -4,6 +4,8 @@ import crypto from 'node:crypto';
 import multer from 'multer';
 import jwt from 'jsonwebtoken';
 import { config } from '../core/config.js';
+import { verifyToken } from '../core/tokens.js';
+import { sealBytes, openBytes } from '../core/crypto.js';
 import { File } from '../models/index.js';
 import { bad } from '../core/utils.js';
 
@@ -50,8 +52,11 @@ export async function assertContentMatches(file) {
 /** Persist metadata for a multer file. Bytes stay on disk/object storage, never in Mongo documents. */
 export async function saveFile(req, file, { kind, ownerType, ownerId, docType, visibility = 'owner', tenantId = req.tenantId }) {
   await assertContentMatches(file);
+  // with ENCRYPT_FILES=true the bytes on disk are encrypted (the type was checked above, while they were still readable)
+  const enc = config.encryptFiles;
+  if (enc) await fs.promises.writeFile(file.path, sealBytes(await fs.promises.readFile(file.path)));
   return File.create({
-    tenantId, originalName: file.originalname, mime: file.mimetype, size: file.size, storageKey: file.filename,
+    enc, tenantId, originalName: file.originalname, mime: file.mimetype, size: file.size, storageKey: file.filename,
     kind, ownerType, ownerId: ownerId ? String(ownerId) : undefined, docType, visibility, uploadedBy: req.user._id,
   });
 }
@@ -64,7 +69,13 @@ export function signFileToken(fileId, userId) {
   return jwt.sign({ f: String(fileId), u: String(userId), p: 'file' }, config.jwtSecret, { expiresIn: config.fileLinkTtlSeconds });
 }
 export function verifyFileToken(token) {
-  const p = jwt.verify(token, config.jwtSecret);
+  const p = verifyToken(token);
   if (p.p !== 'file') throw new Error('bad token');
   return p;
+}
+
+/** The file's bytes, decrypted when it was stored encrypted. */
+export async function readFileBytes(f) {
+  const raw = await fs.promises.readFile(filePath(f));
+  return f.enc ? openBytes(raw) : raw;
 }

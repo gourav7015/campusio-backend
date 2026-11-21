@@ -45,5 +45,5 @@ export async function schoolCode(tenantId) {
 
 export const publicUser = (u) => ({
   id: u._id, name: u.name, loginId: u.loginId, email: u.email, role: u.role, tenantId: u.tenantId,
-  mustChangePassword: u.mustChangePassword, adminLevel: u.role === 'school_admin' ? u.adminLevel || 'full' : undefined, permissions: u.adminLevel === 'sub' ? u.permissions || [] : undefined, language: u.language, notificationPrefs: u.notificationPrefs, status: u.status,
+  mustChangePassword: u.mustChangePassword, adminLevel: u.role === 'school_admin' ? u.adminLevel || 'full' : undefined, permissions: u.adminLevel === 'sub' ? u.permissions || [] : undefined, language: u.language, notificationPrefs: u.notificationPrefs, status: u.status, twoFactor: !!u.totp?.enabled,
 });

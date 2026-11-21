@@ -10,8 +10,12 @@ const run = promisify(execFile);
 const boot = (env) => run(process.execPath, ['--input-type=module', '-e', "await import('./src/core/config.js'); console.log('started')"], { cwd: process.cwd(), env: { PATH: process.env.PATH, DOTENV_CONFIG_PATH: '/nonexistent/.env', ...env } }).then((r) => ({ ok: true, out: r.stdout }), (e) => ({ ok: false, out: String(e.stderr) }));
 
 describe('production configuration is refused when unsafe', () => {
-  const good = { NODE_ENV: 'production', JWT_SECRET: 'x'.repeat(48), CORS_ORIGIN: 'https://erp.example.org' };
+  const good = { NODE_ENV: 'production', JWT_SECRET: 'x'.repeat(48), CORS_ORIGIN: 'https://erp.example.org', DATA_KEY: 'ab'.repeat(32) };
   it('starts with a strong secret and a real origin', async () => { expect((await boot(good)).ok).toBe(true); });
+  it('refuses a malformed data key, and starts without one (it is then derived, with a warning on the health page)', async () => {
+    expect((await boot({ ...good, DATA_KEY: 'not-hex' })).ok).toBe(false);
+    expect((await boot({ ...good, DATA_KEY: undefined })).ok).toBe(true);
+  });
   it('refuses a missing, short or published-default JWT secret', async () => {
     for (const JWT_SECRET of [undefined, 'short', 'change-me-to-a-long-random-string', 'dev-only-secret-change-me']) {
       const r = await boot({ ...good, JWT_SECRET }); expect(r.ok, String(JWT_SECRET)).toBe(false); expect(r.out).toMatch(/JWT_SECRET/);

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
+import { stripPartialDefaults } from './zod-compat.js';
 
 export class HttpError extends Error {
   constructor(status, message, code, details) {
@@ -15,7 +16,8 @@ export const notFound = (m = 'Not found') => new HttpError(404, m, 'NOT_FOUND');
 export const conflict = (m, d) => new HttpError(409, m, 'CONFLICT', d);
 
 export function parse(schema, data) {
-  return schema.parse(data ?? {});
+  const input = data ?? {};
+  return stripPartialDefaults(schema, input, schema.parse(input));
 }
 
 export const isId = (v) => typeof v === 'string' && mongoose.isValidObjectId(v) && /^[a-f0-9]{24}$/i.test(v);

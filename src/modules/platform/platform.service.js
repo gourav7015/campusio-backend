@@ -70,10 +70,10 @@ export async function getSchool(id) {
   if (!school) throw notFound('School not found');
   const [subscription, admins, studentCount, teacherCount] = await Promise.all([
     Subscription.findOne({ schoolId: school._id }),
-    User.find({ tenantId: school._id, role: 'school_admin' }).select('name loginId email status lastLoginAt'),
+    User.find({ tenantId: school._id, role: 'school_admin' }).select('name loginId email status lastLoginAt totp.enabled').lean(),
     Student.countDocuments({ tenantId: school._id, status: 'active' }), Teacher.countDocuments({ tenantId: school._id, status: 'active' }),
   ]);
-  return { ...school, subscription, admins, studentCount, teacherCount };
+  return { ...school, subscription, admins: admins.map(({ totp, ...a }) => ({ ...a, twoFactor: !!totp?.enabled })), studentCount, teacherCount };
 }
 
 export async function updateSchool(id, body) {

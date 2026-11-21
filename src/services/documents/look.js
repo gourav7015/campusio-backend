@@ -1,6 +1,5 @@
-import fs from 'node:fs';
 import { School, SchoolProfile, DocumentSettings, File } from '../../models/index.js';
-import { filePath } from '../files.js';
+import { readFileBytes } from '../files.js';
 
 export const DOC_COLORS = ['#1e3a8a', '#0f766e', '#9f1239', '#7c2d12'];
 export const DEFAULT_CAPTIONS = { receipt: 'Received by · Accounts Officer', payslipLeft: 'Prepared by · Accounts Officer', payslipRight: 'Authorised signatory · Principal' };
@@ -9,7 +8,7 @@ const read = async (fileId) => {
   if (!fileId) return null;
   const f = await File.findById(fileId).lean();
   if (!f) return null;
-  try { return await fs.promises.readFile(filePath(f)); } catch { return null; }
+  try { return await readFileBytes(f); } catch { return null; }
 };
 
 /**

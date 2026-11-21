@@ -3,6 +3,7 @@ import { ZodError } from 'zod';
 import { HttpError } from './utils.js';
 import { logger } from './logger.js';
 import { config } from './config.js';
+import { recordServerError } from '../services/errorLog.js';
 
 export function requestId(req, res, next) {
   req.id = req.headers['x-request-id'] || crypto.randomUUID();
@@ -39,5 +40,21 @@ export function errorHandler(err, req, res, _next) {
   if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: 'Malformed JSON', code: 'BAD_REQUEST' });
   if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'Request body too large', code: 'TOO_LARGE' });
   logger.error('unhandled', { id: req.id, path: req.originalUrl, error: err?.message, stack: config.isProd ? undefined : err?.stack });
+  recordServerError(req, err);
   res.status(500).json({ error: 'Internal server error', code: 'INTERNAL', requestId: req.id });
+}
+
+/** Ends a request that has not answered in time with a clear message, instead of leaving the browser waiting. */
+export const requestTimeout = (ms) => (req, res, next) => {
+  const t = setTimeout(() => { if (!res.headersSent) res.status(503).json({ error: 'The server took too long to answer. Please try again.', code: 'TIMEOUT', requestId: req.id }); }, ms);
+  t.unref();
+  const done = () => clearTimeout(t);
+  res.on('finish', done); res.on('close', done);
+  next();
+};
+
+/** /api/v1/... is the same API as /api/...: callers that want a stable address can pin to v1. */
+export function apiVersionAlias(req, res, next) {
+  if (req.url.startsWith('/api/v1/')) { req.url = `/api/${req.url.slice('/api/v1/'.length)}`; res.setHeader('x-api-version', '1'); }
+  next();
 }

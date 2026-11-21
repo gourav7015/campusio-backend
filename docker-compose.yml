@@ -1,0 +1,21 @@
+# Everything the API needs on one machine, for trying it or for a staging copy:  docker compose up --build
+# Needs a .env next to this file with at least JWT_SECRET (32+ characters), DATA_KEY (64 hex characters) and CORS_ORIGIN.
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes: [mongo-data:/data/db]
+    healthcheck: { test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"], interval: 10s, timeout: 5s, retries: 5 }
+  api:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://mongo:27017/campusio
+      NODE_ENV: production
+    depends_on: { mongo: { condition: service_healthy } }
+    ports: ["4000:4000"]
+    volumes: [uploads:/data/uploads]
+volumes:
+  mongo-data:
+  uploads:

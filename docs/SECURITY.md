@@ -38,3 +38,22 @@ What exists, how it was checked, and what is still open. Verified items name the
 * Files are on local disk (not durable or replicated). No virus scanning.
 * Database: backups, point-in-time recovery, IP allow-list and least-privilege database users are Atlas settings that have **not been checked**; the free M0 tier has no backups.
 * The Platform Admin's *reads* inside a school are not in the audit log (writes are).
+
+
+## Added in 1.0.0 (20–21 Nov 2026)
+
+| Control | Where | Checked by |
+|---|---|---|
+| Two-factor sign-in (authenticator app, RFC 6238), recovery codes (hashed), a code cannot be replayed, wrong codes count toward lock-out, secrets stored encrypted (AES-256-GCM with `DATA_KEY`) | `modules/auth`, `services/totp.js`, `core/crypto.js` | `50-sign-in-security`, browser `sign-in-security.spec` |
+| Password reset by emailed one-time link (30 minutes, hashed token, three a hour, same answer for any account, all sessions ended, needs the authenticator code when one is on) | `modules/auth` | `50-sign-in-security` |
+| Session renewal with a hard cap (`SESSION_MAX_DAYS`) | `POST /auth/refresh` | `50-sign-in-security` |
+| Secret rotation without signing everyone out (`JWT_SECRET_PREVIOUS`) | `core/tokens.js` | `48-platform-hardening` |
+| Repeated POSTs done once (`Idempotency-Key`, tied to token, address and body) | `middleware/idempotency.js` | `48-platform-hardening` |
+| Request time limit (503 with a clear message), server socket timeouts, 15 s timeouts on outbound calls | `core/http.js`, `server.js`, `services/email.js` | `48-platform-hardening` |
+| Server and browser errors kept 30 days; alert webhook on bursts | `services/errorLog.js`, `services/alerts.js` | `48-platform-hardening` |
+| Optional encryption of uploaded files at rest (`ENCRYPT_FILES=true`) | `services/files.js` | `50-sign-in-security` |
+| Content-Security-Policy, frame protection, HSTS and other headers on the site | `frontend/scripts/make-headers.mjs` (`dist/_headers`) | the whole browser suite run against the built site |
+| Student privacy tools (consent record, data export, erasure of a former student), daily clearing of old notifications, mail records and sessions | `modules/privacy`, `services/retention.js` | `51-privacy` |
+| `zod` 4 (closes the published memory-use advisory); update schemas keep zod 3 behaviour so a PATCH never resets unsent fields | `core/zod-compat.js` | `52-zod-compat`, `11-payroll` |
+
+Still open: an outside penetration test; a virus scan on uploads; files on local disk (object storage); rate-limit counters are per process; no database-level row security (MongoDB has none).

@@ -4,12 +4,39 @@ import { parse } from '../../core/utils.js';
 import { audit } from '../../services/audit.js';
 import * as v from './platform.validation.js';
 import * as svc from './platform.service.js';
+import { ErrorLog } from '../../models/index.js';
+import { School } from '../../models/index.js';
+import { flagsView, setFlags } from '../../services/flags.js';
+import { z } from 'zod';
 import { handlerRoutes as ticketHandler } from '../helpdesk/helpdesk.routes.js';
 
 const r = Router();
 r.use(requireRole('super_admin'));
 
 r.use('/helpdesk', ticketHandler('platform')); // tickets schools send to Campusio support
+r.get('/errors', async (req, res) => {
+  const q = parse(z.object({ source: z.enum(['server', 'client']).optional(), limit: z.coerce.number().int().min(1).max(200).default(50) }), req.query);
+  const rows = await ErrorLog.find(q.source ? { source: q.source } : {}).sort({ at: -1 }).limit(q.limit).lean();
+  const since = new Date(Date.now() - 24 * 3600 * 1000);
+  res.json({ last24h: { server: await ErrorLog.countDocuments({ source: 'server', at: { $gte: since } }), client: await ErrorLog.countDocuments({ source: 'client', at: { $gte: since } }) }, rows });
+});
+r.delete('/errors', async (req, res) => { const out = await ErrorLog.deleteMany({}); await audit(req, 'platform.errors_cleared', 'ErrorLog', null, 'Cleared the error log'); res.json({ removed: out.deletedCount }); });
+r.get('/schools/:id/flags', async (req, res) => { const s = await School.findById(req.params.id).select('settings').lean(); if (!s) return res.status(404).json({ error: 'School not found', code: 'NOT_FOUND' }); res.json(flagsView(s.settings)); });
+r.put('/schools/:id/flags', async (req, res) => {
+  const body = parse(z.record(z.boolean().nullable()), req.body);
+  const out = await setFlags(req.params.id, body);
+  if (!out) return res.status(404).json({ error: 'School not found', code: 'NOT_FOUND' });
+  req.tenantId = req.params.id; await audit(req, 'school.flags_changed', 'School', req.params.id, `Changed feature switches: ${Object.keys(body).join(', ')}`);
+  res.json(out);
+});
+r.post('/users/:id/reset-2fa', async (req, res) => {
+  const { User } = await import('../../models/index.js'); const { twoFactorReset } = await import('../auth/auth.service.js');
+  const u = await User.findById(req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found', code: 'NOT_FOUND' });
+  if (String(u._id) === String(req.user._id)) return res.status(403).json({ error: 'Use the command line on the server to reset your own', code: 'FORBIDDEN' });
+  await twoFactorReset(u); req.tenantId = u.tenantId; await audit(req, 'auth.2fa_reset', 'User', u._id, `Reset two-factor sign-in for ${u.name}`);
+  res.json({ ok: true });
+});
 r.get('/stats', async (_req, res) => res.json(await svc.platformStats()));
 r.get('/schools', async (req, res) => res.json(await svc.listSchools(req.query)));
 

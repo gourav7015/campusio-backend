@@ -68,6 +68,13 @@ describe('Receipt and payslip documents: letterhead, stamp and signature set onc
     expect((await api().get(A('/document-settings/sample/receipt')).set(W.teacher1.h)).status).toBe(403);
   });
 
+  it('Hindi text prints with the Devanagari font instead of empty boxes', async () => {
+    await api().put(A('/document-settings')).set(W.h).send({ schoolName: 'दिल्ली पब्लिक स्कूल', addressLine: 'श्रीमती रोड, राजकोट' });
+    const r = await pdf(A('/document-settings/sample/receipt'), W.h);
+    expect(r.status).toBe(200); expect(r.body.includes('NotoSansDevanagari')).toBe(true);
+    await api().put(A('/document-settings')).set(W.h).send({ schoolName: 'Docs Public School', addressLine: '1 Main Road' });
+  });
+
   it('removing an image takes it off every document and deletes it', async () => {
     const cur = (await api().get(A('/document-settings')).set(W.h)).body;
     const sigId = cur.assets.find((x) => x.kind === 'signature').id;

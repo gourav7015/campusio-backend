@@ -1,0 +1,32 @@
+# Render blueprint: the API twice, a staging copy that deploys from the `staging` branch and production that deploys from `main`.
+# Nothing here is applied until you create a Blueprint in Render from this file. Values marked sync:false are typed in the Render dashboard, never kept in git.
+services:
+  - type: web
+    name: campusio-api
+    runtime: node
+    branch: main
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/server.js
+    healthCheckPath: /ready
+    autoDeploy: true
+    envVars: &env
+      - { key: NODE_ENV, value: production }
+      - { key: MONGO_URI, sync: false }
+      - { key: JWT_SECRET, sync: false }
+      - { key: JWT_SECRET_PREVIOUS, sync: false }
+      - { key: DATA_KEY, sync: false }
+      - { key: CORS_ORIGIN, sync: false }
+      - { key: APP_URL, sync: false }
+      - { key: ALERT_WEBHOOK_URL, sync: false }
+      - { key: RESEND_API_KEY, sync: false }
+      - { key: MAIL_FROM, sync: false }
+      - { key: PAYMENT_PROVIDER, value: "off" }
+  - type: web
+    name: campusio-api-staging
+    runtime: node
+    branch: staging
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/server.js
+    healthCheckPath: /ready
+    autoDeploy: true
+    envVars: *env

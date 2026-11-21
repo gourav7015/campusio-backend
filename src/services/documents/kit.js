@@ -4,7 +4,11 @@ import * as fontkit from 'fontkit';
 
 const require = createRequire(import.meta.url);
 const dir = (pkg) => path.join(path.dirname(require.resolve(`@fontsource/${pkg}/package.json`)), 'files');
-const sans = dir('noto-sans'); const serif = dir('noto-serif');
+const sans = dir('noto-sans'); const serif = dir('noto-serif'); const deva = dir('noto-sans-devanagari');
+// Hindi (Devanagari) text uses its own font; the file for each weight of the latin text
+const DEVA = { Sans: 400, Semi: 600, Bold: 700, Serif: 700 };
+const devaFile = (w) => `${deva}/noto-sans-devanagari-devanagari-${w}-normal.woff`;
+const isDeva = (ch) => /[\u0900-\u097F\u200C\u200D]/.test(ch);
 const FILES = {
   Sans: [`${sans}/noto-sans-latin-400-normal.woff`, `${sans}/noto-sans-latin-ext-400-normal.woff`],
   Semi: [`${sans}/noto-sans-latin-600-normal.woff`, `${sans}/noto-sans-latin-ext-600-normal.woff`],
@@ -23,11 +27,12 @@ export const COLOR = { ink: '#111827', muted: '#4b5563', soft: '#374151', line: 
 /** Drawing helpers over a pdfkit document. Text is drawn in runs so that "₹" (only in the latin-ext Noto files) prints with the same look as the rest. */
 export function kit(doc, accent) {
   // pdfkit keeps one font per internal name, and the latin and latin-ext Noto files share it: so the few glyphs only the ext file has ("₹") are drawn as outlines
-  for (const [name, [a]] of Object.entries(FILES)) doc.registerFont(name, a);
-  const runs = (t) => { const out = []; for (const ch of String(t)) { const ext = !inLatin(ch); const last = out[out.length - 1]; if (last && last.ext === ext) last.s += ch; else out.push({ s: ch, ext }); } return out; };
-  const setFont = (f, s) => doc.font(f).fontSize(s);
+  for (const [name, [a]] of Object.entries(FILES)) { doc.registerFont(name, a); doc.registerFont(`${name}~dev`, devaFile(DEVA[name])); }
+  // a "run" is a stretch of text in one font: latin, Devanagari (Hindi), or the few glyphs ("₹") drawn from the latin-ext outlines
+  const runs = (t) => { const out = []; for (const ch of String(t)) { const kind = isDeva(ch) ? 'dev' : inLatin(ch) ? 'latin' : 'ext'; const last = out[out.length - 1]; if (last && last.kind === kind) last.s += ch; else out.push({ s: ch, kind, ext: kind === 'ext' }); } return out; };
+  const setFont = (f, s, kind) => doc.font(kind === 'dev' ? `${f}~dev` : f).fontSize(s);
   const extAdvance = (str, f, s, spacing) => { const x = extFonts[f]; return [...str].reduce((n, ch) => n + (x.glyphForCodePoint(ch.codePointAt(0)).advanceWidth * s) / x.unitsPerEm + spacing, 0); };
-  const width = (t, f = 'Sans', s = 9.75, spacing = 0) => runs(t).reduce((n, r) => n + (r.ext ? extAdvance(r.s, f, s, spacing) : setFont(f, s).widthOfString(r.s, { characterSpacing: spacing })), 0);
+  const width = (t, f = 'Sans', s = 9.75, spacing = 0) => runs(t).reduce((n, r) => n + (r.ext ? extAdvance(r.s, f, s, spacing) : setFont(f, s, r.kind).widthOfString(r.s, { characterSpacing: spacing })), 0);
   /** One line of text. `w` + `align` place it inside a box; returns the width drawn. */
   const text = (t, x, y, { f = 'Sans', s = 9.75, c = COLOR.ink, w, align = 'left', spacing = 0 } = {}) => {
     const total = width(t, f, s, spacing);
@@ -41,7 +46,7 @@ export function kit(doc, accent) {
           doc.save().translate(xx, y + (x.ascent * k)).scale(k, -k).path(g.path.toSVG()).fill(c).restore();
           xx += g.advanceWidth * k + spacing;
         }
-      } else { setFont(f, s).text(r.s, xx, y, { lineBreak: false, characterSpacing: spacing }); xx += doc.widthOfString(r.s, { characterSpacing: spacing }); }
+      } else { setFont(f, s, r.kind).text(r.s, xx, y, { lineBreak: false, characterSpacing: spacing }); xx += doc.widthOfString(r.s, { characterSpacing: spacing }); }
     }
     return total;
   };

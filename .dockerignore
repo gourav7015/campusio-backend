@@ -1,0 +1,10 @@
+node_modules
+.env
+.data
+uploads
+backups
+test
+docs
+*.md
+.git
+image.png
