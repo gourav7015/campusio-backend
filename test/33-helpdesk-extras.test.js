@@ -34,7 +34,7 @@ describe('Help desk: attachments, limits, desk logins, counts', () => {
     expect((await api().post(`/api/student/tickets/${id}/files/${fid}/link`).set(W.studentLogins[1].h)).status).toBe(404); // another student
     expect((await api().post(`/api/teacher/tickets/${id}/files/${fid}/link`).set(T)).status).toBe(404);
     const adm = await api().post(`/api/platform/helpdesk/${id}/files/${fid}/link`).set(root.h);
-    expect(adm.status).toBe(200); // Campusio support opens it
+    expect(adm.status).toBe(200); // AtKaksha support opens it
     expect((await api().post(`/api/school/helpdesk/${id}/files/${fid}/link`).set(W.h)).status).toBe(404); // the school's own admin has no part in it
     expect((await api().post(`/api/school/helpdesk/${id}/files/${fid}/link`).set(other.h)).status).toBe(404); // another school's admin
     // a private note's attachment is for the handling side only
@@ -43,7 +43,7 @@ describe('Help desk: attachments, limits, desk logins, counts', () => {
     const nfid = note.body.messages.at(-1).attachments[0].fileId;
     expect((await api().post(`/api/platform/helpdesk/${id}/files/${nfid}/link`).set(root.h)).status).toBe(200);
     expect((await api().post(`/api/student/tickets/${id}/files/${nfid}/link`).set(S)).status).toBe(404);
-    // a file Campusio support attaches to a normal reply (filed under the school the ticket came from) can be opened by the person who asked
+    // a file AtKaksha support attaches to a normal reply (filed under the school the ticket came from) can be opened by the person who asked
     const open = await api().post(`/api/platform/helpdesk/${id}/replies`).set(root.h).field('body', 'Steps are in the PDF').attach('files', PDF, { filename: 'steps.pdf', contentType: 'application/pdf' });
     expect(open.status).toBe(201);
     const pfid = open.body.messages.at(-1).attachments[0].fileId;
@@ -53,7 +53,7 @@ describe('Help desk: attachments, limits, desk logins, counts', () => {
     const forged = await api().get(`/api/files/download/${nfid}?token=x`);
     expect(forged.status).toBe(403);
     const asStudent = (await api().get(`/api/student/tickets/${id}`).set(S)).body;
-    expect(asStudent.messages).toHaveLength(2); // the question and Campusio's PDF reply; the private note is not shown
+    expect(asStudent.messages).toHaveLength(2); // the question and AtKaksha's PDF reply; the private note is not shown
     // a student's own token for the private file does not work either (the download re-checks the permission)
     const { signFileToken } = await import('../src/services/files.js');
     const sid = (await api().get('/api/auth/me').set(S)).body.user;
@@ -88,12 +88,12 @@ describe('Help desk: attachments, limits, desk logins, counts', () => {
     expect((await api().post(`/api/student/tickets/${tid}/replies`).set(stu).send({ body: 'too many' })).status).toBe(429);
   });
 
-  it('finance, library and transport desks can write to Campusio support too', async () => {
+  it('finance, library and transport desks can write to AtKaksha support too', async () => {
     const c = await api().post('/api/finance/tickets').set(fin.h).send({ subject: 'Receipt printer', body: 'The printer is offline' });
     expect(c.status).toBe(201); expect(c.body.scope).toBe('platform');
     expect((await api().get('/api/finance/tickets').set(fin.h)).body).toHaveLength(1);
     expect((await api().get(`/api/finance/tickets/${c.body._id}`).set(S)).status).toBe(403); // a student has no finance access
-    expect((await api().get('/api/platform/helpdesk?q=Receipt').set(root.h)).body.tickets.some((t) => t.subject === 'Receipt printer' && t.raisedBy.role === 'finance')).toBe(true); // it reaches Campusio support, not the school office
+    expect((await api().get('/api/platform/helpdesk?q=Receipt').set(root.h)).body.tickets.some((t) => t.subject === 'Receipt printer' && t.raisedBy.role === 'finance')).toBe(true); // it reaches AtKaksha support, not the school office
     for (const [role, path] of [['library', 'library'], ['transport', 'transport']]) {
       const u = await api().post('/api/school/staff').set(W.h).send({ name: `${role} desk`, email: `${role}@hx.test`, role });
       const h = (await login(u.body.loginId, u.body.temporaryPassword, role)).h;
@@ -117,7 +117,7 @@ describe('Help desk: attachments, limits, desk logins, counts', () => {
     expect((await api().get('/api/school/helpdesk/summary').set(root.h).set('X-Acting-School', W.id)).body.count).toBe(0); // a platform administrator acting in a school
   });
 
-  it('closing tells Campusio support; resolved tickets close themselves after a week', async () => {
+  it('closing tells AtKaksha support; resolved tickets close themselves after a week', async () => {
     const stu = W.studentLogins[2].h;
     const t = (await api().post('/api/student/tickets').set(stu).send({ subject: 'Close me', body: 'Please help me' })).body;
     await flushEmails(); sent = [];

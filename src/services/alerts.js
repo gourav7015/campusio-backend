@@ -9,7 +9,7 @@ export async function alert(title, detail = '', { everyMs = 5 * 60 * 1000 } = {}
   const now = Date.now();
   if (now - (last.get(title) || 0) < everyMs) return false;
   last.set(title, now);
-  const text = `Campusio (${config.env}) — ${title}${detail ? `\n${String(detail).slice(0, 600)}` : ''}`;
+  const text = `AtKaksha (${config.env}) — ${title}${detail ? `\n${String(detail).slice(0, 600)}` : ''}`;
   try {
     // "text" is understood by Slack, "content" by Discord
     const res = await fetch(config.alertWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, content: text }), signal: AbortSignal.timeout(8000) });

@@ -1,12 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import fs from 'node:fs';
 import { setup, teardown, reset, api, login, makeSuperAdmin, seedWorld } from './helpers.js';
 import { User, File, Session } from '../src/models/index.js';
 import { totp, stepAt, hotp } from '../src/services/totp.js';
 import { open } from '../src/core/crypto.js';
 import { setMailTransport, flushEmails } from '../src/services/email.js';
 import { config } from '../src/core/config.js';
-import { filePath } from '../src/services/files.js';
+import mongoose from 'mongoose';
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 const bin = (res, cb) => { const c = []; res.on('data', (d) => c.push(d)); res.on('end', () => cb(null, Buffer.concat(c))); };
@@ -26,7 +25,7 @@ describe('Sign-in security: authenticator codes, recovery codes, renewing a sess
   it('turning two-factor sign-in on needs the password and a code from the app, and gives recovery codes once', async () => {
     expect((await api().post('/api/auth/2fa/setup').set(W.h).send({ password: 'wrong-password1' })).status).toBe(400);
     const setup = (await api().post('/api/auth/2fa/setup').set(W.h).send({ password: 'Admin@12345' })).body;
-    expect(setup.secret).toMatch(/^[A-Z2-7]{32}$/); expect(setup.qrSvg).toMatch(/<svg/); expect(setup.otpauth).toContain('issuer=Campusio');
+    expect(setup.secret).toMatch(/^[A-Z2-7]{32}$/); expect(setup.qrSvg).toMatch(/<svg/); expect(setup.otpauth).toContain('issuer=AtKaksha');
     // the secret is not stored readable
     const raw = (await admin()).toObject().totp;
     expect(JSON.stringify(raw)).not.toContain(setup.secret); expect(open(raw.pendingSealed)).toBe(setup.secret);
@@ -116,7 +115,7 @@ describe('Sign-in security: authenticator codes, recovery codes, renewing a sess
     expect((await api().post('/api/auth/reset').send({ token, newPassword: 'Another-Pass22' })).status).toBe(400); // once only
     expect((await api().get('/api/auth/me').set(W.h)).status).toBe(401); // old session ended
     expect((await login('admin@sec.test', 'Brand-new-Pass1', 'admin')).token).toBeTruthy();
-    await flushEmails(); expect(mails.map((m) => m.subject)).toContain('Your Campusio password was changed');
+    await flushEmails(); expect(mails.map((m) => m.subject)).toContain('Your AtKaksha password was changed');
     // not more than three a hour
     for (let i = 0; i < 4; i++) await api().post('/api/auth/forgot').send({ loginId: 'admin@sec.test' });
     await flushEmails(); expect(mails.filter((m) => /Reset your/.test(m.subject)).length).toBeLessThanOrEqual(3);
@@ -145,7 +144,8 @@ describe('Sign-in security: authenticator codes, recovery codes, renewing a sess
       expect(set.status).toBe(201);
       const f = await File.findById(set.body.settings.logoFileId);
       expect(f.enc).toBe(true);
-      expect(fs.readFileSync(filePath(f)).subarray(0, 4).toString('hex')).not.toBe('89504e47'); // not a PNG on disk
+      const chunks = await mongoose.connection.db.collection('files.chunks').find({ files_id: f.gridId }).toArray();
+      expect(Buffer.concat(chunks.map((c) => c.data.buffer)).subarray(0, 4).toString('hex')).not.toBe('89504e47'); // not a PNG as stored
       const link = (await api().post(`/api/shared/files/${f._id}/link`).set(act)).body.url;
       const dl = await api().get(link).buffer(true).parse(bin);
       expect(dl.status).toBe(200); expect(dl.body.equals(PNG)).toBe(true);

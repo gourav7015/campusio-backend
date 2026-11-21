@@ -1,4 +1,4 @@
-# Operations: running Campusio
+# Operations: running AtKaksha
 
 For whoever looks after the live system. Commands run from `backend/` unless noted.
 
@@ -6,13 +6,14 @@ For whoever looks after the live system. Commands run from `backend/` unless not
 API on Render (or any Node host or the Dockerfile), database on MongoDB Atlas, site on Cloudflare (Worker serving `frontend/dist`), staff mail on Zoho, optional outgoing mail by Resend, optional online payments by Razorpay. `render.yaml` describes the API twice (production from `main`, staging from `staging`); nothing is created until you make a Blueprint from it.
 
 ## Environment variables that matter
-`MONGO_URI`, `JWT_SECRET` (32+ random characters), `DATA_KEY` (64 hex characters: encrypts two-factor secrets, and uploaded files when `ENCRYPT_FILES=true`; keep a copy outside the server), `CORS_ORIGIN` (the real site address), `APP_URL`, `ALERT_WEBHOOK_URL` (a Slack or Discord incoming webhook: Campusio posts there when it starts, when five server errors arrive within five minutes, and on an unhandled failure), `RESEND_API_KEY` + `MAIL_FROM` (email, password-reset links), `PAYMENT_PROVIDER` + Razorpay keys, `SESSION_HOURS` / `SESSION_MAX_DAYS`, `REQUEST_TIMEOUT_MS`. The full list is `.env.example`. After a deploy, `GET /health` shows the version and any configuration warnings (for example "DATA_KEY is not set").
+`MONGO_URI`, `JWT_SECRET` (32+ random characters), `DATA_KEY` (64 hex characters: encrypts two-factor secrets, and uploaded files when `ENCRYPT_FILES=true`; keep a copy outside the server), `CORS_ORIGIN` (the real site address), `APP_URL`, `ALERT_WEBHOOK_URL` (a Slack or Discord incoming webhook: AtKaksha posts there when it starts, when five server errors arrive within five minutes, and on an unhandled failure), `RESEND_API_KEY` + `MAIL_FROM` (email, password-reset links), `PAYMENT_PROVIDER` + Razorpay keys, `SESSION_HOURS` / `SESSION_MAX_DAYS`, `REQUEST_TIMEOUT_MS`. The full list is `.env.example`. After a deploy, `GET /health` shows the version and any configuration warnings (for example "DATA_KEY is not set").
 
 ## Backups and restore (do the drill once a quarter)
-- **Make one:** `npm run backup -- ../backups/$(date +%F) --files` writes every collection and the uploaded files. Keep copies away from the server and from this computer.
+- **Make one:** `npm run backup -- ../backups/$(date +%F)` writes every collection, **including uploaded files**, which are stored in the database (GridFS) since 21 Nov 2026. Add `--files` only to also copy an old uploads folder. Keep copies away from the server and from this computer.
+- **Files from before 21 Nov 2026** sit on the disk of the computer that accepted the upload and are invisible to other servers (this is why photos and licence copies could be missing on the live site). Run `npm run files:migrate -- --dry-run`, then `npm run files:migrate`, **on the computer that holds the `uploads` folder**, once. It moves each file into the database and lists any whose bytes are not there (upload those again).
 - **Check it:** `npm run backup:verify -- <folder>` confirms every collection is complete.
 - **Restore into an empty database** (a new Atlas cluster or a local one): set `MONGO_URI` to it, then `npm run backup:restore -- <folder> --files`. It refuses a database that already has data unless you add `--replace`.
-- **The drill:** restore the latest backup into a throw-away database, start the API against it (`npm run dev`), sign in as a School Admin and open a student, a fee receipt and a payslip. Note how long it took.
+- **The drill:** restore the latest backup into a throw-away database, start the API against it (`npm run dev`), sign in as a School Admin and open a student, a fee receipt, a payslip and a gallery photo. Note how long it took.
 - Atlas's own backups (a paid cluster tier) are better for point-in-time recovery; this script is the independent copy you control.
 
 ## Database changes (migrations)

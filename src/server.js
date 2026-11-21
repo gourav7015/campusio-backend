@@ -10,6 +10,7 @@ import { startEmailWorker, flushEmails } from './services/email.js';
 import { runMigrations } from './core/migrations.js';
 import { alert } from './services/alerts.js';
 import { runRetention } from './services/retention.js';
+import { busDocumentReminders } from './modules/transport/transport.service.js';
 
 mongoose.set('strictQuery', true);
 
@@ -30,6 +31,8 @@ async function main() {
     schedule('ticket-tidy', 3 * 60 * 60 * 1000, () => autoCloseResolved().then((n) => n && { closed: n })),
     // online payment orders nobody paid are closed (checked every few minutes)
     schedule('payment-order-tidy', 5 * 60 * 1000, () => tidyOrders().then((n) => n && { tidied: n })),
+    // vehicle documents about to expire: the transport officer is told at 30 days, 7 days and on expiry
+    schedule('bus-document-reminders', 6 * 60 * 60 * 1000, () => busDocumentReminders().then((n) => n && { sent: n })),
     // old notifications, mail records and ended sessions are cleared out once a day (docs/DATA_RETENTION.md)
     schedule('retention', 24 * 60 * 60 * 1000, () => runRetention()),
   ];

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { parse, notFound } from '../../core/utils.js';
+import { parse, notFound, conflict } from '../../core/utils.js';
 import { audit } from '../../services/audit.js';
 import { Student, Payment, StudentEnrolment, Section, ClassModel, AcademicYear } from '../../models/index.js';
 import * as v from './finance.validation.js';
@@ -12,7 +12,7 @@ import { expenseRoutes } from './expenses.routes.js';
 const r = Router();
 r.use(expenseRoutes);
 
-r.get('/dashboard', async (req, res) => res.json(await svc.dashboard(req.ctx)));
+r.get('/dashboard', async (req, res) => res.json(await svc.dashboard(req.ctx, parse(v.rangeQuery.pick({ from: true, to: true }), req.query))));
 
 // lookups for filters (only class/section names, no academic data)
 r.get('/lookups', async (req, res) => {
@@ -89,6 +89,16 @@ r.post('/payments/:id/reverse', async (req, res) => {
   const out = await svc.reversePayment(req.ctx, req.params.id, reason, req.user.name);
   await audit(req, 'fees.payment_reversed', 'Payment', out.original._id, `Reversed ${out.original.receiptNo}: ${reason}`);
   res.json(out);
+});
+r.get('/installments', async (req, res) => res.json(await svc.installmentsReport(req.ctx, {})));
+r.post('/payments/:id/email', async (req, res) => {
+  const p = await Payment.findOne({ _id: req.params.id, tenantId: req.tenantId });
+  if (!p) throw notFound('Payment not found');
+  if (p.kind !== 'payment') throw conflict('Only a payment has a receipt to send');
+  const sent = await svc.emailReceipt(req.tenantId, p._id);
+  if (!sent.length) throw conflict('No email was sent: email is not set up for the school, or the student and guardians have no email address on file.');
+  await audit(req, 'fees.receipt_emailed', 'Payment', p._id, `Emailed receipt ${p.receiptNo}`);
+  res.json({ sent });
 });
 r.get('/payments/:id/receipt.pdf', async (req, res) => {
   const p = await Payment.findOne({ _id: req.params.id, tenantId: req.tenantId });

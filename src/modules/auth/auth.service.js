@@ -147,8 +147,8 @@ export async function forgotPassword({ loginId }) {
   const token = crypto.randomBytes(32).toString('base64url');
   await PasswordReset.create({ userId: user._id, tokenHash: sha256(token), expiresAt: new Date(Date.now() + 30 * 60 * 1000) });
   sendNotificationEmail(user.email, {
-    subject: 'Reset your Campusio password', heading: 'Reset your password',
-    lines: [`Hello ${user.name},`, 'Someone asked to reset the password for your Campusio account. Use the button below within 30 minutes. If it was not you, ignore this email: your password stays as it is.'],
+    subject: 'Reset your AtKaksha password', heading: 'Reset your password',
+    lines: [`Hello ${user.name},`, 'Someone asked to reset the password for your AtKaksha account. Use the button below within 30 minutes. If it was not you, ignore this email: your password stays as it is.'],
     button: { label: 'Choose a new password', url: `${config.mail.appUrl}/reset-password?token=${token}` },
   });
   return true;
@@ -164,7 +164,7 @@ export async function resetPassword({ token, newPassword, code }) {
   await user.save();
   rec.usedAt = new Date(); await rec.save();
   await Session.updateMany({ userId: user._id, revokedAt: null }, { revokedAt: new Date() }); // every device is signed out
-  if (user.email) sendNotificationEmail(user.email, { subject: 'Your Campusio password was changed', heading: 'Your password was changed', lines: [`Hello ${user.name},`, 'The password for your Campusio account was just changed using a reset link. If this was not you, contact your school office or Campusio support at once.'] });
+  if (user.email) sendNotificationEmail(user.email, { subject: 'Your AtKaksha password was changed', heading: 'Your password was changed', lines: [`Hello ${user.name},`, 'The password for your AtKaksha account was just changed using a reset link. If this was not you, contact your school office or AtKaksha support at once.'] });
   return user;
 }
 

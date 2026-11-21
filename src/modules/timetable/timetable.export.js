@@ -68,7 +68,7 @@ export async function timetablePdf(ctx, t, res) {
       });
       y += rowH;
     }
-    doc.fillColor('#666').font('Helvetica').fontSize(7).text(`Printed from Campusio · ${new Date().toLocaleDateString('en-GB')}`, left, doc.page.height - 40, { width, align: 'right', lineBreak: false });
+    doc.fillColor('#666').font('Helvetica').fontSize(7).text(`Printed from AtKaksha · ${new Date().toLocaleDateString('en-GB')}`, left, doc.page.height - 40, { width, align: 'right', lineBreak: false });
   });
   doc.end();
 }

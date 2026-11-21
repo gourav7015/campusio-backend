@@ -26,8 +26,8 @@ export async function notifyUsers(tenantId, userIds, { category, title, body, li
     if (mail && u.email && u.notificationPrefs?.email !== false) {
       sendNotificationEmail(u.email, {
         subject: title, heading: title, lines: [body || ''].filter(Boolean),
-        button: { label: 'Open Campusio', url: config.mail.appUrl },
-        footer: 'You get this email because of a notification in your Campusio account.',
+        button: { label: 'Open AtKaksha', url: config.mail.appUrl },
+        footer: 'You get this email because of a notification in your AtKaksha account.',
       });
     }
   }

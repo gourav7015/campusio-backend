@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { PaymentOrder, StudentCharge, Student } from '../../models/index.js';
 import { gateway } from '../../services/gateway/index.js';
 import { readWebhook } from '../../services/gateway/signing.js';
-import { collectPayment, outstanding } from '../finance/finance.service.js';
+import { collectPayment, outstanding, emailReceipt } from '../finance/finance.service.js';
 import { schoolToday } from '../../services/context.js';
 import { config } from '../../core/config.js';
 import { logger } from '../../core/logger.js';
@@ -67,7 +67,9 @@ export async function settle(orderId, providerPaymentId) {
     const p = await collectPayment({ tenantId: claimed.tenantId, actorId: claimed.userId, today }, {
       studentId: claimed.studentId, amount: claimed.amount, mode: 'online', reference: providerPaymentId, chargeIds: claimed.chargeIds.map(String), note: `Paid online (${claimed.provider})`,
     }, `${student?.name || 'Student'} (online)`);
-    return await PaymentOrder.findByIdAndUpdate(claimed._id, { status: 'paid', paymentId: p._id, receiptNo: p.receiptNo, paidAt: new Date(), failureReason: undefined }, { new: true });
+    const paid = await PaymentOrder.findByIdAndUpdate(claimed._id, { status: 'paid', paymentId: p._id, receiptNo: p.receiptNo, paidAt: new Date(), failureReason: undefined }, { new: true });
+    await emailReceipt(claimed.tenantId, p._id); // the receipt goes to the family by email on its own; a mail problem never undoes the payment
+    return paid;
   } catch (e) {
     if (e instanceof HttpError && e.status < 500) {
       // the gateway has the money but the dues no longer match (the office may have taken cash meanwhile): finance must settle this by hand

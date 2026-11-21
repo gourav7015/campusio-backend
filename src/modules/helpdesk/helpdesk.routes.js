@@ -26,7 +26,7 @@ async function withFiles(req, ownerId, run, tenantId = req.tenantId) {
 }
 
 /**
- * The person who has the problem. Everyone except the platform administrators writes to Campusio support (scope 'platform'): mounted as
+ * The person who has the problem. Everyone except the platform administrators writes to AtKaksha support (scope 'platform'): mounted as
  * /tickets for teachers, students, staff and the finance, library and transport desks, and as /helpdesk for the School Admin and sub-admins.
  * Every query is limited to tickets this person raised.
  */

@@ -7,7 +7,7 @@ import { bad, conflict, notFound, escapeRegex, HttpError } from '../../core/util
 import { signFileToken } from '../../services/files.js';
 
 /**
- * Help desk. Everyone who signs in to a school (School Admin, teacher, student, staff, finance, library, transport) writes to Campusio support:
+ * Help desk. Everyone who signs in to a school (School Admin, teacher, student, staff, finance, library, transport) writes to AtKaksha support:
  *   scope 'platform'  handled by the Super Admin side; the support inbox (or every Super Admin) is emailed.
  *   scope 'school'    a person asks their own school's admin. Supported here but not switched on: no route reaches it today.
  * Every person involved also gets an in-app notification (category 'helpdesk'), and an email when email is set up.

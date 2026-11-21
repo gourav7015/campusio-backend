@@ -1,9 +1,8 @@
-import fs from 'node:fs';
 import {
   File, Ticket, Homework, StudyMaterial, Announcement, Student, Teacher, StudentEnrolment, TeachingAssignment, ClassTeacherAssignment, LeaveApplication, User,
 } from '../../models/index.js';
 import { notFound, forbidden } from '../../core/utils.js';
-import { filePath, signFileToken, verifyFileToken } from '../../services/files.js';
+import { fileAvailable, signFileToken, verifyFileToken } from '../../services/files.js';
 import { effectiveStatus } from '../homework/homework.service.js';
 import { visibleNow } from '../materials/materials.service.js';
 import { visibleTo } from '../comms/announcements.service.js';
@@ -27,6 +26,8 @@ const sectionsOf = async (user) => {
 export async function canAccess(user, tenantId, file) {
   if (!file || String(file.tenantId) !== String(tenantId)) return false;
   if (user.role === 'school_admin' || user.role === 'super_admin') return true;
+  if (file.ownerType === 'expense') return user.role === 'finance'; // bills and quotes on an expense: Finance (the School Admin is let through above)
+  if (file.ownerType === 'bus') return user.role === 'transport'; // a vehicle's papers: the transport officer (the School Admin is let through above)
   if (file.ownerType === 'school' || file.ownerType === 'license') return true; // the school's own gallery and licences are for everyone at the school
   const { ids, student, teacher } = await sectionsOf(user);
   const { today } = await schoolToday(tenantId);
@@ -83,7 +84,6 @@ export async function openByToken(fileId, token) {
   const file = await File.findById(fileId);
   if (!file) throw notFound('File not found');
   if (!(await canAccess(user, file.tenantId, file))) throw notFound('File not found');
-  const p2 = filePath(file);
-  if (!fs.existsSync(p2)) throw notFound('File is no longer available');
-  return { file, path: p2 };
+  if (!(await fileAvailable(file))) throw notFound('File is no longer available');
+  return { file };
 }

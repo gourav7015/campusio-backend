@@ -23,12 +23,12 @@ describe('Transport dashboard lists every certificate, not only the problems', (
     expect((await mk({ busNo: 'B3', status: 'retired', insuranceExpiry: addDays(TODAY, -40) })).status).toBe(201); // retired: not listed
     const d = (await api().get(T('/dashboard')).set(tr.h)).body;
     const b1 = d.certificates.filter((c) => c.bus === 'B1');
-    expect(b1).toHaveLength(4); // insurance, fitness, pollution, driver licence
-    expect(Object.fromEntries(b1.map((c) => [c.doc, c.state]))).toEqual({ insurance: 'valid', fitness: 'expiring', pollution: 'expired', licence: 'valid' });
+    expect(b1).toHaveLength(5); // insurance, fitness, pollution, registration (not recorded yet), driver licence
+    expect(Object.fromEntries(b1.map((c) => [c.doc, c.state]))).toEqual({ insurance: 'valid', fitness: 'expiring', pollution: 'expired', registration: 'missing', licence: 'valid' });
     expect(b1.find((c) => c.doc === 'pollution').daysLeft).toBe(-3);
     expect(b1.find((c) => c.doc === 'licence').label).toContain('Ramesh');
     const b2 = d.certificates.filter((c) => c.bus === 'B2');
-    expect(b2).toHaveLength(3); // three "not on file" rows, no licence row without a driver
+    expect(b2).toHaveLength(4); // four "not on file" rows (insurance, fitness, pollution, registration), no licence row without a driver
     expect(b2.every((c) => c.state === 'missing' && c.date === null)).toBe(true);
     expect(d.certificates.some((c) => c.bus === 'B3')).toBe(false);
     // expired first, then expiring, then missing, then valid

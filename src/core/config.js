@@ -59,7 +59,7 @@ export const config = {
   /** Outgoing email. With no RESEND_API_KEY nothing is ever sent (the in-app notification still happens). */
   mail: {
     resendKey: process.env.RESEND_API_KEY || '',
-    from: process.env.MAIL_FROM || '', // e.g. Campusio <noreply@mail.example.com>; the domain must be verified at Resend
+    from: process.env.MAIL_FROM || '', // e.g. AtKaksha <noreply@mail.example.com>; the domain must be verified at Resend
     replyTo: process.env.MAIL_REPLY_TO || '', // where replies to notification emails go (the support inbox)
     supportTo: process.env.MAIL_SUPPORT_TO || process.env.MAIL_REPLY_TO || '', // who hears about new platform help desk tickets
     appUrl: (process.env.APP_URL || (process.env.CORS_ORIGIN || 'http://localhost:5173').split(',')[0]).replace(/\/$/, ''),

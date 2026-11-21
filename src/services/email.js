@@ -21,7 +21,7 @@ async function resendTransport(msg) {
     method: 'POST',
     headers: { Authorization: `Bearer ${config.mail.resendKey}`, 'Content-Type': 'application/json' },
     signal: AbortSignal.timeout(15000),
-    body: JSON.stringify({ from: config.mail.from, to: [msg.to], subject: msg.subject, html: msg.html, text: msg.text, ...(msg.replyTo ? { reply_to: msg.replyTo } : {}) }),
+    body: JSON.stringify({ from: config.mail.from, to: [msg.to], subject: msg.subject, html: msg.html, text: msg.text, ...(msg.replyTo ? { reply_to: msg.replyTo } : {}), ...(msg.attachments?.length ? { attachments: msg.attachments.map((a) => ({ filename: a.filename, content: a.content })) } : {}) }),
   });
   if (res.status === 429 || res.status >= 500) throw new RetryableError(`Resend ${res.status}`);
   if (!res.ok) throw new Error(`Resend ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -44,10 +44,10 @@ function claimNext() {
 
 async function drain() {
   for (let item = await claimNext(); item; item = await claimNext()) {
-    const msg = { to: item.to, subject: item.subject, html: item.html, text: item.text, replyTo: item.replyTo };
+    const msg = { to: item.to, subject: item.subject, html: item.html, text: item.text, replyTo: item.replyTo, attachments: item.attachments };
     try {
       await (transport || resendTransport)(msg);
-      await EmailOutbox.updateOne({ _id: item._id }, { $set: { status: 'sent', sentAt: new Date() }, $unset: { leaseUntil: 1 } });
+      await EmailOutbox.updateOne({ _id: item._id }, { $set: { status: 'sent', sentAt: new Date(), attachments: [] }, $unset: { leaseUntil: 1 } });
       logger.info('email sent', { to: item.to, subject: item.subject });
     } catch (e) {
       if (e instanceof RetryableError && item.tries < MAX_TRIES) {
@@ -68,9 +68,10 @@ export function kick() {
 }
 
 /** Queue an email in the database. Returns false (and does nothing) when email is not set up or there is no address. */
-export function enqueueEmail({ to, subject, html, text, replyTo }) {
+/** attachments: [{ filename, contentType, content }] with content as a Buffer (kept in the outbox as base64 until sent). */
+export function enqueueEmail({ to, subject, html, text, replyTo, attachments }) {
   if (!isEmailEnabled() || !to || !/^\S+@\S+\.\S+$/.test(to)) return false;
-  const p = EmailOutbox.create({ to, subject: String(subject).slice(0, 200), html, text, replyTo: replyTo || config.mail.replyTo || undefined })
+  const p = EmailOutbox.create({ to, subject: String(subject).slice(0, 200), html, text, replyTo: replyTo || config.mail.replyTo || undefined, attachments: (attachments || []).map((a) => ({ filename: a.filename, contentType: a.contentType, content: Buffer.isBuffer(a.content) ? a.content.toString('base64') : a.content })) })
     .then(() => kick()).catch((e) => logger.warn('email could not be queued', { error: e.message }));
   creating.add(p); p.finally(() => creating.delete(p));
   return true;
@@ -100,7 +101,7 @@ ${footer ? `<p style="margin:22px 0 0;font-size:12px;color:#6b7280">${escapeHtml
 }
 
 /** Convenience: build and queue a notification-style email in one call. */
-export function sendNotificationEmail(to, { subject, heading, lines, button, footer, replyTo }) {
+export function sendNotificationEmail(to, { subject, heading, lines, button, footer, replyTo, attachments }) {
   const { html, text } = renderEmail({ heading: heading || subject, lines, button, footer });
-  return enqueueEmail({ to, subject, html, text, replyTo });
+  return enqueueEmail({ to, subject, html, text, replyTo, attachments });
 }

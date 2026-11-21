@@ -6,6 +6,8 @@ import mongoose from 'mongoose';
 import { setup, teardown, reset, makeSuperAdmin, seedWorld } from './helpers.js';
 import { Student, School, Payment } from '../src/models/index.js';
 import { backupDatabase, verifyBackup, restoreDatabase } from '../src/scripts/backup.js';
+import { putBytes, readFileBytes } from '../src/services/files.js';
+import { File } from '../src/models/index.js';
 
 describe('Backup and restore: a whole school can be saved, checked and brought back exactly', () => {
   let root; let W; let dir; let before;
@@ -44,5 +46,17 @@ describe('Backup and restore: a whole school can be saved, checked and brought b
     const cols = await mongoose.connection.db.collections(); await Promise.all(cols.map((c) => c.deleteMany({})));
     const r = await restoreDatabase(dir);
     expect(r.students).toBe(before.students); expect(await School.countDocuments()).toBe(before.schools);
+  });
+
+  it('uploaded files are part of the database backup and come back byte for byte', async () => {
+    const bytes = Buffer.from(Array.from({ length: 300000 }, (_, i) => (i * 7) % 256)); // bigger than one GridFS chunk (255 kB)
+    const gridId = await putBytes(bytes, 'big.bin');
+    const f = await File.create({ tenantId: W.id, originalName: 'big.bin', mime: 'application/pdf', size: bytes.length, storageKey: 'x', kind: 'photo', ownerType: 'school', store: 'gridfs', gridId });
+    const d2 = fs.mkdtempSync(path.join(os.tmpdir(), 'bak-files-'));
+    const m = await backupDatabase(d2); expect(m.collections['files.chunks']).toBeGreaterThanOrEqual(2);
+    const cols = await mongoose.connection.db.collections(); await Promise.all(cols.map((c) => c.deleteMany({})));
+    await restoreDatabase(d2);
+    const back = await readFileBytes(await File.findById(f._id));
+    expect(back.equals(bytes)).toBe(true);
   });
 });

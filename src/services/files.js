@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import mongoose from 'mongoose';
 import multer from 'multer';
 import jwt from 'jsonwebtoken';
 import { config } from '../core/config.js';
@@ -54,15 +55,60 @@ export async function saveFile(req, file, { kind, ownerType, ownerId, docType, v
   await assertContentMatches(file);
   // with ENCRYPT_FILES=true the bytes on disk are encrypted (the type was checked above, while they were still readable)
   const enc = config.encryptFiles;
-  if (enc) await fs.promises.writeFile(file.path, sealBytes(await fs.promises.readFile(file.path)));
+  let bytes = await fs.promises.readFile(file.path);
+  if (enc) bytes = sealBytes(bytes);
+  // the bytes live in the database (GridFS), not on this server's disk: every server, and every deploy, sees the same files
+  const gridId = await putBytes(bytes, file.originalname || file.filename);
+  await fs.promises.unlink(file.path).catch(() => {}); // the temporary upload
   return File.create({
-    enc, tenantId, originalName: file.originalname, mime: file.mimetype, size: file.size, storageKey: file.filename,
+    enc, store: 'gridfs', gridId, tenantId,
+    originalName: file.originalname, mime: file.mimetype, size: file.size, storageKey: file.filename,
     kind, ownerType, ownerId: ownerId ? String(ownerId) : undefined, docType, visibility, uploadedBy: req.user._id,
   });
 }
-export const filePath = (f) => path.join(config.uploadDir, path.basename(f.storageKey));
+export const filePath = (f) => path.join(config.uploadDir, path.basename(f.storageKey)); // only for files stored before GridFS (store: 'disk')
+
+const bucket = () => new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'files' });
+/** Writes bytes into GridFS and returns the new id. */
+export function putBytes(buf, filename = 'file') {
+  return new Promise((resolve, reject) => {
+    const up = bucket().openUploadStream(String(filename).slice(0, 200));
+    up.on('error', reject); up.on('finish', () => resolve(up.id));
+    up.end(buf);
+  });
+}
+const collect = (stream) => new Promise((resolve, reject) => { const c = []; stream.on('data', (d) => c.push(d)); stream.on('error', reject); stream.on('end', () => resolve(Buffer.concat(c))); });
+
 export async function removeFileBytes(f) {
-  try { await fs.promises.unlink(filePath(f)); } catch { /* already gone */ }
+  try {
+    if (f.store === 'gridfs' && f.gridId) await bucket().delete(f.gridId);
+    else await fs.promises.unlink(filePath(f));
+  } catch { /* already gone */ }
+}
+/** Is the stored content still there? */
+export async function fileAvailable(f) {
+  if (f.store === 'gridfs') return !!f.gridId && (await mongoose.connection.db.collection('files.files').countDocuments({ _id: f.gridId }, { limit: 1 })) > 0;
+  return fs.existsSync(filePath(f));
+}
+/** The file's bytes as they are stored (encrypted, if they were). */
+async function rawBytes(f) {
+  if (f.store === 'gridfs') return collect(bucket().openDownloadStream(f.gridId));
+  return fs.promises.readFile(filePath(f));
+}
+/** The file's bytes, decrypted when it was stored encrypted. */
+export async function readFileBytes(f) {
+  const raw = await rawBytes(f);
+  return f.enc ? openBytes(raw) : raw;
+}
+/** Sends the file's content as the answer to a request (headers are set by the caller). */
+export async function sendStoredFile(res, f) {
+  if (f.enc || f.store !== 'gridfs') {
+    if (!f.enc) return res.sendFile(filePath(f)); // an older file on this server's disk
+    return res.send(await readFileBytes(f));
+  }
+  const stream = bucket().openDownloadStream(f.gridId);
+  stream.on('error', () => { if (!res.headersSent) res.status(404).json({ error: 'File is no longer available', code: 'NOT_FOUND' }); else res.destroy(); });
+  stream.pipe(res);
 }
 
 export function signFileToken(fileId, userId) {
@@ -72,10 +118,4 @@ export function verifyFileToken(token) {
   const p = verifyToken(token);
   if (p.p !== 'file') throw new Error('bad token');
   return p;
-}
-
-/** The file's bytes, decrypted when it was stored encrypted. */
-export async function readFileBytes(f) {
-  const raw = await fs.promises.readFile(filePath(f));
-  return f.enc ? openBytes(raw) : raw;
 }

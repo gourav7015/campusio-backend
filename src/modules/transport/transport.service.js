@@ -1,6 +1,8 @@
 import { rollStatus } from '../../services/context.js';
-import { Bus, StudentTransport, Student, StudentEnrolment, Section, ClassModel, StaffMember, Designation } from '../../models/index.js';
+import { Bus, BusDocument, BUS_DOC_TYPES, File, User, School, StudentTransport, Student, StudentEnrolment, Section, ClassModel, StaffMember, Designation } from '../../models/index.js';
 import { notFound, conflict, bad, addDays, daysBetween, escapeRegex } from '../../core/utils.js';
+import { removeFileBytes } from '../../services/files.js';
+import { notifyUsers } from '../../services/notify.js';
 import { billTransport, cancelTransportCharges } from '../finance/finance.service.js';
 
 const EXPIRIES = ['insuranceExpiry', 'fitnessExpiry', 'pollutionExpiry'];
@@ -9,11 +11,17 @@ const expiryAlerts = (bus, today) => EXPIRIES.filter((k) => bus[k] && bus[k] <= 
 const certState = (date, today) => (!date ? 'missing' : date < today ? 'expired' : date <= addDays(today, 30) ? 'expiring' : 'valid');
 const DOCS = [['insuranceExpiry', 'Insurance'], ['fitnessExpiry', 'Fitness certificate'], ['pollutionExpiry', 'Pollution certificate']];
 /** Every document of every non-retired bus, not just the problems. The driver's licence is listed only when a driver is assigned. */
-export function certificateRows(buses, crew, today) {
+export function certificateRows(buses, crew, today, docs = []) {
   const out = [];
+  const extra = new Map(); for (const d of docs) { const k = String(d.busId); if (!extra.has(k)) extra.set(k, []); extra.get(k).push(d); }
   for (const b of buses.filter((x) => x.status !== 'retired')) {
     const row = (doc, label, date) => out.push({ busId: b._id, bus: b.busNo, doc, label, date: date || null, daysLeft: date ? daysBetween(today, date) : null, state: certState(date, today) });
     for (const [k, label] of DOCS) row(k.replace('Expiry', ''), label, b[k]);
+    // registration (always expected), and permit, road tax and anything else once they have been recorded
+    const mine = extra.get(String(b._id)) || [];
+    const reg = mine.find((d) => d.type === 'registration');
+    out.push({ busId: b._id, bus: b.busNo, doc: 'registration', label: BUS_DOC_TYPES.registration.label, date: reg?.expiresOn || null, daysLeft: reg?.expiresOn ? daysBetween(today, reg.expiresOn) : null, state: reg ? (reg.expiresOn ? certState(reg.expiresOn, today) : 'valid') : 'missing' });
+    for (const d of mine.filter((x) => ['permit', 'road_tax', 'other'].includes(x.type))) row(d.type === 'other' ? `other-${d._id}` : d.type, d.type === 'other' ? (d.title || 'Other document') : BUS_DOC_TYPES[d.type].label, d.expiresOn);
     const d = crew.get(String(b.driverId));
     if (d) row('licence', `Driver licence (${d.name})`, d.licenseExpiry);
   }
@@ -54,7 +62,9 @@ export async function listBuses(ctx) {
   ]);
   const crew = await crewOf(ctx.tenantId, buses);
   const n = new Map(counts.map((c) => [String(c._id), c.n]));
-  return buses.map((b) => ({ ...withCrew(b, crew, ctx.today), students: n.get(String(b._id)) || 0 }));
+  const docRows = await BusDocument.aggregate([{ $match: { tenantId: ctx.tenantId } }, { $group: { _id: '$busId', total: { $sum: 1 }, withCopy: { $sum: { $cond: [{ $ifNull: ['$fileId', false] }, 1, 0] } } } }]);
+  const dc = new Map(docRows.map((d) => [String(d._id), { total: d.total, withCopy: d.withCopy }]));
+  return buses.map((b) => ({ ...withCrew(b, crew, ctx.today), students: n.get(String(b._id)) || 0, documents: dc.get(String(b._id)) || { total: 0, withCopy: 0 } }));
 }
 
 export async function createBus(ctx, body) {
@@ -179,7 +189,7 @@ export async function dashboard(ctx) {
     alerts: [
       ...buses.flatMap((b) => withCrew(b, crew, ctx.today).alerts.map((a) => ({ bus: b.busNo, ...a }))),
     ],
-    certificates: certificateRows(buses, crew, ctx.today),
+    certificates: certificateRows(buses, crew, ctx.today, await BusDocument.find({ tenantId: ctx.tenantId, busId: { $in: buses.map((b) => b._id) } }).lean()),
     fullBuses: buses.filter((b) => b.status === 'active').map((b) => ({ id: b._id, busNo: b.busNo, riders: n.get(String(b._id)) || 0, capacity: b.capacity })).sort((a, b) => b.riders / b.capacity - a.riders / a.capacity).slice(0, 6),
   };
 }
@@ -200,4 +210,83 @@ export async function findStudents(ctx, { sectionId, q }) {
   else return [];
   const [info, buses] = await Promise.all([describeStudents(ctx, ids), busNumbers(ctx.tenantId, ids)]);
   return ids.map((id) => ({ studentId: id, ...info.get(String(id)), bus: buses.get(String(id)) || null }));
+}
+
+
+// ───────────── vehicle documents ─────────────
+const LEGACY = { insurance: 'insuranceExpiry', pollution: 'pollutionExpiry', fitness: 'fitnessExpiry' };
+const stateOf = (d, today) => (d.expiresOn ? certState(d.expiresOn, today) : 'valid');
+const view = (d, today) => ({
+  id: d._id, type: d.type, label: d.type === 'other' ? (d.title || BUS_DOC_TYPES.other.label) : BUS_DOC_TYPES[d.type].label, number: d.number || '', issuedOn: d.issuedOn || '', expiresOn: d.expiresOn || '', notes: d.notes || '',
+  fileId: d.fileId || null, state: stateOf(d, today), daysLeft: d.expiresOn ? daysBetween(today, d.expiresOn) : null, updatedByName: d.updatedByName || '',
+});
+const loadBus = async (ctx, id) => { const b = await Bus.findOne({ _id: id, tenantId: ctx.tenantId }); if (!b) throw notFound('Bus not found'); return b; };
+
+/** The bus's papers: every standard type is listed (as "missing" until recorded), then anything extra. */
+export async function listBusDocuments(ctx, busId) {
+  const bus = await loadBus(ctx, busId);
+  const docs = await BusDocument.find({ tenantId: ctx.tenantId, busId }).sort({ createdAt: 1 }).lean();
+  const by = new Map(docs.filter((d) => d.type !== 'other').map((d) => [d.type, d]));
+  // a date that was only ever typed on the bus itself (before documents existed) still shows, as a document without a number or copy
+  const legacy = (type) => (LEGACY[type] && bus[LEGACY[type]] ? { _id: null, type, expiresOn: bus[LEGACY[type]] } : null);
+  const standard = Object.entries(BUS_DOC_TYPES).filter(([t]) => t !== 'other').map(([type, def]) => (by.has(type) ? view(by.get(type), ctx.today) : legacy(type) ? view(legacy(type), ctx.today)
+    : { id: null, type, label: def.label, number: '', issuedOn: '', expiresOn: '', notes: '', fileId: null, state: 'missing', daysLeft: null, required: def.expiry === 'required', updatedByName: '' }));
+  return { types: Object.fromEntries(Object.entries(BUS_DOC_TYPES).map(([t, d]) => [t, d])), documents: [...standard, ...docs.filter((d) => d.type === 'other').map((d) => view(d, ctx.today))] };
+}
+
+/** Records or renews a document (type 'other' adds another). A new copy replaces the old file. Insurance, pollution and fitness dates also update the bus's own expiry fields. */
+export async function saveBusDocument(ctx, busId, type, body, savedFile) {
+  const bus = await loadBus(ctx, busId);
+  const def = BUS_DOC_TYPES[type];
+  if (!def) throw bad('Unknown document type');
+  if (def.expiry === 'required' && !body.expiresOn) throw bad('Enter the date it is valid until');
+  if (body.issuedOn && body.expiresOn && body.expiresOn < body.issuedOn) throw bad('The valid-until date is before the issue date');
+  if (type === 'other' && !body.title) throw bad('Give the document a name');
+  let doc = type === 'other' ? null : await BusDocument.findOne({ tenantId: ctx.tenantId, busId, type });
+  const fields = { number: body.number || undefined, issuedOn: body.issuedOn || undefined, expiresOn: body.expiresOn || undefined, notes: body.notes || undefined, title: type === 'other' ? body.title : undefined, updatedByName: ctx.actorName };
+  if (!doc) doc = new BusDocument({ tenantId: ctx.tenantId, busId, type });
+  Object.assign(doc, fields);
+  if (savedFile) { const old = doc.fileId ? await File.findById(doc.fileId) : null; doc.fileId = savedFile._id; if (old) { await removeFileBytes(old); await old.deleteOne(); } }
+  await doc.save();
+  if (LEGACY[type]) { bus.set(LEGACY[type], doc.expiresOn || undefined); await bus.save(); }
+  return view(doc.toObject(), ctx.today);
+}
+
+export async function removeBusDocument(ctx, busId, docId) {
+  await loadBus(ctx, busId);
+  const doc = await BusDocument.findOne({ _id: docId, tenantId: ctx.tenantId, busId });
+  if (!doc) throw notFound('Document not found');
+  if (doc.fileId) { const f = await File.findById(doc.fileId); if (f) { await removeFileBytes(f); await f.deleteOne(); } }
+  if (LEGACY[doc.type]) await Bus.updateOne({ _id: busId, tenantId: ctx.tenantId }, { $unset: { [LEGACY[doc.type]]: 1 } });
+  await doc.deleteOne();
+}
+
+/**
+ * Tells the transport officer (and the School Admin) when a vehicle document is about to run out or has: once at 30 days, 7 days and on expiry,
+ * for the documents recorded here and for the older expiry dates on the bus. Safe to run often: each stage is sent once.
+ */
+export async function busDocumentReminders(now = new Date()) {
+  let sent = 0;
+  const today = now.toLocaleDateString('en-CA');
+  for (const school of await School.find({ status: 'active' }).select('_id').lean()) {
+    const tenantId = school._id;
+    const [buses, docs, users] = await Promise.all([Bus.find({ tenantId, status: { $ne: 'retired' } }).lean(), BusDocument.find({ tenantId }).lean(), User.find({ tenantId, status: 'active', $or: [{ role: 'transport' }, { role: 'school_admin', adminLevel: { $ne: 'sub' } }] }).select('_id').lean()]);
+    if (!users.length) continue;
+    const items = [];
+    for (const b of buses) {
+      for (const [type, field] of Object.entries(LEGACY)) if (b[field]) items.push({ key: `${b._id}:${type}`, bus: b.busNo, label: BUS_DOC_TYPES[type].label, date: b[field] });
+    }
+    const busNo = new Map(buses.map((b) => [String(b._id), b.busNo]));
+    for (const d of docs) if (d.expiresOn && busNo.has(String(d.busId)) && !LEGACY[d.type]) items.push({ key: `${d.busId}:${d._id}`, bus: busNo.get(String(d.busId)), label: d.type === 'other' ? (d.title || 'Document') : BUS_DOC_TYPES[d.type].label, date: d.expiresOn });
+    for (const it of items) {
+      const left = daysBetween(today, it.date);
+      const stage = left < 0 ? 'expired' : left <= 7 ? '7' : left <= 30 ? '30' : null;
+      if (!stage) continue;
+      sent += await notifyUsers(tenantId, users.map((u) => u._id), {
+        category: 'transport', title: stage === 'expired' ? `Bus ${it.bus}: ${it.label} has expired` : `Bus ${it.bus}: ${it.label} runs out in ${left} day${left === 1 ? '' : 's'}`,
+        body: `Valid until ${it.date}. Renew it and record the new dates under Buses and riders.`, link: { type: 'transport' }, dedupeKey: `busdoc:${it.key}:${it.date}:${stage}`,
+      });
+    }
+  }
+  return sent;
 }

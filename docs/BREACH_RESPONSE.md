@@ -1,6 +1,6 @@
 # If personal data may have been exposed
 
-A short plan to follow, not a legal opinion. Under India's Digital Personal Data Protection Act the school (the data fiduciary) and Campusio (its processor) have duties after a breach; confirm the exact notice and timing rules with a lawyer before relying on this.
+A short plan to follow, not a legal opinion. Under India's Digital Personal Data Protection Act the school (the data fiduciary) and AtKaksha (its processor) have duties after a breach; confirm the exact notice and timing rules with a lawyer before relying on this.
 
 ## First hour: stop it
 1. **Contain.** Disable the affected account (Platform → school → administrator, or School admin → user). Sign everyone out: change `JWT_SECRET` (set the old one as `JWT_SECRET_PREVIOUS` only if you do *not* want to force sign-out; leave it out to end every session).
@@ -21,4 +21,4 @@ A short plan to follow, not a legal opinion. Under India's Digital Personal Data
 10. Write down what happened, what was done and what changes (a new test, a new alert, a changed procedure). Add it to `AUDIT_REPORT.md`.
 11. Check backups: a restore of an older copy brings back older data, including people who were erased since.
 
-Contacts to fill in before they are needed: school grievance officer, Campusio support address, the person holding the Atlas, Render and Cloudflare accounts.
+Contacts to fill in before they are needed: school grievance officer, AtKaksha support address, the person holding the Atlas, Render and Cloudflare accounts.

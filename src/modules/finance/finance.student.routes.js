@@ -14,6 +14,7 @@ r.get('/fees', async (req, res) => {
   const plan = await svc.advancePlan(req.ctx, req.ctx.student._id);
   res.json({
     totals: acct.totals,
+    installments: acct.installments,
     online: onlineInfo(req.ctx),
     categories: [...cat.values()],
     advanceOffer: { eligible: plan.eligible, offer: plan.offer, months: plan.months, discount: plan.discount, payable: plan.payable, reason: plan.reason },

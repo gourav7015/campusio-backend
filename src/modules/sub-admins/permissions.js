@@ -27,7 +27,7 @@ export const PRESETS = {
   office_clerk: { label: 'Office clerk (students, communication)', permissions: ['students', 'communication'] },
 };
 
-const ALWAYS = new Set(['dashboard', 'search', 'notifications', 'me', 'helpdesk']); // helpdesk: everyone may write to Campusio support
+const ALWAYS = new Set(['dashboard', 'search', 'notifications', 'me', 'helpdesk']); // helpdesk: everyone may write to AtKaksha support
 const LOOKUPS = new Set(['years', 'classes', 'sections', 'subjects', 'designations', 'offerings']); // read-only lists every page needs
 const OWNER = { settings: 1, staff: 1, audit: 1, 'sub-admins': 1 };
 

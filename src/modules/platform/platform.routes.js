@@ -13,7 +13,7 @@ import { handlerRoutes as ticketHandler } from '../helpdesk/helpdesk.routes.js';
 const r = Router();
 r.use(requireRole('super_admin'));
 
-r.use('/helpdesk', ticketHandler('platform')); // tickets schools send to Campusio support
+r.use('/helpdesk', ticketHandler('platform')); // tickets schools send to AtKaksha support
 r.get('/errors', async (req, res) => {
   const q = parse(z.object({ source: z.enum(['server', 'client']).optional(), limit: z.coerce.number().int().min(1).max(200).default(50) }), req.query);
   const rows = await ErrorLog.find(q.source ? { source: q.source } : {}).sort({ at: -1 }).limit(q.limit).lean();

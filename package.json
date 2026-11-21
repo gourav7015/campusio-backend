@@ -18,7 +18,8 @@
     "migrate": "node src/scripts/migrate-cli.js",
     "reset-2fa": "node src/scripts/reset-2fa-cli.js",
     "loadtest": "node src/scripts/loadtest.js",
-    "docs:api": "node src/scripts/api-docs.js"
+    "docs:api": "node src/scripts/api-docs.js",
+    "files:migrate": "node src/scripts/files-migrate.js"
   },
   "dependencies": {
     "@fontsource/noto-sans": "^5.3.0",

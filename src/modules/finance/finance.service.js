@@ -2,11 +2,15 @@ import { rollStatus } from '../../services/context.js';
 import { classSpan } from '../../services/yearSpan.js';
 import PDFDocument from 'pdfkit';
 import {
-  FeeStructure, StudentCharge, Payment, Student, StudentEnrolment, Section, ClassModel, AcademicYear, School,
+  FeeStructure, StudentCharge, Payment, Student, StudentEnrolment, Section, ClassModel, AcademicYear, School, User,
 } from '../../models/index.js';
 import { notFound, conflict, bad, round2, escapeRegex, eachDate, addDays, daysBetween, toCsv } from '../../core/utils.js';
 import { nextSeq, settingsOf, loadSchool } from '../../services/context.js';
 import { notifyUsers } from '../../services/notify.js';
+import { sendNotificationEmail, isEmailEnabled } from '../../services/email.js';
+import { PassThrough } from 'node:stream';
+import { config } from '../../core/config.js';
+import { logger } from '../../core/logger.js';
 import { loadLook } from '../../services/documents/look.js';
 import { drawReceipt } from '../../services/documents/receipt.js';
 
@@ -417,6 +421,26 @@ export async function reversePayment(ctx, paymentId, reason, byName) {
 }
 
 // ───────────── accounts, dues, reports ─────────────
+/**
+ * A student's fees as instalments: every fee charge with the same due date is one instalment (tuition plus any extras due that day).
+ * state: paid / part (some paid) / overdue / due (due now, unpaid) / upcoming.
+ */
+export function installmentsOf(charges) {
+  const fees = charges.filter((c) => c.kind === 'fee');
+  const by = new Map();
+  for (const c of fees) { const k = c.dueDate || `none-${c.period || c.label}`; if (!by.has(k)) by.set(k, []); by.get(k).push(c); }
+  const rows = [...by.entries()].map(([k, list]) => {
+    const dueDate = list[0].dueDate || null;
+    const billed = sumOf(list, (c) => c.amount); const concession = sumOf(list, (c) => c.concession || 0); const paid = sumOf(list, (c) => c.paidAmount || 0);
+    const balance = money(billed - concession - paid);
+    const overdue = list.some((c) => c.overdue);
+    const state = balance <= 0 ? 'paid' : overdue ? 'overdue' : paid > 0 ? 'part' : 'open';
+    return { key: k, dueDate, label: list.find((c) => c.period)?.period || list[0].label, items: list.map((c) => ({ label: c.label, amount: c.amount, concession: c.concession || 0, paid: c.paidAmount || 0, outstanding: c.outstanding })), billed, concession, paid, balance, state };
+  }).sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999'));
+  rows.forEach((r, i) => { r.no = i + 1; });
+  return rows;
+}
+
 export async function studentAccount(tenantId, studentId, today) {
   const [charges, payments] = await Promise.all([
     StudentCharge.find({ tenantId, studentId }).sort({ dueDate: 1, createdAt: 1 }).lean(),
@@ -427,7 +451,7 @@ export async function studentAccount(tenantId, studentId, today) {
   const pdoc = (await Student.findOne({ _id: studentId, tenantId }).select('personalDiscount').lean())?.personalDiscount;
   return {
     personalDiscount: pdoc?.type ? { type: pdoc.type, value: pdoc.value, reason: pdoc.reason, setByName: pdoc.setByName } : null,
-    charges: view, payments,
+    charges: view, payments, installments: installmentsOf(view),
     totals: {
       assigned: sumOf(charges, (c) => c.amount), concession: sumOf(charges, (c) => c.concession || 0), paid: sumOf(charges, (c) => c.paidAmount || 0),
       pending: sumOf(open, outstanding), overdue: sumOf(view.filter((c) => c.overdue), (c) => c.outstanding), nextDue: open.map((c) => c.dueDate).filter(Boolean).sort()[0] || null,
@@ -541,7 +565,18 @@ export async function exportDefaultersByClass(ctx) {
   return toCsv(flat, [{ label: 'Class', get: (r) => r.className }, { label: 'Section', get: (r) => r.section }, { label: 'Students billed', get: (r) => r.studentsBilled }, { label: 'Defaulters', get: (r) => r.defaulters }, { label: '% defaulting', get: (r) => r.percentDefaulting }, { label: 'Overdue amount', get: (r) => r.overdueAmount }]);
 }
 
-export async function dashboard(ctx) {
+/** Money received between two dates: the total, receipts, how it was paid, and a bar per day (up to 62 days) or per month. */
+async function periodSummary(ctx, from, to) {
+  if (from > to) throw bad('The "from" date is after the "to" date');
+  const [rep, count] = await Promise.all([collectionReport(ctx, { from, to }), Payment.countDocuments({ tenantId: ctx.tenantId, kind: 'payment', paidOn: { $gte: from, $lte: to } })]);
+  const days = daysBetween(from, to) + 1;
+  let series;
+  if (days <= 62) { const m = new Map(rep.byDay.map((d) => [d.date, d.amount])); series = eachDate(from, to).map((date) => ({ label: date, amount: m.get(date) || 0 })); }
+  else { const m = new Map(); for (const d of rep.byDay) m.set(d.date.slice(0, 7), (m.get(d.date.slice(0, 7)) || 0) + d.amount); const out = []; for (let ym = from.slice(0, 7); ym <= to.slice(0, 7);) { out.push({ label: ym, amount: money(m.get(ym) || 0) }); const [y, mo] = ym.split('-').map(Number); ym = mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, '0')}`; } series = out; }
+  return { from, to, days, collected: money(rep.total ?? rep.byDay.reduce((n, d) => n + d.amount, 0)), receipts: count, byMode: rep.byMode, series, perMonth: days > 62 };
+}
+
+export async function dashboard(ctx, { from, to } = {}) {
   const month = ctx.today.slice(0, 7);
   const [today, monthAgg, dues, trend, recent, mode] = await Promise.all([
     Payment.aggregate([{ $match: { tenantId: ctx.tenantId, paidOn: ctx.today } }, { $group: { _id: null, amount: { $sum: signed }, count: { $sum: 1 } } }]),
@@ -557,6 +592,8 @@ export async function dashboard(ctx) {
     defaulters: dues.filter((r) => r.overdue > 0).length, studentsBilled: dues.filter((r) => r.billed).length, studentsUnbilled: dues.filter((r) => !r.billed).length,
     trend: eachDate(addDays(ctx.today, -13), ctx.today).map((date) => ({ date, amount: dayMap.get(date) || 0 })), modes: mode.map((m) => ({ mode: m._id, amount: money(m.amount) })).filter((m) => m.amount),
     recent,
+    // the period the person chose (any dates; the screen starts with the current financial year, April to March)
+    period: from && to ? await periodSummary(ctx, from, to) : null,
   };
 }
 
@@ -611,6 +648,79 @@ export async function renderReceipt(tenantId, payment, res) {
     next: first ? { label: first.label, dueDate: first.dueDate, amount: money(due.filter((c) => c.dueDate === first.dueDate).reduce((n, c) => n + pending(c), 0)) } : null,
   });
   doc.end();
+}
+
+/** The receipt as PDF bytes (the same layout as the printed one). */
+export async function receiptBytes(tenantId, payment) {
+  const sink = new PassThrough(); const chunks = [];
+  sink.on('data', (c) => chunks.push(c));
+  const done = new Promise((resolve, reject) => { sink.on('end', resolve); sink.on('error', reject); });
+  await renderReceipt(tenantId, payment, sink);
+  await done;
+  return Buffer.concat(chunks);
+}
+
+/** Everyone who should get a copy of a student's receipt: the student's own login email, the student's email and each guardian's. */
+async function receiptRecipients(student) {
+  const login = student.userId ? await User.findById(student.userId).select('email').lean() : null;
+  const all = [login?.email, student.email, ...(student.guardians || []).map((g) => g.email)].map((e) => String(e || '').trim().toLowerCase()).filter((e) => /^\S+@\S+\.\S+$/.test(e));
+  return [...new Set(all)];
+}
+
+/**
+ * Email the receipt (PDF attached) to the family. Used automatically after an online payment, and by the "Email receipt" button.
+ * Never throws: a mail problem must not undo a payment. Returns the addresses it was queued for.
+ */
+export async function emailReceipt(tenantId, paymentId) {
+  try {
+    if (!isEmailEnabled()) return [];
+    const payment = await Payment.findOne({ _id: paymentId, tenantId }).lean();
+    if (!payment || payment.kind !== 'payment') return [];
+    const student = await Student.findOne({ _id: payment.studentId, tenantId }).lean();
+    if (!student) return [];
+    const to = await receiptRecipients(student);
+    if (!to.length) return [];
+    const [pdf, school] = await Promise.all([receiptBytes(tenantId, payment), School.findById(tenantId).select('name').lean()]);
+    for (const addr of to) {
+      sendNotificationEmail(addr, {
+        subject: `Fee receipt ${payment.receiptNo}${school?.name ? ` · ${school.name}` : ''}`, heading: 'Thank you, your payment is received',
+        lines: [`Receipt ${payment.receiptNo} for ${student.name}: ₹${payment.amount} received on ${payment.paidOn} (${MODE_LABEL[payment.mode] || payment.mode}).`, 'The receipt is attached as a PDF. Please keep it for your records.'],
+        button: config.mail.appUrl ? { label: 'See fee details', url: config.mail.appUrl } : undefined,
+        footer: 'This is an automatic email. Write to the school office if anything looks wrong.',
+        attachments: [{ filename: `receipt-${payment.receiptNo}.pdf`, contentType: 'application/pdf', content: pdf }],
+      });
+    }
+    return to;
+  } catch (e) { logger.warn('receipt email failed', { paymentId: String(paymentId), error: e.message }); return []; }
+}
+
+/**
+ * Instalment-wise dashboard: for each due date of the year's fees, how much was billed, how much is collected, how much is still to come,
+ * and how many students have cleared it. One row per due date (a month, for monthly fees).
+ */
+export async function installmentsReport(ctx, { yearId } = {}) {
+  const y = yearId || ctx.year?._id;
+  const per = await StudentCharge.aggregate([
+    { $match: { tenantId: ctx.tenantId, kind: 'fee', ...(y ? { yearId: y } : {}) } },
+    { $group: { _id: { d: { $ifNull: ['$dueDate', ''] }, s: '$studentId' }, billed: { $sum: '$amount' }, concession: { $sum: '$concession' }, paid: { $sum: '$paidAmount' } } },
+    { $project: { billed: 1, concession: 1, paid: 1, balance: { $subtract: [{ $subtract: ['$billed', '$concession'] }, '$paid'] } } },
+    { $group: { _id: '$_id.d', students: { $sum: 1 }, cleared: { $sum: { $cond: [{ $lte: ['$balance', 0.005] }, 1, 0] } }, billed: { $sum: '$billed' }, concession: { $sum: '$concession' }, collected: { $sum: '$paid' }, outstanding: { $sum: { $max: ['$balance', 0] } } } },
+    { $sort: { _id: 1 } },
+  ]);
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const rows = per.map((r) => {
+    const net = money(r.billed - r.concession);
+    const state = r.outstanding <= 0.005 ? 'complete' : !r._id ? 'open' : r._id < ctx.today ? 'overdue' : r._id.slice(0, 7) === ctx.today.slice(0, 7) ? 'due' : 'upcoming';
+    return {
+      dueDate: r._id || null, label: r._id ? `${MONTHS[Number(r._id.slice(5, 7)) - 1]} ${r._id.slice(0, 4)}` : 'No due date', students: r.students, cleared: r.cleared, pendingStudents: r.students - r.cleared,
+      billed: money(r.billed), concession: money(r.concession), net, collected: money(r.collected), outstanding: money(r.outstanding), percent: net ? Math.round((r.collected / net) * 1000) / 10 : 100, state,
+    };
+  });
+  const total = (k) => money(rows.reduce((n, r) => n + r[k], 0));
+  return {
+    yearId: y, items: rows,
+    totals: { net: total('net'), collected: total('collected'), outstanding: total('outstanding'), overdue: money(rows.filter((r) => r.state === 'overdue').reduce((n, r) => n + r.outstanding, 0)), instalments: rows.length, complete: rows.filter((r) => r.state === 'complete').length },
+  };
 }
 
 /** Small read for the School Admin dashboard (view-only). */

@@ -437,7 +437,7 @@ export const Message = model('Message', new Schema({
 }, opts));
 
 // ───────────── Help desk ─────────────
-// scope 'platform': a School Admin asks Campusio support (handled by the Super Admin side).
+// scope 'platform': a School Admin asks AtKaksha support (handled by the Super Admin side).
 // scope 'school': a teacher, student or staff member asks their own school's admin.
 export const TICKET_CATEGORIES = ['general', 'bug', 'account', 'billing', 'how_to', 'feature', 'other'];
 export const Ticket = model('Ticket', (() => {
@@ -551,7 +551,8 @@ export const File = model('File', new Schema({
   tenantId: tenant, originalName: String, mime: String, size: Number, storageKey: { type: String, required: true },
   kind: { type: String, enum: ['homework', 'material', 'document', 'photo', 'announcement', 'leave', 'ticket'], required: true },
   ownerType: String, ownerId: String, docType: String, visibility: { type: String, enum: ['owner', 'school'], default: 'owner' },
-  uploadedBy: ref('User'), enc: { type: Boolean, default: false }, // enc: the bytes on disk are encrypted with the data key
+  uploadedBy: ref('User'), enc: { type: Boolean, default: false }, // enc: the stored bytes are encrypted with the data key
+  store: { type: String, enum: ['disk', 'gridfs'], default: 'disk' }, gridId: ObjectId, // gridfs: the bytes are in the database (collection files.files / files.chunks); disk: an older upload on one server's disk
 }, opts));
 
 export const ImportBatch = model('ImportBatch', new Schema({
@@ -675,6 +676,28 @@ export const Bus = model('Bus', (() => {
 })());
 
 /** Which bus a student rides (at most one) and where they get on. */
+/**
+ * A vehicle's paper: registration certificate (RC), insurance, pollution (PUC), fitness, route permit, road tax, or something else.
+ * One record per standard type per bus (a renewal replaces it); "other" can be added more than once. The copy is an uploaded file.
+ */
+export const BUS_DOC_TYPES = {
+  registration: { label: 'Registration certificate (RC)', expiry: 'optional' },
+  insurance: { label: 'Insurance', expiry: 'required' },
+  pollution: { label: 'Pollution certificate (PUC)', expiry: 'required' },
+  fitness: { label: 'Fitness certificate', expiry: 'required' },
+  permit: { label: 'Route permit', expiry: 'required' },
+  road_tax: { label: 'Road tax', expiry: 'required' },
+  other: { label: 'Other', expiry: 'optional' },
+};
+export const BusDocument = model('BusDocument', (() => {
+  const s = new Schema({
+    tenantId: tenant, busId: ref('Bus', { required: true, index: true }), type: { type: String, enum: Object.keys(BUS_DOC_TYPES), required: true }, title: String,
+    number: String, issuedOn: String, expiresOn: String, notes: String, fileId: ref('File'), updatedByName: String,
+  }, opts);
+  s.index({ tenantId: 1, busId: 1, type: 1 }, { unique: true, partialFilterExpression: { type: { $in: ['registration', 'insurance', 'pollution', 'fitness', 'permit', 'road_tax'] } } }); // a standard type exists once per bus; "other" can repeat
+  return s;
+})());
+
 export const StudentTransport = model('StudentTransport', (() => {
   const s = new Schema({ tenantId: tenant, studentId: ref('Student', { required: true }), busId: ref('Bus', { required: true, index: true }), stop: String, since: String, assignedBy: ref('User') }, opts);
   s.index({ tenantId: 1, studentId: 1 }, { unique: true });
@@ -761,9 +784,13 @@ export const StaffPunch = model('StaffPunch', (() => {
 export const Expense = model('Expense', (() => {
   const s = new Schema({
     tenantId: tenant, yearId: ref('AcademicYear'), date: { type: String, required: true }, department: { type: String, required: true, trim: true }, work: { type: String, trim: true },
-    title: { type: String, required: true, trim: true }, vendor: { type: String, trim: true }, billNo: { type: String, trim: true }, amount: { type: Number, required: true, min: 0.01 }, notes: String,
+    title: { type: String, required: true, trim: true }, vendor: { type: String, trim: true }, vendorId: ref('Vendor'), billNo: { type: String, trim: true }, amount: { type: Number, required: true, min: 0.01 }, notes: String,
+    nature: { type: String, enum: ['revenue', 'capital'], default: 'revenue' }, // running costs (salaries, supplies, repairs) or assets bought (buildings, labs, vehicles)
+    attachments: { type: [new Schema({ fileId: ref('File'), name: String, mime: String, size: Number }, { _id: false })], default: [] }, // bills and quotes that go to the approver with the expense
     status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
     submittedBy: ref('User'), submittedByName: String, decidedBy: ref('User'), decidedByName: String, decidedAt: Date, decisionNote: String,
+    // money goes out only after approval: Finance records the payment against an approved expense
+    paymentStatus: { type: String, enum: ['unpaid', 'paid'], default: 'unpaid' }, paidOn: String, paymentMode: String, paymentRef: String, paymentNote: String, paidByName: String, paidAt: Date,
   }, opts);
   s.index({ tenantId: 1, status: 1, date: -1 });
   return s;
@@ -772,10 +799,32 @@ export const Expense = model('Expense', (() => {
 /** Money set aside for a department (and optionally one piece of work) in an academic year. */
 export const Budget = model('Budget', (() => {
   const s = new Schema({
-    tenantId: tenant, yearId: ref('AcademicYear', { required: true }), department: { type: String, required: true, trim: true }, work: { type: String, trim: true, default: '' },
+    tenantId: tenant, yearId: ref('AcademicYear', { required: true }), kind: { type: String, enum: ['revenue', 'capital'], default: 'revenue' }, department: { type: String, required: true, trim: true }, work: { type: String, trim: true, default: '' },
     allocated: { type: Number, required: true, min: 0 }, notes: String,
   }, opts);
-  s.index({ tenantId: 1, yearId: 1, department: 1, work: 1 }, { unique: true });
+  s.index({ tenantId: 1, yearId: 1, kind: 1, department: 1, work: 1 }, { unique: true });
+  return s;
+})());
+
+/**
+ * A supplier or service provider the school pays. Finance keeps the list; the School Admin approves each vendor before any expense can name it.
+ * Changing the name, GSTIN, PAN or bank details of an approved vendor sends it back for approval (a changed bank account is how payments get diverted).
+ */
+export const VENDOR_STATUS = ['pending', 'approved', 'rejected', 'inactive'];
+export const Vendor = model('Vendor', (() => {
+  const s = new Schema({
+    tenantId: tenant, code: { type: String, required: true }, name: { type: String, required: true, trim: true }, nameKey: { type: String, required: true },
+    category: { type: String, trim: true }, contactPerson: String, phone: String, email: { type: String, lowercase: true, trim: true },
+    address: String, city: String, state: String, pincode: String,
+    gstin: { type: String, uppercase: true, trim: true }, pan: { type: String, uppercase: true, trim: true },
+    bankName: String, accountName: String, accountNo: String, ifsc: { type: String, uppercase: true, trim: true }, upi: String,
+    paymentTerms: String, notes: String,
+    status: { type: String, enum: VENDOR_STATUS, default: 'pending' },
+    submittedBy: ref('User'), submittedByName: String, decidedBy: ref('User'), decidedByName: String, decidedAt: Date, decisionNote: String,
+  }, opts);
+  s.index({ tenantId: 1, code: 1 }, { unique: true });
+  s.index({ tenantId: 1, nameKey: 1 }, { unique: true });
+  s.index({ tenantId: 1, status: 1, name: 1 });
   return s;
 })());
 
@@ -877,6 +926,7 @@ export const ErrorLog = model('ErrorLog', (() => {
 export const EmailOutbox = model('EmailOutbox', (() => {
   const s = new Schema({
     to: String, subject: String, html: String, text: String, replyTo: String,
+    attachments: { type: [new Schema({ filename: String, contentType: String, content: String }, { _id: false })], default: [] }, // content is base64; dropped once the email is sent
     status: { type: String, enum: ['pending', 'processing', 'sent', 'failed'], default: 'pending', index: true },
     tries: { type: Number, default: 0 }, nextAt: { type: Date, default: Date.now }, leaseUntil: Date, lastError: String, sentAt: Date,
   }, opts);

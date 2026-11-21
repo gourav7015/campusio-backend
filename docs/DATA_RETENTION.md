@@ -1,6 +1,6 @@
 # Data retention schedule
 
-What Campusio keeps, for how long, and what removes it. This is the technical schedule; the legal periods a school must follow (accounts, education records) are the school's to confirm with its own adviser.
+What AtKaksha keeps, for how long, and what removes it. This is the technical schedule; the legal periods a school must follow (accounts, education records) are the school's to confirm with its own adviser.
 
 | Data | Kept | Removed by |
 |---|---|---|

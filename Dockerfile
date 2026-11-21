@@ -1,4 +1,4 @@
-# Campusio API. Build:  docker build -t campusio-api .   Run:  docker run -p 4000:4000 --env-file .env -v campusio-uploads:/data/uploads campusio-api
+# AtKaksha API. Build:  docker build -t campusio-api .   Run:  docker run -p 4000:4000 --env-file .env -v campusio-uploads:/data/uploads campusio-api
 FROM node:22-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./

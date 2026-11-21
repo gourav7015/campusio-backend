@@ -40,7 +40,7 @@ export function verifyTotp(secretB32, code, { lastStep = 0, ms = Date.now() } = 
   return null;
 }
 
-export const otpauthUri = (secret, account) => `otpauth://totp/${encodeURIComponent(`Campusio:${account}`)}?secret=${secret}&issuer=Campusio&algorithm=SHA1&digits=6&period=${STEP}`;
+export const otpauthUri = (secret, account) => `otpauth://totp/${encodeURIComponent(`AtKaksha:${account}`)}?secret=${secret}&issuer=AtKaksha&algorithm=SHA1&digits=6&period=${STEP}`;
 export const qrSvg = (text) => new QRCode({ content: text, padding: 2, width: 200, height: 200, join: true, container: 'svg-viewbox' }).svg();
 
 /** Ten one-time recovery codes, shown once; only their hashes are kept. */

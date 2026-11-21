@@ -55,9 +55,9 @@ describe('Email channel and the help desk', () => {
     });
   });
 
-  describe('everyone writes to Campusio support (one place, not the school office)', () => {
+  describe('everyone writes to AtKaksha support (one place, not the school office)', () => {
     let tid;
-    it('a student raises a ticket: Campusio support is told by email, the student gets a receipt, the school admin hears nothing', async () => {
+    it('a student raises a ticket: AtKaksha support is told by email, the student gets a receipt, the school admin hears nothing', async () => {
       await User.updateOne({ role: 'school_admin', tenantId: W.id }, { $set: { email: 'admin@hd.test' } });
       const stuUser = (await api().get('/api/auth/me').set(S)).body.user;
       expect(stuUser.role).toBe('student');
@@ -75,7 +75,7 @@ describe('Email channel and the help desk', () => {
       expect(support.replyTo).toBe('stu@mail.test');
       expect(await Notification.countDocuments({ tenantId: W.id, category: 'helpdesk' })).toBe(1); // only the student's own receipt
       expect((await api().post('/api/student/tickets').set(S).send({ subject: 'x', body: 'y' })).status).toBe(400);
-      expect((await api().post('/api/student/tickets').set(S).send({ subject: 'Valid subject', body: 'Valid body', priority: 'urgent' })).status).toBe(400); // only Campusio sets urgent
+      expect((await api().post('/api/student/tickets').set(S).send({ subject: 'Valid subject', body: 'Valid body', priority: 'urgent' })).status).toBe(400); // only AtKaksha sets urgent
     });
 
     it('a person sees only their own tickets; no other person, no school admin and no other school can reach it', async () => {
@@ -112,7 +112,7 @@ describe('Email channel and the help desk', () => {
       expect((await mails()).some((m) => /was resolved/.test(m.subject))).toBe(true);
     });
 
-    it('a reply from the student reopens a resolved ticket; closing is final for the student, and Campusio may reopen', async () => {
+    it('a reply from the student reopens a resolved ticket; closing is final for the student, and AtKaksha may reopen', async () => {
       const r = await api().post(`/api/student/tickets/${tid}/replies`).set(S).send({ body: 'Still blank' });
       expect(r.status).toBe(201); expect(r.body.status).toBe('open');
       expect((await api().post(`/api/student/tickets/${tid}/replies`).set(S).send({ body: 'x', internal: true })).status).toBe(201); // the internal flag from a requester is ignored, never honoured

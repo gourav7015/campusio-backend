@@ -10,7 +10,7 @@ adminRoutes.post('/users/:id/reset-2fa', async (req, res) => {
   if (!isId(req.params.id)) throw notFound('User not found');
   const u = await User.findOne({ _id: req.params.id, tenantId: req.tenantId });
   if (!u || u.role === 'super_admin') throw notFound('User not found');
-  if (String(u._id) === String(req.user._id)) throw forbidden('Ask another administrator, or the Campusio team, to reset your own two-factor sign-in');
+  if (String(u._id) === String(req.user._id)) throw forbidden('Ask another administrator, or the AtKaksha team, to reset your own two-factor sign-in');
   await twoFactorReset(u);
   await audit(req, 'auth.2fa_reset', 'User', u._id, `Reset two-factor sign-in for ${u.name}`);
   res.json({ ok: true });
