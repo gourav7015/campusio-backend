@@ -76,7 +76,9 @@ export async function admitStudent(ctx, body) {
   const created = {};
   try {
     const { user, temporaryPassword } = await createUserAccount({
-      role: 'student', tenantId, name: body.name, email: body.email || undefined,
+      role: 'student', tenantId, name: body.name, dob: body.dob,
+      // the account's registered email and mobile: the student's own, else the primary guardian's (the parent signs in with the student's login)
+      email: body.email || (body.guardians?.find((g) => g.isPrimary) || body.guardians?.[0])?.email || undefined, phone: body.phone || (body.guardians?.find((g) => g.isPrimary) || body.guardians?.[0])?.phone,
       loginId: body.loginId || `${code}.${admissionNo}`.toLowerCase(), createdBy: actorId,
       password: body.password || initialPassword(settings, { name: body.name, dob: body.dob, phone: body.phone || body.guardians?.[0]?.phone }),
     });

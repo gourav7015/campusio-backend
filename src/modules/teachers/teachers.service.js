@@ -38,7 +38,7 @@ export async function createTeacher(ctx, body) {
   const house = await resolveHouse(tenantId, body.house);
   const code = await schoolCode(tenantId);
   const { user, temporaryPassword } = await createUserAccount({
-    role: 'teacher', tenantId, name: body.name, email: body.email || undefined,
+    role: 'teacher', tenantId, name: body.name, email: body.email || undefined, phone: body.phone, dob: body.dob,
     loginId: body.loginId || (body.email ? body.email : `${code}.t${body.employeeId}`), createdBy: actorId,
     // chosen by the office, else the school's starting-password format (name + date of birth), else random
     password: body.password || initialPassword(settingsOf(await loadSchool(tenantId)), { name: body.name, dob: body.dob, phone: body.phone }),

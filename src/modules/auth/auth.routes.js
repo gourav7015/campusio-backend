@@ -5,10 +5,14 @@ import { authenticate } from '../../middleware/auth.js';
 import { publicUser } from '../../services/users.js';
 import { StaffMember, School } from '../../models/index.js';
 import { isEmailEnabled } from '../../services/email.js';
+import { checkPassword } from '../../services/users.js';
+import * as otp from '../../services/otp.js';
+import { registeredContact, maskEmail } from '../../services/contact.js';
 
 /** The signed-in person as the app sees them. A staff member also says whether they have been given the attendance desk. */
 async function shaped(u) {
   const pu = publicUser(u);
+  pu.registeredEmail = maskEmail((await registeredContact(u)).email);
   if (u.role === 'staff') pu.canMarkAttendance = !!(await StaffMember.findOne({ userId: u._id, tenantId: u.tenantId }).select('canMarkAttendance').lean())?.canMarkAttendance;
   // a teacher sees "Period attendance" only in a school that takes attendance period by period
   if (u.role === 'teacher') pu.periodWise = !!(await School.findById(u.tenantId).select('settings.attendance.periodWise').lean())?.settings?.attendance?.periodWise;
@@ -34,19 +38,22 @@ const ctxOf = (req) => ({ userAgent: req.headers['user-agent'], ip: req.ip });
 
 r.post('/login', loginLimiter, async (req, res) => {
   const out = await svc.login(parse(v.loginBody, req.body), ctxOf(req));
-  if (out.challenge) return res.json({ twoFactorRequired: true, challenge: out.challenge });
+  if (out.challenge) return res.json({ twoFactorRequired: true, challenge: out.challenge, sentTo: out.sentTo });
   await finishLogin(req, res, out);
 });
 r.post('/login/2fa', loginLimiter, async (req, res) => finishLogin(req, res, await svc.loginSecondStep(parse(v.secondStepBody, req.body), ctxOf(req))));
 
-/** What the sign-in page may offer: a reset link by email works only when the server can send email. */
-r.get('/options', (_req, res) => res.json({ emailReset: isEmailEnabled() }));
+r.post('/login/2fa/resend', loginLimiter, async (req, res) => res.json(await svc.resendLoginCode(parse(v.challengeOnly, req.body))));
+
+/** What the pages may offer: codes and password resets work only when the server can send email. */
+r.get('/options', (_req, res) => res.json({ emailCodes: otp.emailCodesAvailable() }));
 const forgotLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts, try again later', code: 'RATE_LIMIT' }, skip: () => config.env === 'test' });
-// the same answer whether or not the account exists, so this cannot be used to find out who has an account
+// the same answer whether or not the account exists and whether or not the date of birth matched, so this cannot be used to find out who has an account
 r.post('/forgot', forgotLimiter, async (req, res) => { await svc.forgotPassword(parse(v.forgotBody, req.body)); res.json({ ok: true }); });
+r.post('/forgot/verify', loginLimiter, async (req, res) => res.json(await svc.verifyResetCode(parse(v.verifyResetBody, req.body))));
 r.post('/reset', loginLimiter, async (req, res) => {
   const user = await svc.resetPassword(parse(v.resetBody, req.body));
-  req.user = user; req.tenantId = user.tenantId; await audit(req, 'auth.password_reset', 'User', user._id, 'Password reset by email link');
+  req.user = user; req.tenantId = user.tenantId; await audit(req, 'auth.password_reset', 'User', user._id, 'Password reset with a code sent by email');
   res.json({ ok: true });
 });
 
@@ -68,18 +75,14 @@ r.post('/change-password', async (req, res) => {
 
 r.post('/refresh', async (req, res) => res.json(await svc.refreshSession(req.user, req.session)));
 
-r.post('/2fa/setup', async (req, res) => res.json(await svc.twoFactorSetup(req.user, parse(v.passwordOnly, req.body))));
-r.post('/2fa/enable', async (req, res) => {
-  const out = await svc.twoFactorEnable(req.user, parse(v.codeBody, req.body));
-  await audit(req, 'auth.2fa_enabled', 'User', req.user._id, 'Turned on two-factor sign-in');
-  res.json(out);
+// two-factor sign-in by a code sent to the registered email
+r.post('/2fa/start', async (req, res) => { const b = parse(v.passwordOnly, req.body); res.json(await otp.start(req.user, 'enable', await checkPassword(b.password, req.user.passwordHash))); });
+r.post('/2fa/disable-start', async (req, res) => { const b = parse(v.passwordOnly, req.body); res.json(await otp.start(req.user, 'disable', await checkPassword(b.password, req.user.passwordHash))); });
+r.post('/2fa/confirm', async (req, res) => {
+  const out = await otp.confirm(req.user, parse(v.codeBody, req.body));
+  await audit(req, out.purpose === 'enable' ? 'auth.2fa_enabled' : 'auth.2fa_disabled', 'User', req.user._id, `${out.purpose === 'enable' ? 'Turned on' : 'Turned off'} sign-in codes by email`);
+  res.json({ ok: true, ...out });
 });
-r.post('/2fa/disable', async (req, res) => {
-  await svc.twoFactorDisable(req.user, parse(v.passwordAndCode, req.body));
-  await audit(req, 'auth.2fa_disabled', 'User', req.user._id, 'Turned off two-factor sign-in');
-  res.json({ ok: true });
-});
-r.post('/2fa/recovery-codes', async (req, res) => res.json(await svc.newRecovery(req.user, parse(v.passwordAndCode, req.body))));
 
 r.get('/sessions', async (req, res) => res.json(await svc.listSessions(req.user, req.session)));
 r.post('/sessions/revoke-others', async (req, res) => res.json({ revoked: await svc.revokeOthers(req.user, req.session) }));

@@ -16,8 +16,8 @@ r.get('/sub-admins/options', async (req, res) => { full(req); res.json({ permiss
 r.get('/sub-admins', async (req, res) => { full(req); res.json((await User.find({ tenantId: req.tenantId, role: 'school_admin', adminLevel: 'sub' }).sort({ name: 1 }).lean()).map(view)); });
 r.post('/sub-admins', async (req, res) => {
   full(req);
-  const b = parse(z.object({ name: z.string().trim().min(2).max(100), email: z.string().email(), permissions: perms, loginId: z.string().optional() }), req.body);
-  const { user, temporaryPassword } = await createUserAccount({ role: 'school_admin', tenantId: req.tenantId, name: b.name, email: b.email, loginId: b.loginId, createdBy: req.user._id, extra: { adminLevel: 'sub', permissions: b.permissions } });
+  const b = parse(z.object({ name: z.string().trim().min(2).max(100), email: z.string().email(), phone: z.string().trim().max(20), dob: z.string(), permissions: perms, loginId: z.string().optional() }), req.body);
+  const { user, temporaryPassword } = await createUserAccount({ role: 'school_admin', tenantId: req.tenantId, name: b.name, email: b.email, phone: b.phone, dob: b.dob, loginId: b.loginId, createdBy: req.user._id, extra: { adminLevel: 'sub', permissions: b.permissions } });
   await audit(req, 'subadmin.created', 'User', user._id, `Created sub-admin ${user.name} (${b.permissions.join(', ')})`);
   res.status(201).json({ ...view(user), temporaryPassword });
 });

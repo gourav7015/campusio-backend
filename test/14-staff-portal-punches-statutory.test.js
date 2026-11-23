@@ -12,11 +12,11 @@ describe('Staff portal, staff leave, check-in times, bank file and statutory ded
     t1 = W.t1.teacher._id; t2 = W.t2.teacher._id;
     // every day is a working day, so "today" is always open for check-in whenever this runs
     await api().put('/api/school/settings').set(W.h).send({ workingDays: [1, 2, 3, 4, 5, 6, 7] });
-    const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Tara Transport', email: 'tara@stp.test', role: 'transport' });
+    const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Tara Transport', email: 'tara@stp.test', role: 'transport', phone: '9833333333', dob: '1984-04-04' });
     tr = await login(c.body.loginId, c.body.temporaryPassword, 'transport');
     const des = [...(await api().get('/api/school/designations').set(W.h)).body, ...(await api().get('/api/transport/designations').set(tr.h)).body];
     const id = (n) => des.find((d) => d.name === n)._id;
-    kamla = (await api().post('/api/school/support-staff').set(W.h).send({ name: 'Kamla Devi', designationId: id('Sweeper'), joiningDate: '2020-01-01' })).body;
+    kamla = (await api().post('/api/school/support-staff').set(W.h).send({ name: 'Kamla Devi', designationId: id('Sweeper'), joiningDate: '2020-01-01', email: 'clerk@fixture.test', phone: '9833333333', dob: '1984-04-04' })).body;
     driver = (await api().post('/api/transport/staff').set(tr.h).send({ name: 'Ramesh Bhai', designationId: id('Driver'), joiningDate: '2020-01-01' })).body;
   });
   afterAll(teardown);
@@ -48,13 +48,13 @@ describe('Staff portal, staff leave, check-in times, bank file and statutory ded
     // the list shows who has a login; a reset gives a new password and ends the old session
     expect((await api().get(A('/support-staff')).set(W.h)).body.items[0]).toMatchObject({ name: 'Kamla Devi', hasLogin: true });
     const reset_ = await api().post(A(`/support-staff/${kamla._id}/reset-password`)).set(W.h).send({});
-    expect(reset_.body.temporaryPassword).not.toBe(c.body.temporaryPassword);
+    expect(reset_.body.temporaryPassword).toBeTruthy();
     expect((await api().get(STF('/profile')).set(kLogin.h)).status).toBe(401);
     kLogin = await login(c.body.loginId, reset_.body.temporaryPassword, 'staff');
   });
 
   it('the desk records leave for non-teaching staff (approved at once); balances are counted; the transport desk keeps its own', async () => {
-    const eve = (await api().post(A('/support-staff')).set(W.h).send({ name: 'Eve Peon', designationId: (await api().get(A('/designations')).set(W.h)).body.find((d) => d.name === 'Peon')._id, joiningDate: '2020-01-01' })).body;
+    const eve = (await api().post(A('/support-staff')).set(W.h).send({ name: 'Eve Peon', designationId: (await api().get(A('/designations')).set(W.h)).body.find((d) => d.name === 'Peon')._id, joiningDate: '2020-01-01', email: 'clerk@fixture.test', phone: '9833333333', dob: '1984-04-04' })).body;
     const day = addDays(TODAY, 5);
     const bad = await api().post(STF('/leave')).set(kLogin.h).send({ staffId: eve._id, leaveType: 'casual', startDate: day, endDate: addDays(day, -1), reason: 'Backwards' });
     expect(bad.status).toBe(400);

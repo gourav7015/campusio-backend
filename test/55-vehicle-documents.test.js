@@ -14,7 +14,7 @@ describe('Transport: vehicle documents (registration, insurance, pollution, fitn
   const T = (p) => `/api/transport${p}`;
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'veh');
-    const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Tara Transport', email: 'tara@veh.test', role: 'transport' });
+    const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Tara Transport', email: 'tara@veh.test', role: 'transport', phone: '9833333333', dob: '1984-04-04' });
     tr = await login(c.body.loginId, c.body.temporaryPassword, 'transport');
     bus = (await api().post(T('/buses')).set(tr.h).send({ busNo: 'V-01', registrationNo: 'GJ03AB1234', capacity: 40 })).body;
     today = (await api().get(T('/dashboard')).set(tr.h)).body && new Date().toLocaleDateString('en-CA');

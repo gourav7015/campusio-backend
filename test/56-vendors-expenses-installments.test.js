@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { setup, teardown, reset, api, makeSuperAdmin, seedWorld, login } from './helpers.js';
 import { todayStr } from '../src/core/utils.js';
-import { Student, StudentCharge, Vendor, Budget, EmailOutbox } from '../src/models/index.js';
+import { User, Student, StudentCharge, Vendor, Budget, EmailOutbox } from '../src/models/index.js';
 import { setMailTransport, flushEmails } from '../src/services/email.js';
 import { runMigrations } from '../src/core/migrations.js';
 
@@ -16,7 +16,7 @@ describe('Finance: vendors with approval, expense files and payment only after a
   const vendor = (over = {}) => ({ name: 'Edu Supplies', category: 'Stationery', contactPerson: 'Ravi', phone: '9876543210', gstin: '24ABCDE1234F1Z5', pan: 'ABCDE1234F', bankName: 'SBI', accountName: 'Edu Supplies', accountNo: '123456789012', ifsc: 'SBIN0001234', ...over });
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'vnd');
-    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@vnd.test', role: 'finance' });
+    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@vnd.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
     fin = await login(s.body.loginId, s.body.temporaryPassword, 'finance');
   });
   afterAll(() => { setMailTransport(null); return teardown(); });
@@ -152,6 +152,7 @@ describe('Finance: vendors with approval, expense files and payment only after a
   it('the receipt goes to the family by email by itself after an online payment, and can be sent again from the counter', async () => {
     const sent = []; setMailTransport(async (m) => { sent.push(m); return { id: 'x' }; });
     const stu = W.students[0].student;
+    await User.updateOne({ _id: stu.userId }, { $unset: { email: 1 } });
     await Student.updateOne({ _id: stu._id }, { email: 'pupil@vnd.test', guardians: [{ name: 'Parent', email: 'parent@vnd.test', isPrimary: true }] });
     await StudentCharge.deleteMany({ tenantId: W.id });
     const c = await StudentCharge.create({ tenantId: W.id, studentId: stu._id, kind: 'fee', label: 'Tuition', period: 'November 2026', dueDate: TODAY, amount: 2000 });

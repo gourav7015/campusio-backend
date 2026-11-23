@@ -7,13 +7,13 @@ const TODAY = todayStr('Asia/Kolkata');
 
 describe('Employees directory, officers as employees, and the Staff portal attendance desk', () => {
   let root; let W; let fin; let lib; let tr; let clerk; let sweeper; let driver; let clerkLogin;
-  const mk = async (name, email, role) => { const c = await api().post('/api/school/staff').set(W.h).send({ name, email, role }); expect(c.status).toBe(201); return { ...c.body, h: (await login(c.body.loginId, c.body.temporaryPassword, role)).h }; };
+  const mk = async (name, email, role) => { const c = await api().post('/api/school/staff').set(W.h).send({ name, email, role, phone: '9833333333', dob: '1984-04-04' }); expect(c.status).toBe(201); return { ...c.body, h: (await login(c.body.loginId, c.body.temporaryPassword, role)).h }; };
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'emp');
     fin = await mk('Fiona Finance', 'f@emp.test', 'finance'); lib = await mk('Lila Library', 'l@emp.test', 'library'); tr = await mk('Tara Transport', 't@emp.test', 'transport');
     const des = [...(await api().get('/api/school/designations').set(W.h)).body, ...(await api().get('/api/transport/designations').set(tr.h)).body]; const id = (n) => des.find((d) => d.name === n)._id;
-    clerk = (await api().post('/api/school/support-staff').set(W.h).send({ name: 'Chhaya Clerk', designationId: id('Office Clerk'), phone: '9000000001' })).body;
-    sweeper = (await api().post('/api/school/support-staff').set(W.h).send({ name: 'Sunil Sweeper', designationId: id('Sweeper'), phone: '9000000002' })).body;
+    clerk = (await api().post('/api/school/support-staff').set(W.h).send({ name: 'Chhaya Clerk', designationId: id('Office Clerk'), phone: '9000000001', email: 'clerk@fixture.test', dob: '1984-04-04' })).body;
+    sweeper = (await api().post('/api/school/support-staff').set(W.h).send({ name: 'Sunil Sweeper', designationId: id('Sweeper'), phone: '9000000002', email: 'clerk@fixture.test', dob: '1984-04-04' })).body;
     driver = (await api().post('/api/transport/staff').set(tr.h).send({ name: 'Dinesh Driver', designationId: id('Driver'), phone: '9000000003' })).body;
   });
   afterAll(teardown);
@@ -134,9 +134,9 @@ describe('Employees directory, officers as employees, and the Staff portal atten
   it('the admin can add a staff member with a Staff portal login in one step, from the desk logins page', async () => {
     const des = (await api().get('/api/school/designations').set(W.h)).body;
     const peon = des.find((d) => d.name === 'Peon')._id;
-    expect((await api().post('/api/school/staff').set(W.h).send({ name: 'No Title', role: 'staff' })).status).toBe(400); // a job title is needed
-    expect((await api().post('/api/school/staff').set(W.h).send({ name: 'Needs Email', role: 'finance' })).status).toBe(400); // officers sign in with an email
-    const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Pappu Peon', role: 'staff', designationId: peon, phone: '9000000009', canMarkAttendance: true });
+    expect((await api().post('/api/school/staff').set(W.h).send({ name: 'No Title', role: 'staff', phone: '9833333333', dob: '1984-04-04', email: 'staff@fixture.test' })).status).toBe(400); // a job title is needed
+    expect((await api().post('/api/school/staff').set(W.h).send({ name: 'Needs Email', role: 'finance', phone: '9833333333', dob: '1984-04-04' })).status).toBe(400); // officers sign in with an email
+    const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Pappu Peon', role: 'staff', designationId: peon, phone: '9000000009', canMarkAttendance: true, phone: '9833333333', dob: '1984-04-04', email: 'staff@fixture.test' });
     expect(c.status).toBe(201);
     expect(c.body).toMatchObject({ role: 'staff', name: 'Pappu Peon' });
     expect(c.body.loginId).toMatch(/^emp\.s\d{4}$/); expect(c.body.temporaryPassword).toBeTruthy();
@@ -147,8 +147,8 @@ describe('Employees directory, officers as employees, and the Staff portal atten
 
   it('a desk role is held by a person: an existing employee is given the role, keeps their record, and the role itself is never a payable person', async () => {
     const des = (await api().get('/api/school/designations').set(W.h)).body;
-    const gita = (await api().post('/api/school/support-staff').set(W.h).send({ name: 'Gita Sharma', designationId: des.find((d) => d.name === 'Office Clerk')._id, phone: '9111111111' })).body;
-    const make = (body) => api().post('/api/school/staff').set(W.h).send({ role: 'finance', email: 'gita@emp.test', ...body });
+    const gita = (await api().post('/api/school/support-staff').set(W.h).send({ name: 'Gita Sharma', designationId: des.find((d) => d.name === 'Office Clerk')._id, phone: '9111111111', email: 'clerk@fixture.test', dob: '1984-04-04' })).body;
+    const make = (body) => api().post('/api/school/staff').set(W.h).send({ role: 'finance', email: 'gita@emp.test', ...body, phone: '9833333333', dob: '1984-04-04' });
     expect((await make({})).status).toBe(400); // a person is needed: a name, or someone already on the staff
     expect((await make({ staffMemberId: '0'.repeat(24) })).status).toBe(404);
     expect((await make({ staffMemberId: driver._id })).status).toBe(400); // transport crew cannot hold an officer role

@@ -8,7 +8,7 @@ describe('examinations with configurable mark fields → approval → publish �
   let root; let W; let exam; let esMaths; let esEng; let ids; let sheetM; let outsider;
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'exm');
-    const r = await W.post(W.h, '/api/school/students', { name: 'Outsider Kid', dob: '2013-07-07', sectionId: W.sec8B._id, admissionDate: '2026-04-15', guardians: [{ name: 'Parent Name', relationship: 'Mother', phone: '9876543210' }] });
+    const r = await W.post(W.h, '/api/school/students', { name: 'Outsider Kid', dob: '2013-07-07', sectionId: W.sec8B._id, admissionDate: '2026-04-15', guardians: [{ email: 'guardian@fixture.test', name: 'Parent Name', relationship: 'Mother', phone: '9876543210' }] });
     outsider = await login(r.body.credentials.loginId, r.body.credentials.temporaryPassword, 'student');
   });
   afterAll(teardown);

@@ -9,7 +9,8 @@ export const preferencesBody = z.object({
 });
 export const secondStepBody = z.object({ challenge: z.string().min(10).max(2000), code: z.string().min(6).max(30) });
 export const passwordOnly = z.object({ password: z.string().min(1).max(200) });
-export const codeBody = z.object({ code: z.string().min(6).max(30) });
-export const passwordAndCode = z.object({ password: z.string().min(1).max(200), code: z.string().min(6).max(30) });
-export const forgotBody = z.object({ loginId: z.string().min(1).max(120) });
-export const resetBody = z.object({ token: z.string().min(20).max(200), newPassword: z.string().min(1).max(200), code: z.string().max(30).optional() });
+export const codeBody = z.object({ code: z.string().min(6).max(12) });
+export const challengeOnly = z.object({ challenge: z.string().min(10).max(2000) });
+export const forgotBody = z.object({ loginId: z.string().min(1).max(120), dob: z.string().min(8).max(10) });
+export const verifyResetBody = z.object({ loginId: z.string().min(1).max(120), code: z.string().min(6).max(12) });
+export const resetBody = z.object({ resetToken: z.string().min(20).max(200), newPassword: z.string().min(1).max(200) });

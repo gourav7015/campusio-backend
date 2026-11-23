@@ -62,11 +62,11 @@ describe('promotion, bulk import, dashboards, profile and sessions', () => {
   describe('bulk import (data dumping)', () => {
     it('dry-runs with a per-row report, commits only valid rows, returns credentials and can be rolled back', async () => {
       const rows = [
-        { name: 'Imported One', dob: '2012-03-04', className: 'Class 8', section: 'A', guardianName: 'Mr One', guardianPhone: '9876543210', admissionNo: 'IMP-1' },
-        { name: 'Imported Two', dob: '2012-03-05', className: 'Class 8', section: 'A', guardianName: 'Mr Two', guardianPhone: '9876543211', admissionNo: 'IMP-2' },
-        { name: 'Bad Class', dob: '2012-03-06', className: 'Class 99', section: 'Z', guardianName: 'Mr Bad', guardianPhone: '9876543212' },
-        { name: 'Dup Admission', dob: '2012-03-07', className: 'Class 8', section: 'A', guardianName: 'Mr Dup', guardianPhone: '9876543213', admissionNo: 'IMP-1' },
-        { name: 'No Dob', dob: 'not-a-date', className: 'Class 8', section: 'A', guardianName: 'Mr X', guardianPhone: '9876543214' },
+        { name: 'Imported One', dob: '2012-03-04', className: 'Class 8', section: 'A', guardianName: 'Mr One', guardianPhone: '9876543210', guardianEmail: 'guardian@fixture.test', admissionNo: 'IMP-1' },
+        { name: 'Imported Two', dob: '2012-03-05', className: 'Class 8', section: 'A', guardianName: 'Mr Two', guardianPhone: '9876543211', guardianEmail: 'guardian@fixture.test', admissionNo: 'IMP-2' },
+        { name: 'Bad Class', dob: '2012-03-06', className: 'Class 99', section: 'Z', guardianName: 'Mr Bad', guardianPhone: '9876543212', guardianEmail: 'guardian@fixture.test' },
+        { name: 'Dup Admission', dob: '2012-03-07', className: 'Class 8', section: 'A', guardianName: 'Mr Dup', guardianPhone: '9876543213', guardianEmail: 'guardian@fixture.test', admissionNo: 'IMP-1' },
+        { name: 'No Dob', dob: 'not-a-date', className: 'Class 8', section: 'A', guardianName: 'Mr X', guardianPhone: '9876543214', guardianEmail: 'guardian@fixture.test' },
       ];
       const dry = (await api().post('/api/school/imports/students').set(W.h).send({ rows, dryRun: true })).body;
       expect(dry).toMatchObject({ dryRun: true, total: 5, valid: 2, invalid: 3 });
@@ -92,7 +92,7 @@ describe('promotion, bulk import, dashboards, profile and sessions', () => {
 
     it('imports teachers with subject names (subjects are created on the way) and rejects bad rows; Super Admin can dump into any school', async () => {
       const rows = [
-        { name: 'Imp Teacher', employeeId: 'T900', email: 'imp@prm.test', subjects: 'Mathematics; Physics' },
+        { name: 'Imp Teacher', employeeId: 'T900', email: 'imp@prm.test', phone: '9822200001', dob: '1988-08-08', subjects: 'Mathematics; Physics' },
         { name: 'Bad Email', employeeId: 'T901', email: 'not-an-email', subjects: 'Art' },
         { name: 'Dup Employee', employeeId: 'T001', subjects: 'Art' },
       ];
@@ -180,7 +180,7 @@ describe('promotion, bulk import, dashboards, profile and sessions', () => {
       const N = 430;
       const { default: mongoose } = await import('mongoose');
       const ids = Array.from({ length: N }, () => new mongoose.Types.ObjectId());
-      await Student.insertMany(ids.map((_id, i) => ({ _id, tenantId: W.id, name: `Bulk Pupil ${i}`, admissionNo: `BULK${i}`, dob: '2013-01-01', guardians: [{ name: 'Parent', relationship: 'Father', phone: '9876543210' }], status: 'active' })));
+      await Student.insertMany(ids.map((_id, i) => ({ _id, tenantId: W.id, name: `Bulk Pupil ${i}`, admissionNo: `BULK${i}`, dob: '2013-01-01', guardians: [{ email: 'guardian@fixture.test', name: 'Parent', relationship: 'Father', phone: '9876543210' }], status: 'active' })));
       await StudentEnrolment.insertMany(ids.map((studentId, i) => ({ tenantId: W.id, studentId, yearId: y2._id, classId: W.c8._id, sectionId: s8A2._id, rollNo: 1000 + i, startDate: '2027-04-01', status: 'active' })));
       const csv = (await api().get('/api/school/export/students.csv').set(W.h)).text.trim().split('\n');
       expect(csv.length - 1).toBeGreaterThanOrEqual(N); // header + every student

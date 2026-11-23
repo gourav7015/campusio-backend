@@ -15,7 +15,7 @@ describe('smoke: onboarding chain', () => {
     const sec = await api().post('/api/school/sections').set(s.h).send({ yearId: year.body._id, classId: cls.body._id, name: 'A', capacity: 2 });
     expect(sec.status).toBe(201);
     const st = await api().post('/api/school/students').set(s.h).send({
-      name: 'Rahul Sharma', dob: '2013-05-01', sectionId: sec.body._id, guardians: [{ name: 'Mr Sharma', relationship: 'Father', phone: '9876543210' }],
+      name: 'Rahul Sharma', dob: '2013-05-01', sectionId: sec.body._id, guardians: [{ email: 'guardian@fixture.test', name: 'Mr Sharma', relationship: 'Father', phone: '9876543210' }],
     });
     expect(st.status).toBe(201);
     expect(st.body.student.admissionNo).toMatch(/^ADM2026/);

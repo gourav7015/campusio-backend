@@ -8,10 +8,10 @@ describe('Sub-admins: a School Admin login limited to chosen parts of the portal
   const A = (p) => `/api/school${p}`;
 
   it('only the full admin creates them, with at least one permission', async () => {
-    expect((await api().post(A('/sub-admins')).set(W.h).send({ name: 'Desk One', email: 'desk@sa.test', permissions: [] })).status).toBe(400);
-    expect((await api().post(A('/sub-admins')).set(W.h).send({ name: 'Desk One', email: 'desk@sa.test', permissions: ['bogus'] })).status).toBe(400);
-    expect((await api().post(A('/sub-admins')).set(W.teacher1.h).send({ name: 'X Y', email: 'x@sa.test', permissions: ['students'] })).status).toBe(403);
-    const c = await api().post(A('/sub-admins')).set(W.h).send({ name: 'Desk One', email: 'desk@sa.test', permissions: ['staff_attendance'] });
+    expect((await api().post(A('/sub-admins')).set(W.h).send({ name: 'Desk One', email: 'desk@sa.test', permissions: [], phone: '9833311111', dob: '1983-03-03' })).status).toBe(400);
+    expect((await api().post(A('/sub-admins')).set(W.h).send({ name: 'Desk One', email: 'desk@sa.test', permissions: ['bogus'], phone: '9833311111', dob: '1983-03-03' })).status).toBe(400);
+    expect((await api().post(A('/sub-admins')).set(W.teacher1.h).send({ name: 'X Y', email: 'x@sa.test', permissions: ['students'], phone: '9833311111', dob: '1983-03-03' })).status).toBe(403);
+    const c = await api().post(A('/sub-admins')).set(W.h).send({ name: 'Desk One', email: 'desk@sa.test', permissions: ['staff_attendance'], phone: '9833311111', dob: '1983-03-03' });
     expect(c.status).toBe(201); expect(c.body.temporaryPassword).toBeTruthy();
     sub = await login(c.body.loginId, c.body.temporaryPassword, 'admin');
     expect(sub.user).toMatchObject({ role: 'school_admin', adminLevel: 'sub', permissions: ['staff_attendance'] });

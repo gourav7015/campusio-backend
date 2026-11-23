@@ -15,7 +15,7 @@ describe('Help desk: attachments, limits, desk logins, counts', () => {
     await setup(); await reset(); root = await makeSuperAdmin();
     config.mail.supportTo = ''; config.mail.appUrl = 'https://app.example.test';
     W = await seedWorld(root, 'hx'); S = W.studentLogins[0].h; T = W.teacher1.h; other = await makeSchool(root, 'ox');
-    const f = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@hx.test', role: 'finance' });
+    const f = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@hx.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
     fin = await login(f.body.loginId, f.body.temporaryPassword, 'finance');
     await User.updateOne({ role: 'super_admin' }, { $set: { email: 'root@platform.test' } });
   });
@@ -95,7 +95,7 @@ describe('Help desk: attachments, limits, desk logins, counts', () => {
     expect((await api().get(`/api/finance/tickets/${c.body._id}`).set(S)).status).toBe(403); // a student has no finance access
     expect((await api().get('/api/platform/helpdesk?q=Receipt').set(root.h)).body.tickets.some((t) => t.subject === 'Receipt printer' && t.raisedBy.role === 'finance')).toBe(true); // it reaches AtKaksha support, not the school office
     for (const [role, path] of [['library', 'library'], ['transport', 'transport']]) {
-      const u = await api().post('/api/school/staff').set(W.h).send({ name: `${role} desk`, email: `${role}@hx.test`, role });
+      const u = await api().post('/api/school/staff').set(W.h).send({ name: `${role} desk`, email: `${role}@hx.test`, role, phone: '9833333333', dob: '1984-04-04' });
       const h = (await login(u.body.loginId, u.body.temporaryPassword, role)).h;
       expect((await api().post(`/api/${path}/tickets`).set(h).send({ subject: `${role} problem`, body: 'Please look' })).status).toBe(201);
     }

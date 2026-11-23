@@ -5,7 +5,7 @@ describe('structure, admissions, transfers and history', () => {
   let root; let W;
   beforeAll(async () => { await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'sch'); });
   afterAll(teardown);
-  const guardian = [{ name: 'Parent Name', relationship: 'Father', phone: '9876543210' }];
+  const guardian = [{ email: 'guardian@fixture.test', name: 'Parent Name', relationship: 'Father', phone: '9876543210' }];
 
   it('keeps exactly one current academic year', async () => {
     const y2 = await api().post('/api/school/years').set(W.h).send({ name: '2027-2028', startDate: '2027-04-01', endDate: '2028-03-31' });
@@ -140,7 +140,7 @@ describe('structure, admissions, transfers and history', () => {
     expect(again.status).toBe(201);
     expect((await api().get('/api/school/subjects').set(W.h)).body.filter((x) => /^math/i.test(x.name))).toHaveLength(1);
     expect((await api().post('/api/school/teaching-assignments').set(W.h).send({ teacherId: W.t1.teacher._id, sectionId: W.sec8B._id })).status).toBe(400);
-    const dupEmp = await api().post('/api/school/teachers').set(W.h).send({ name: 'Copy Teacher', employeeId: 'T001' });
+    const dupEmp = await api().post('/api/school/teachers').set(W.h).send({ name: 'Copy Teacher', employeeId: 'T001', phone: '9822200000', dob: '1984-04-04', email: 'teacher@fixture.test' });
     expect(dupEmp.status).toBe(409);
     // Mrs Gupta replaces Mr Sharma as class teacher: only one open
     await api().put(`/api/school/sections/${W.sec8A._id}/class-teacher`).set(W.h).send({ teacherId: W.t2.teacher._id });

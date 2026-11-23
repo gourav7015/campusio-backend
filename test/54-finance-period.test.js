@@ -6,7 +6,7 @@ describe('Finance dashboard: money received between any two dates (financial-yea
   let root; let W; let fin;
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'per');
-    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@per.test', role: 'finance' });
+    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@per.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
     fin = await login(s.body.loginId, s.body.temporaryPassword, 'finance');
     const sid = W.students[0].student._id;
     const pay = (receiptNo, paidOn, amount, mode, kind = 'payment') => Payment.create({ tenantId: W.id, studentId: sid, kind, amount, mode, receiptNo, paidOn, allocations: [] });

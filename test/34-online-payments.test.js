@@ -12,7 +12,7 @@ describe('Online fee payment with the test gateway (no Razorpay account needed)'
   const S = (p) => `/api/student${p}`;
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'pay');
-    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@pay.test', role: 'finance' });
+    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@pay.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
     fin = await login(s.body.loginId, s.body.temporaryPassword, 'finance');
     structure = (await api().post('/api/finance/structures').set(fin.h).send({ classId: W.c8._id, name: 'Class 8 Fee', admissionFee: 5000, monthlyFee: 1000, dueDay: 10, autoAssign: false })).body;
     await api().post('/api/finance/assign').set(fin.h).send({ structureId: structure._id, all: true });

@@ -12,6 +12,12 @@ process.env.MONGO_URI = mongod.getUri('school_erp_demo');
 
 const { config } = await import('./core/config.js');
 const { createApp } = await import('./app.js');
+// Browser tests: pretend email works, and write each one to a file so a test can read the code (demo only; this script refuses to run in production)
+if (process.env.DEMO_MESSAGES_FILE) {
+  const fs = await import('node:fs');
+  const { setMailTransport } = await import('./services/email.js');
+  setMailTransport(async (m) => { fs.appendFileSync(process.env.DEMO_MESSAGES_FILE, `${JSON.stringify({ channel: 'email', to: m.to, text: m.text })}\n`); return {}; });
+}
 const { buildDemo, DEMO } = await import('./demo-data.js');
 await mongoose.connect(config.mongoUri);
 await mongoose.syncIndexes();

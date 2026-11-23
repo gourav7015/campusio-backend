@@ -6,7 +6,7 @@ describe('Teachers write to the office; the office desk and the admin answer', (
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'qo');
     const des = (await api().get('/api/school/designations').set(W.h)).body;
-    const clerk = (await api().post('/api/school/support-staff').set(W.h).send({ name: 'Chhaya Clerk', designationId: des.find((d) => d.name === 'Office Clerk')._id, canMarkAttendance: true })).body;
+    const clerk = (await api().post('/api/school/support-staff').set(W.h).send({ name: 'Chhaya Clerk', designationId: des.find((d) => d.name === 'Office Clerk')._id, canMarkAttendance: true, email: 'clerk@fixture.test', phone: '9833333333', dob: '1984-04-04' })).body;
     const c = await api().post(`/api/school/support-staff/${clerk._id}/login`).set(W.h);
     desk = await login(c.body.loginId, c.body.temporaryPassword, 'staff');
   });

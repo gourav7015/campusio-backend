@@ -213,7 +213,7 @@ export async function createLogin(ctx, scope, id) {
   // the Staff portal is the office desk (attendance, leave, queries): a login is for someone who is given that work, not for every employee
   if (!s.canMarkAttendance) throw bad(`${s.name} has no office desk duties. Switch on "Office desk" for this person first: only people who work for the office have a sign-in.`);
   const code = await schoolCode(ctx.tenantId);
-  const { user, temporaryPassword } = await createUserAccount({ role: 'staff', tenantId: ctx.tenantId, name: s.name, loginId: `${code}.${s.staffId.toLowerCase()}`, createdBy: ctx.actorId, password: initialPassword(settingsOf(await loadSchool(ctx.tenantId)), { name: s.name, dob: s.dob, phone: s.phone }) });
+  const { user, temporaryPassword } = await createUserAccount({ role: 'staff', tenantId: ctx.tenantId, name: s.name, email: s.email, phone: s.phone, dob: s.dob, loginId: `${code}.${s.staffId.toLowerCase()}`, createdBy: ctx.actorId, password: initialPassword(settingsOf(await loadSchool(ctx.tenantId)), { name: s.name, dob: s.dob, phone: s.phone }) });
   s.userId = user._id;
   await s.save();
   return { loginId: user.loginId, temporaryPassword };

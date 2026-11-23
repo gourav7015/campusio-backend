@@ -1,3 +1,4 @@
+import { assertContact } from '../../services/contact.js';
 import { resolveTeacherDesignation } from '../support-staff/support-staff.service.js';
 import { resolveHouse } from '../houses/houses.service.js';
 import { z } from 'zod';
@@ -33,11 +34,12 @@ export async function importStudents(ctx, { rows, dryRun, skipInvalid, yearId })
     const candidate = {
       name: clean(raw.name), dob: clean(raw.dob), gender: clean(raw.gender)?.toLowerCase() || '', address: clean(raw.address), phone: clean(raw.phone), email: clean(raw.email), house: clean(raw.house), admissionNo,
       admissionDate: clean(raw.admissionDate), yearId: String(yearId || year._id), sectionId: sec && String(sec._id), rollNo: raw.rollNo ? Number(raw.rollNo) : undefined,
-      guardians: [{ name: clean(raw.guardianName), relationship: clean(raw.guardianRelationship) || 'Guardian', phone: clean(raw.guardianPhone), isPrimary: true }],
+      guardians: [{ name: clean(raw.guardianName), relationship: clean(raw.guardianRelationship) || 'Guardian', phone: clean(raw.guardianPhone), email: clean(raw.guardianEmail), isPrimary: true }],
     };
     const parsed = admitBody.safeParse(candidate);
     if (!parsed.success) parsed.error.issues.forEach((x) => errors.push(`${x.path.join('.')}: ${x.message}`));
     if (parsed.success) {
+      try { const g = parsed.data.guardians[0]; assertContact({ email: parsed.data.email || g?.email, phone: parsed.data.phone || g?.phone, dob: parsed.data.dob }); } catch (e) { errors.push(e.message); } // the student's own email and mobile, or the parent's
       if (parsed.data.house) await resolveHouse(ctx.tenantId, parsed.data.house).catch((e) => errors.push(`house: ${e.message}`));
       const dupKey = `${parsed.data.name.toLowerCase()}|${parsed.data.dob}`;
       if (seenId.has(dupKey)) errors.push('Same name and date of birth appears twice in this file');
@@ -69,10 +71,11 @@ export async function importTeachers(ctx, { rows, dryRun, skipInvalid }) {
   for (const [i, raw] of rows.entries()) {
     const errors = [];
     const subjectNames = (clean(raw.subjects) || '').split(/[,;|]/).map((x) => x.trim()).filter(Boolean);
-    const candidate = { name: clean(raw.name), employeeId: clean(raw.employeeId), email: clean(raw.email) || '', phone: clean(raw.phone), qualification: clean(raw.qualification), designation: clean(raw.designation), joiningDate: clean(raw.joiningDate), subjects: subjectNames };
+    const candidate = { name: clean(raw.name), employeeId: clean(raw.employeeId), email: clean(raw.email) || '', phone: clean(raw.phone), dob: clean(raw.dob), qualification: clean(raw.qualification), designation: clean(raw.designation), joiningDate: clean(raw.joiningDate), subjects: subjectNames };
     const parsed = teacherBody.safeParse(candidate);
     if (!parsed.success) parsed.error.issues.forEach((x) => errors.push(`${x.path.join('.')}: ${x.message}`));
     else {
+      try { assertContact({ email: parsed.data.email, phone: parsed.data.phone, dob: parsed.data.dob }); } catch (e) { errors.push(e.message); }
       if (parsed.data.designation) await resolveTeacherDesignation(ctx.tenantId, { designation: parsed.data.designation }).catch((e) => errors.push(`designation: ${e.message}`));
       if (parsed.data.house) await resolveHouse(ctx.tenantId, parsed.data.house).catch((e) => errors.push(`house: ${e.message}`));
       if (seen.has(parsed.data.employeeId)) errors.push('Duplicate employee id in this file');

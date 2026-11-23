@@ -9,7 +9,7 @@ describe('Finance portal: fee structures, billing, payments, receipts, reversals
   let root; let W; let fin; let structure; let sid; let sid2;
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'fin');
-    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@fin.test', role: 'finance' });
+    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@fin.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
     fin = await login(s.body.loginId, s.body.temporaryPassword, 'finance');
     sid = W.students[0].student._id; sid2 = W.students[1].student._id;
   });
@@ -17,7 +17,7 @@ describe('Finance portal: fee structures, billing, payments, receipts, reversals
   const F = (p) => `/api/finance${p}`;
   const structBody = (over = {}) => ({ classId: W.c8._id, name: 'Class 8 Fee', admissionFee: 5000, monthlyFee: 1000, dueDay: 10, autoAssign: false, ...over });
   const admit = async (name) => {
-    const adm = await api().post('/api/school/students').set(W.h).send({ name, dob: '2013-09-09', sectionId: W.sec8B._id, admissionDate: '2026-04-15', guardians: [{ name: `Parent of ${name}`, relationship: 'Father', phone: '9876543210' }] });
+    const adm = await api().post('/api/school/students').set(W.h).send({ name, dob: '2013-09-09', sectionId: W.sec8B._id, admissionDate: '2026-04-15', guardians: [{ email: 'guardian@fixture.test', name: `Parent of ${name}`, relationship: 'Father', phone: '9876543210' }] });
     return { id: adm.body.student._id, login: await login(adm.body.credentials.loginId, adm.body.credentials.temporaryPassword, 'student') };
   };
 
@@ -241,7 +241,7 @@ describe('Finance portal: fee structures, billing, payments, receipts, reversals
   it('new admissions are billed automatically by every auto-assign structure of their class; unpaid dues block a casual withdrawal', async () => {
     const auto = (await api().post(F('/structures')).set(fin.h).send(structBody({ name: 'Class 8 Auto', admissionFee: 500, monthlyFee: 100, autoAssign: true }))).body;
     expect(auto.autoAssign).toBe(true);
-    const adm = await api().post('/api/school/students').set(W.h).send({ name: 'New Arrival', dob: '2013-09-09', sectionId: W.sec8B._id, guardians: [{ name: 'Parent Name', relationship: 'Father', phone: '9876543210' }] });
+    const adm = await api().post('/api/school/students').set(W.h).send({ name: 'New Arrival', dob: '2013-09-09', sectionId: W.sec8B._id, guardians: [{ email: 'guardian@fixture.test', name: 'Parent Name', relationship: 'Father', phone: '9876543210' }] });
     expect(adm.body.billed).toBe(1);
     const nl = await login(adm.body.credentials.loginId, adm.body.credentials.temporaryPassword, 'student');
     // joined mid-year (13 Nov): admission plus tuition for November to March only

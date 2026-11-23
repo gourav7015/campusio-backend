@@ -6,14 +6,14 @@ describe('Admission: fee preview and a personal discount on tuition', () => {
   let root; let W; let fin;
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'adm');
-    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@adm.test', role: 'finance' });
+    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@adm.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
     fin = await login(s.body.loginId, s.body.temporaryPassword, 'finance');
     // Class 8 bills automatically: admission 5000 once, tuition 1000 a month. Class 9 has no fee structure.
     const st = await api().post('/api/finance/structures').set(fin.h).send({ classId: W.c8._id, name: 'Class 8 Fee', admissionFee: 5000, monthlyFee: 1000, dueDay: 10, autoAssign: true });
     expect(st.status).toBe(201);
   });
   afterAll(teardown);
-  const admit = (name, extra = {}, sectionId = W.sec8B._id) => api().post('/api/school/students').set(W.h).send({ name, dob: '2013-09-09', sectionId, admissionDate: '2026-04-15', guardians: [{ name: `Parent of ${name}`, relationship: 'Father', phone: '9876543210', isPrimary: true }], ...extra });
+  const admit = (name, extra = {}, sectionId = W.sec8B._id) => api().post('/api/school/students').set(W.h).send({ name, dob: '2013-09-09', sectionId, admissionDate: '2026-04-15', guardians: [{ email: 'guardian@fixture.test', name: `Parent of ${name}`, relationship: 'Father', phone: '9876543210', isPrimary: true }], ...extra });
   const tuitionOf = (studentId) => StudentCharge.find({ studentId, category: 'Tuition' }).lean();
   const sum = (rows, k) => Math.round(rows.reduce((n, r) => n + (r[k] || 0), 0) * 100) / 100;
 
@@ -80,7 +80,7 @@ describe('a standing personal discount follows the student month after month', (
   let root; let W; let fin;
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'pdisc');
-    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@pdisc.test', role: 'finance' });
+    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@pdisc.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
     fin = await login(s.body.loginId, s.body.temporaryPassword, 'finance');
     await api().post('/api/finance/structures').set(fin.h).send({ classId: W.c8._id, name: 'Class 8 Fee', admissionFee: 0, monthlyFee: 1000, dueDay: 10, autoAssign: true });
   });
@@ -106,7 +106,7 @@ describe('a standing personal discount follows the student month after month', (
     t = await tuition();
     expect(t.slice(1).every((c) => c.concession === 250)).toBe(true);
     // a student admitted with a discount keeps it for later months too
-    const adm = await api().post('/api/school/students').set(W.h).send({ name: 'New Child', dob: '2013-09-09', sectionId: W.sec8B._id, admissionDate: '2026-04-15', discount: { type: 'amount', value: 1200, reason: 'Staff child' }, guardians: [{ name: 'Parent', relationship: 'Father', phone: '9876543210', isPrimary: true }] });
+    const adm = await api().post('/api/school/students').set(W.h).send({ name: 'New Child', dob: '2013-09-09', sectionId: W.sec8B._id, admissionDate: '2026-04-15', discount: { type: 'amount', value: 1200, reason: 'Staff child' }, guardians: [{ email: 'guardian@fixture.test', name: 'Parent', relationship: 'Father', phone: '9876543210', isPrimary: true }] });
     expect(adm.status).toBe(201);
     const nid = adm.body.student._id;
     expect((await api().get(`/api/finance/students/${nid}/account`).set(fin.h)).body.personalDiscount).toMatchObject({ type: 'per_month', value: 100 }); // ₹1,200 over 12 months

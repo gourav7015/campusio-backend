@@ -19,8 +19,8 @@ describe('endpoint sweep (no 5xx, correct shapes)', () => {
     await api().post('/api/school/announcements').set(W.h).send({ title: 'Sweep notice', audience: { all: true } });
     const ex = (await api().post('/api/school/exams').set(W.h).send({ name: 'Sweep Exam', classIds: [W.c8._id] })).body;
     await api().post(`/api/school/exams/${ex._id}/subjects/generate`).set(W.h);
-    const f = await api().post('/api/school/staff').set(W.h).send({ name: 'Fin', email: 'fin@swp.test', role: 'finance' });
-    const l = await api().post('/api/school/staff').set(W.h).send({ name: 'Lib', email: 'lib@swp.test', role: 'library' });
+    const f = await api().post('/api/school/staff').set(W.h).send({ name: 'Fin', email: 'fin@swp.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
+    const l = await api().post('/api/school/staff').set(W.h).send({ name: 'Lib', email: 'lib@swp.test', role: 'library', phone: '9833333333', dob: '1984-04-04' });
     fin = await login(f.body.loginId, f.body.temporaryPassword, 'finance'); lib = await login(l.body.loginId, l.body.temporaryPassword, 'library');
     await api().post('/api/finance/structures').set(fin.h).send({ classId: W.c8._id, name: 'Sweep Fee', items: [{ head: 'Tuition', amount: 1000 }], installments: [{ label: 'T1', dueDate: addDays(TODAY, 10), percent: 100 }], autoAssign: false });
     await api().post('/api/library/books').set(lib.h).send({ title: 'Sweep Book', copies: 1 });

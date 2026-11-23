@@ -44,8 +44,8 @@ What exists, how it was checked, and what is still open. Verified items name the
 
 | Control | Where | Checked by |
 |---|---|---|
-| Two-factor sign-in (authenticator app, RFC 6238), recovery codes (hashed), a code cannot be replayed, wrong codes count toward lock-out, secrets stored encrypted (AES-256-GCM with `DATA_KEY`) | `modules/auth`, `services/totp.js`, `core/crypto.js` | `50-sign-in-security`, browser `sign-in-security.spec` |
-| Password reset by emailed one-time link (30 minutes, hashed token, three a hour, same answer for any account, all sessions ended, needs the authenticator code when one is on) | `modules/auth` | `50-sign-in-security` |
+| Two-factor sign-in (optional, per person): after the password, a 6-digit code is emailed to the registered address. Valid 5 minutes, 5 wrong tries, kept only as a keyed hash, 30 s between resends, 8 codes an hour; switched on or off only with the password and a code. Sign-in codes jump ahead of bulk mail in the outbox | `services/otp.js`, `modules/auth` | `59-email-codes`, browser `message-codes.spec` |
+| Forgotten password: login id + date of birth (must match the school's record), then a 6-digit code emailed to the registered address (10 minutes, 5 wrong tries, five requests an hour, same answer for any account or date), then a one-time token to set the new password; all sessions ended | `modules/auth`, `services/contact.js` | `50-sign-in-security`, browser `message-codes.spec` |
 | Session renewal with a hard cap (`SESSION_MAX_DAYS`) | `POST /auth/refresh` | `50-sign-in-security` |
 | Secret rotation without signing everyone out (`JWT_SECRET_PREVIOUS`) | `core/tokens.js` | `48-platform-hardening` |
 | Repeated POSTs done once (`Idempotency-Key`, tied to token, address and body) | `middleware/idempotency.js` | `48-platform-hardening` |

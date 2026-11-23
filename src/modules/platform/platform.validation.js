@@ -13,7 +13,7 @@ export const createSchoolBody = z.object({
   address: z.string().optional(), phone: z.string().optional(), board: z.string().optional(),
   email: z.string().email().optional().or(z.literal('')),
   subscription: subscription.optional(),
-  admin: z.object({ name: z.string().trim().min(2), email: z.string().email(), password: z.string().optional() }).optional(),
+  admin: z.object({ name: z.string().trim().min(2), email: z.string().email(), phone: z.string().trim().max(20), dob: z.string(), password: z.string().optional() }).optional(),
 });
 
 export const updateSchoolBody = z.object({
@@ -26,7 +26,7 @@ export const updateSubscriptionBody = subscription.partial().extend({
 });
 
 export const createAdminBody = z.object({
-  name: z.string().trim().min(2), email: z.string().email(), loginId: z.string().optional(), password: z.string().optional(),
+  name: z.string().trim().min(2), email: z.string().email(), phone: z.string().trim().max(20), dob: z.string(), loginId: z.string().optional(), password: z.string().optional(),
 });
 
 export const userStatusBody = z.object({ status: z.enum(['active', 'disabled']) });

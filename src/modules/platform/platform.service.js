@@ -54,7 +54,7 @@ export async function createSchool(body, actorId) {
   if (body.admin) {
     try {
       const { user, temporaryPassword } = await createUserAccount({
-        role: 'school_admin', tenantId: school._id, name: body.admin.name, email: body.admin.email, password: body.admin.password, createdBy: actorId,
+        role: 'school_admin', tenantId: school._id, name: body.admin.name, email: body.admin.email, phone: body.admin.phone, dob: body.admin.dob, password: body.admin.password, createdBy: actorId,
       });
       admin = { id: user._id, name: user.name, loginId: user.loginId, temporaryPassword };
     } catch (e) {
@@ -70,10 +70,10 @@ export async function getSchool(id) {
   if (!school) throw notFound('School not found');
   const [subscription, admins, studentCount, teacherCount] = await Promise.all([
     Subscription.findOne({ schoolId: school._id }),
-    User.find({ tenantId: school._id, role: 'school_admin' }).select('name loginId email status lastLoginAt totp.enabled').lean(),
+    User.find({ tenantId: school._id, role: 'school_admin' }).select('name loginId email status lastLoginAt otp.enabled').lean(),
     Student.countDocuments({ tenantId: school._id, status: 'active' }), Teacher.countDocuments({ tenantId: school._id, status: 'active' }),
   ]);
-  return { ...school, subscription, admins: admins.map(({ totp, ...a }) => ({ ...a, twoFactor: !!totp?.enabled })), studentCount, teacherCount };
+  return { ...school, subscription, admins: admins.map(({ otp, ...a }) => ({ ...a, twoFactor: !!otp?.enabled })), studentCount, teacherCount };
 }
 
 export async function updateSchool(id, body) {
@@ -99,7 +99,7 @@ export async function createSchoolAdmin(schoolId, body, actorId) {
   const school = await School.findById(schoolId);
   if (!school) throw notFound('School not found');
   const { user, temporaryPassword } = await createUserAccount({
-    role: 'school_admin', tenantId: school._id, name: body.name, email: body.email, loginId: body.loginId, password: body.password, createdBy: actorId,
+    role: 'school_admin', tenantId: school._id, name: body.name, email: body.email, phone: body.phone, dob: body.dob, loginId: body.loginId, password: body.password, createdBy: actorId,
   });
   return { school, user, temporaryPassword };
 }

@@ -17,7 +17,7 @@ describe('platform, provisioning rules and tenant isolation', () => {
     expect((await api().post('/api/platform/schools').set(A.teacher1.h).send({ name: 'X School', code: 'xx' })).status).toBe(403);
     const dup = await api().post('/api/platform/schools').set(root.h).send({ name: 'Dup', code: 'aaa' });
     expect(dup.status).toBe(409);
-    const adm = await api().post(`/api/platform/schools/${A.id}/admins`).set(root.h).send({ name: 'Second Admin', email: 'two@aaa.test' });
+    const adm = await api().post(`/api/platform/schools/${A.id}/admins`).set(root.h).send({ name: 'Second Admin', email: 'two@aaa.test', phone: '9811111112', dob: '1981-01-01' });
     expect(adm.status).toBe(201);
     expect(adm.body.temporaryPassword).toBeTruthy();
     expect((await api().post(`/api/platform/schools/${A.id}/admins`).set(A.h).send({ name: 'Sneaky', email: 'sneaky@aaa.test' })).status).toBe(403);
@@ -43,7 +43,7 @@ describe('platform, provisioning rules and tenant isolation', () => {
     const res = await api().get(`/api/school/students?tenantId=${A.id}`).set(B.h);
     expect(res.body.total).toBe(0);
     // can't place a student into another school's section
-    const x = await api().post('/api/school/students').set(B.h).send({ name: 'Cross Tenant', dob: '2013-01-01', sectionId: A.sec8A._id, guardians: [{ name: 'Parent', relationship: 'Father', phone: '9876543210' }] });
+    const x = await api().post('/api/school/students').set(B.h).send({ name: 'Cross Tenant', dob: '2013-01-01', sectionId: A.sec8A._id, guardians: [{ email: 'guardian@fixture.test', name: 'Parent', relationship: 'Father', phone: '9876543210' }] });
     expect([400, 404]).toContain(x.status);
   });
 
@@ -65,13 +65,13 @@ describe('platform, provisioning rules and tenant isolation', () => {
   });
 
   it('puts no cap on how many students or teachers a school can have (only sections have a capacity)', async () => {
-    const old = await api().post('/api/platform/schools').set(root.h).send({ name: 'Old Client School', code: 'oldc', subscription: { status: 'active', studentLimit: 1, teacherLimit: 1 }, admin: { name: 'Admin', email: 'admin@oldc.test', password: 'Admin@12345' } });
+    const old = await api().post('/api/platform/schools').set(root.h).send({ name: 'Old Client School', code: 'oldc', subscription: { status: 'active', studentLimit: 1, teacherLimit: 1 }, admin: { name: 'Admin', email: 'admin@oldc.test', phone: '9811111111', dob: '1980-05-05', password: 'Admin@12345' } });
     expect(old.status).toBe(201); // a limit sent by an old client is simply ignored
     const tiny = await makeSchool(root, 'tiny');
     const y = (await api().post('/api/school/years').set(tiny.h).send({ name: '2026-2027', startDate: '2026-04-01', endDate: '2027-03-31' })).body;
     const c = (await api().post('/api/school/classes').set(tiny.h).send({ name: 'Class 1' })).body;
     const s = (await api().post('/api/school/sections').set(tiny.h).send({ yearId: y._id, classId: c._id, name: 'A' })).body;
-    const mk = (n, dob) => api().post('/api/school/students').set(tiny.h).send({ name: n, dob, sectionId: s._id, guardians: [{ name: 'Parent', relationship: 'Mother', phone: '9876543210' }] });
+    const mk = (n, dob) => api().post('/api/school/students').set(tiny.h).send({ name: n, dob, sectionId: s._id, guardians: [{ email: 'guardian@fixture.test', name: 'Parent', relationship: 'Mother', phone: '9876543210' }] });
     expect((await mk('One Kid', '2018-01-01')).status).toBe(201);
     expect((await mk('Two Kid', '2018-02-02')).status).toBe(201);
     expect((await mk('Three Kid', '2018-03-03')).status).toBe(201);

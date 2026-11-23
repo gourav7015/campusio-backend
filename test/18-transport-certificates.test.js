@@ -8,7 +8,7 @@ describe('Transport dashboard lists every certificate, not only the problems', (
   let root; let W; let tr;
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'cert');
-    const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Tara Transport', email: 'tara@cert.test', role: 'transport' });
+    const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Tara Transport', email: 'tara@cert.test', role: 'transport', phone: '9833333333', dob: '1984-04-04' });
     tr = await login(c.body.loginId, c.body.temporaryPassword, 'transport');
   });
   afterAll(teardown);

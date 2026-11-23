@@ -8,9 +8,9 @@ describe('Finance: expenses, budgets, approvals; the school page, licences and t
   let root; let W; let fin; let lib;
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'exp');
-    const f = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@exp.test', role: 'finance' });
+    const f = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@exp.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
     fin = await login(f.body.loginId, f.body.temporaryPassword, 'finance');
-    const l = await api().post('/api/school/staff').set(W.h).send({ name: 'Liam Library', email: 'liam@exp.test', role: 'library' });
+    const l = await api().post('/api/school/staff').set(W.h).send({ name: 'Liam Library', email: 'liam@exp.test', role: 'library', phone: '9833333333', dob: '1984-04-04' });
     lib = await login(l.body.loginId, l.body.temporaryPassword, 'library');
   });
   afterAll(teardown);

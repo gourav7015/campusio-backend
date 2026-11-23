@@ -13,7 +13,7 @@ const HEX = /[0-9a-f]{24}/g;
  */
 describe('cross-tenant isolation (IDOR) across every role', () => {
   let root; let A; let B; let aIds; let aFin; let aLib; let bFin; let bLib; let q; let aFile; const owned = {};
-  const staff = async (W, role, tag) => { const r = await api().post('/api/school/staff').set(W.h).send({ name: `${tag} ${role}`, email: `${role}@${tag}.test`, role }); return login(r.body.loginId, r.body.temporaryPassword, role); };
+  const staff = async (W, role, tag) => { const r = await api().post('/api/school/staff').set(W.h).send({ name: `${tag} ${role}`, email: `${role}@${tag}.test`, role, phone: '9833333333', dob: '1984-04-04' }); return login(r.body.loginId, r.body.temporaryPassword, role); };
 
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin();

@@ -33,7 +33,7 @@ export async function buildDemo(base) {
 
   const created = await call('POST', '/api/platform/schools', root, {
     name: 'Greenfield Public School', code: 'gps', board: 'CBSE', address: '12 Park Road, Pune', phone: '020 5550 1234',
-    subscription: { plan: 'standard', status: 'active' }, admin: { name: 'Anita Deshmukh', email: DEMO.admin.loginId },
+    subscription: { plan: 'standard', status: 'active' }, admin: { name: 'Anita Deshmukh', email: DEMO.admin.loginId, phone: '9811000001', dob: '1978-03-15' },
   });
   const keep = async (userId, pw) => User.updateOne({ _id: userId }, { passwordHash: await hashPassword(pw), mustChangePassword: false });
   await keep(created.admin.id, DEMO.admin.password);
@@ -52,7 +52,7 @@ export async function buildDemo(base) {
   const T = {};
   for (const [name, employeeId, email, code, subject] of teacherDefs) {
     const RANK = { MATH: 'PGT', ENG: 'TGT', SCI: 'PGT', HIN: 'TGT', SST: 'TGT', CS: 'Head of Department' }; // only the ranks the school has registered
-    const t = await admin('POST', '/teachers', { name, employeeId, email, designation: RANK[code] || 'TGT', subjects: [subject], phone: `98765432${employeeId.slice(-2)}` });
+    const t = await admin('POST', '/teachers', { name, employeeId, email, designation: RANK[code] || 'TGT', subjects: [subject], phone: `98765432${employeeId.slice(-2)}`, dob: `198${employeeId.slice(-1)}-05-12` });
     await keep(t.teacher.userId, DEMO.teacherPassword);
     T[code] = { ...t.teacher, subject, token: await login(email, DEMO.teacherPassword, 'teacher') };
   }
@@ -81,9 +81,9 @@ export async function buildDemo(base) {
   }
 
   // staff for the fee desk and the library (created by the School Admin)
-  const fin = await admin('POST', '/staff', { name: 'Farah Accounts', email: DEMO.finance.loginId, role: 'finance' });
-  const lib = await admin('POST', '/staff', { name: 'Lakshmi Librarian', email: DEMO.library.loginId, role: 'library' });
-  const trn = await admin('POST', '/staff', { name: 'Tarun Transport', email: DEMO.transport.loginId, role: 'transport' });
+  const fin = await admin('POST', '/staff', { name: 'Farah Accounts', email: DEMO.finance.loginId, role: 'finance', phone: '9811000002', dob: '1985-02-02' });
+  const lib = await admin('POST', '/staff', { name: 'Lakshmi Librarian', email: DEMO.library.loginId, role: 'library', phone: '9811000003', dob: '1986-03-03' });
+  const trn = await admin('POST', '/staff', { name: 'Tarun Transport', email: DEMO.transport.loginId, role: 'transport', phone: '9811000004', dob: '1984-04-04' });
   await keep(fin.id, DEMO.finance.password); await keep(lib.id, DEMO.library.password); await keep(trn.id, DEMO.transport.password);
   const F = await login(DEMO.finance.loginId, DEMO.finance.password, 'finance');
   const LB = await login(DEMO.library.loginId, DEMO.library.password, 'library');
@@ -105,7 +105,7 @@ export async function buildDemo(base) {
     const name = `${first[n % first.length]} ${last[(n * 7 + i) % last.length]}`;
     const dob = `${2026 - cls - 5}-${String((n % 12) + 1).padStart(2, '0')}-${String((n % 27) + 1).padStart(2, '0')}`;
     const out = await admin('POST', '/students', { name, dob, gender: n % 2 ? 'female' : 'male', sectionId: sec[key]._id, admissionDate: '2026-04-10', phone: `90000000${String(n).padStart(2, '0')}`,
-      guardians: [{ name: `${last[(n * 7 + i) % last.length]} (Parent)`, relationship: n % 2 ? 'Father' : 'Mother', phone: `98200000${String(n).padStart(2, '0')}`, isPrimary: true }], confirmDuplicate: true });
+      guardians: [{ name: `${last[(n * 7 + i) % last.length]} (Parent)`, relationship: n % 2 ? 'Father' : 'Mother', phone: `98200000${String(n).padStart(2, '0')}`, email: `parent${n}@gps.test`, isPrimary: true }], confirmDuplicate: true });
     await keep(out.student.userId, DEMO.studentPassword);
     students.push({ key, ...out.student, loginId: out.credentials.loginId });
     n++;
@@ -219,7 +219,7 @@ export async function buildDemo(base) {
   const des = Object.fromEntries([...(await admin('GET', '/designations')), ...(await transport('GET', '/designations'))].map((d) => [d.name, d._id])); // general titles come from the admin, transport titles from the officer
   const generalStaff = [];
   // the office clerk works for the office desk (Staff portal): the only staff member with a sign-in. Everyone else is on the books and on payroll, and is looked after by the desk.
-  generalStaff.push(await admin('POST', '/support-staff', { name: 'Neha Shah', designationId: des['Office Clerk'], phone: '9000011000', joiningDate: '2021-04-01', canMarkAttendance: true }));
+  generalStaff.push(await admin('POST', '/support-staff', { name: 'Neha Shah', designationId: des['Office Clerk'], phone: '9000011000', email: 'neha.shah@gps.test', dob: '1990-07-07', joiningDate: '2021-04-01', canMarkAttendance: true }));
   const kLogin = await admin('POST', `/support-staff/${generalStaff[0]._id}/login`);
   await keep((await User.findOne({ loginId: kLogin.loginId }))._id, DEMO.staff.password);
   for (const [name, d, phone] of [['Kamla Devi', 'Sweeper', '9000011001'], ['Ramu Kaka', 'Gardener', '9000011002'], ['Savita Ben', 'Maid', '9000011003'], ['Bhola Singh', 'Security Guard', '9000011004'], ['Vikram Chauhan', 'PT Teacher', '9000011005'], ['Kiran Joshi', 'Lab Assistant', '9000011006'], ['Mukesh Parmar', 'Accountant', '9000011007'], ['Dr. Anjali Mehta', 'School Counsellor', '9000011008']]) generalStaff.push(await admin('POST', '/support-staff', { name, designationId: des[d], phone, joiningDate: '2022-06-01' }));

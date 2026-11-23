@@ -76,8 +76,15 @@ export const User = model('User', new Schema({
   lastLoginAt: Date,
   failedLogins: { type: Number, default: 0 },
   lockedUntil: Date,
-  // two-factor sign-in (an authenticator app): the secret is kept sealed, recovery codes only as hashes
-  totp: { enabled: { type: Boolean, default: false }, secretSealed: String, pendingSealed: String, lastStep: { type: Number, default: 0 }, recovery: [String], enabledAt: Date },
+  // the registered mobile number and date of birth of accounts that have no person record (school administrators, sub-administrators); everyone else's are on their own record
+  phone: String, dob: String,
+  // two-factor sign-in: after the password, a 6-digit code is sent to the registered email. Codes are kept only as keyed hashes.
+  otp: {
+    enabled: { type: Boolean, default: false }, enabledAt: Date,
+    pending: { purpose: String, codeHash: String, expiresAt: Date, tries: { type: Number, default: 0 } },
+    login: { codeHash: String, expiresAt: Date, tries: { type: Number, default: 0 }, sentAt: Date },
+    sends: [Date],
+  },
   language: { type: String, default: 'en' },
   notificationPrefs: { type: Schema.Types.Mixed, default: () => ({ homework: true, attendance: true, examination: true, results: true, announcements: true, timetable: true }) },
   createdBy: ref('User'),
@@ -724,7 +731,7 @@ export const StaffMember = model('StaffMember', (() => {
     tenantId: tenant, userId: ref('User'), staffId: { type: String, required: true }, name: { type: String, required: true, trim: true }, gender: String, dob: String, bloodGroup: String,
     bank: { accountName: String, accountNo: String, ifsc: String, bankName: String, upi: String },
     statutory: { uan: String, esiNo: String, pan: String },
-    phone: { type: String, trim: true }, address: String, designationId: ref('Designation', { required: true, index: true }), joiningDate: String,
+    phone: { type: String, trim: true }, email: { type: String, lowercase: true, trim: true }, address: String, designationId: ref('Designation', { required: true, index: true }), joiningDate: String,
     licenseNo: String, licenseExpiry: String, idProof: String, emergencyContact: { name: String, phone: String }, notes: String,
     status: { type: String, enum: ['active', 'inactive'], default: 'active' }, createdBy: ref('User'),
     deskRole: { type: String, enum: ['finance', 'library', 'transport'] }, // set for the school's own officers (finance, librarian, transport officer): they are employees too, kept in step with their desk login
@@ -927,6 +934,7 @@ export const ErrorLog = model('ErrorLog', (() => {
 export const EmailOutbox = model('EmailOutbox', (() => {
   const s = new Schema({
     to: String, subject: String, html: String, text: String, replyTo: String,
+    priority: { type: Number, default: 0 }, // 1 = time-sensitive (a sign-in code): sent before any bulk mail that is waiting
     attachments: { type: [new Schema({ filename: String, contentType: String, content: String }, { _id: false })], default: [] }, // content is base64; dropped once the email is sent
     status: { type: String, enum: ['pending', 'processing', 'sent', 'failed'], default: 'pending', index: true },
     tries: { type: Number, default: 0 }, nextAt: { type: Date, default: Date.now }, leaseUntil: Date, lastError: String, sentAt: Date,
@@ -948,9 +956,9 @@ export const IdempotencyRecord = model('IdempotencyRecord', (() => {
 /** Which database migrations have run. */
 export const Migration = model('Migration', new Schema({ id: { type: String, required: true, unique: true }, description: String, appliedAt: { type: Date, default: Date.now } }, { timestamps: false }));
 
-/** A password-reset link sent by email. Only the hash of the token is kept; it works once, for 30 minutes. */
-export const PasswordReset = model('PasswordReset', (() => {
-  const s = new Schema({ userId: { type: ObjectId, ref: 'User', required: true, index: true }, tokenHash: { type: String, required: true, unique: true }, expiresAt: { type: Date, required: true }, usedAt: Date }, { timestamps: true });
+/** A forgotten-password request: a 6-digit code sent to the registered email (only its hash is kept), then a one-time token once the code is right. Lasts 10 minutes. */
+export const PasswordResetCode = model('PasswordResetCode', (() => {
+  const s = new Schema({ userId: { type: ObjectId, ref: 'User', required: true, index: true }, codeHash: String, tries: { type: Number, default: 0 }, expiresAt: { type: Date, required: true }, tokenHash: String, usedAt: Date }, { timestamps: true });
   s.index({ expiresAt: 1 }, { expireAfterSeconds: 24 * 3600 });
   return s;
 })());

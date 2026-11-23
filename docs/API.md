@@ -88,17 +88,18 @@ Routes are listed per file; the file is mounted under a portal prefix in `src/mo
 |---|---|
 | POST | `/login` |
 | POST | `/login/2fa` |
+| POST | `/login/2fa/resend` |
 | GET | `/options` |
 | POST | `/forgot` |
+| POST | `/forgot/verify` |
 | POST | `/reset` |
 | GET | `/me` |
 | POST | `/logout` |
 | POST | `/change-password` |
 | POST | `/refresh` |
-| POST | `/2fa/setup` |
-| POST | `/2fa/enable` |
-| POST | `/2fa/disable` |
-| POST | `/2fa/recovery-codes` |
+| POST | `/2fa/start` |
+| POST | `/2fa/disable-start` |
+| POST | `/2fa/confirm` |
 | GET | `/sessions` |
 | POST | `/sessions/revoke-others` |
 | DELETE | `/sessions/:id` |
@@ -232,6 +233,17 @@ Routes are listed per file; the file is mounted under a portal prefix in `src/mo
 | POST | `/expenses` |
 | PATCH | `/expenses/:id` |
 | DELETE | `/expenses/:id` |
+| POST | `/expenses/:id/attachments` |
+| DELETE | `/expenses/:id/attachments/:fileId` |
+| POST | `/expenses/:id/pay` |
+| GET | `/vendors` |
+| GET | `/vendors/approved` |
+| GET | `/vendors/export.csv` |
+| POST | `/vendors/import` |
+| POST | `/vendors` |
+| PATCH | `/vendors/:id` |
+| POST | `/vendors/:id/active` |
+| DELETE | `/vendors/:id` |
 | GET | `/budgets` |
 | PUT | `/budgets` |
 | DELETE | `/budgets/:id` |
@@ -239,6 +251,8 @@ Routes are listed per file; the file is mounted under a portal prefix in `src/mo
 | PUT | `/school-finance-profile` |
 | GET | `/approvals` |
 | POST | `/approvals/expenses/:id` |
+| POST | `/approvals/vendors/decide` |
+| POST | `/approvals/vendors/:id` |
 
 ## finance/finance.routes.js
 
@@ -261,6 +275,8 @@ Routes are listed per file; the file is mounted under a portal prefix in `src/mo
 | GET | `/payments` |
 | POST | `/payments` |
 | POST | `/payments/:id/reverse` |
+| GET | `/installments` |
+| POST | `/payments/:id/email` |
 | GET | `/payments/:id/receipt.pdf` |
 | GET | `/policy` |
 | PUT | `/policy` |
@@ -693,9 +709,13 @@ Routes are listed per file; the file is mounted under a portal prefix in `src/mo
 | POST | `/buses` |
 | GET | `/buses/:id` |
 | PATCH | `/buses/:id` |
+| GET | `/buses/:id/documents` |
+| PUT | `/buses/:id/documents/:type` |
+| POST | `/buses/:id/documents` |
+| DELETE | `/buses/:id/documents/:docId` |
 | DELETE | `/buses/:id` |
 | POST | `/assign` |
 | DELETE | `/students/:studentId` |
 | GET | `/transport` |
 
-_497 routes in 46 files._
+_517 routes in 46 files._

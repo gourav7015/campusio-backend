@@ -7,7 +7,7 @@ describe('A discount or concession given while collecting a payment', () => {
   const F = (p) => `/api/finance${p}`;
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'cd');
-    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'f@cd.test', role: 'finance' });
+    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'f@cd.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
     fin = await login(s.body.loginId, s.body.temporaryPassword, 'finance');
     structure = (await api().post(F('/structures')).set(fin.h).send({ classId: W.c8._id, name: 'Class 8 Fee', admissionFee: 5000, monthlyFee: 1000, dueDay: 10, autoAssign: false })).body;
     await api().post(F('/assign')).set(fin.h).send({ structureId: structure._id, all: true });

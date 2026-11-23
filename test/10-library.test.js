@@ -9,8 +9,8 @@ describe('Library portal: catalogue, circulation, fines (into Finance), clearanc
   let root; let W; let lib; let fin; let book; let sid; let tid;
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'lib');
-    const l = await api().post('/api/school/staff').set(W.h).send({ name: 'Liam Library', email: 'liam@lib.test', role: 'library' });
-    const f = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@lib.test', role: 'finance' });
+    const l = await api().post('/api/school/staff').set(W.h).send({ name: 'Liam Library', email: 'liam@lib.test', role: 'library', phone: '9833333333', dob: '1984-04-04' });
+    const f = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@lib.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
     lib = await login(l.body.loginId, l.body.temporaryPassword, 'library');
     fin = await login(f.body.loginId, f.body.temporaryPassword, 'finance');
     sid = W.students[0].student._id; tid = W.t1.teacher._id;

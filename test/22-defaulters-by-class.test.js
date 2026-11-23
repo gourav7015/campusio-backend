@@ -5,11 +5,11 @@ describe('Defaulters, class by class (Finance, and the Admin read-only)', () => 
   let root; let W; let fin; let sec9; let nine;
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'dfc');
-    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@dfc.test', role: 'finance' });
+    const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@dfc.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
     fin = await login(s.body.loginId, s.body.temporaryPassword, 'finance');
     sec9 = (await api().post('/api/school/sections').set(W.h).send({ yearId: W.year._id, classId: W.c9._id, name: 'A', capacity: 30 })).body;
     nine = [];
-    for (const n of ['Esha Nair', 'Farid Khan']) nine.push((await api().post('/api/school/students').set(W.h).send({ name: n, dob: '2012-05-05', sectionId: sec9._id, admissionDate: '2026-04-15', guardians: [{ name: `Parent of ${n}`, relationship: 'Mother', phone: '9876500000', isPrimary: true }] })).body);
+    for (const n of ['Esha Nair', 'Farid Khan']) nine.push((await api().post('/api/school/students').set(W.h).send({ name: n, dob: '2012-05-05', sectionId: sec9._id, admissionDate: '2026-04-15', guardians: [{ email: 'guardian@fixture.test', name: `Parent of ${n}`, relationship: 'Mother', phone: '9876500000', isPrimary: true }] })).body);
     const st8 = (await api().post('/api/finance/structures').set(fin.h).send({ classId: W.c8._id, name: 'Class 8 Fee', admissionFee: 5000, monthlyFee: 1000, dueDay: 10, autoAssign: false })).body;
     const st9 = (await api().post('/api/finance/structures').set(fin.h).send({ classId: W.c9._id, name: 'Class 9 Fee', admissionFee: 2000, monthlyFee: 500, dueDay: 10, autoAssign: false })).body;
     await api().post('/api/finance/assign').set(fin.h).send({ structureId: st8._id, all: true });

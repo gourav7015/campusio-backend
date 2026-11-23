@@ -51,7 +51,7 @@ export async function login(loginId, password, portal) {
 export async function makeSchool(root, code, opts = {}) {
   const res = await api().post('/api/platform/schools').set(root.h).send({
     name: `${code} School`, code, subscription: { status: 'active' },
-    admin: { name: `${code} Admin`, email: `admin@${code}.test`, password: 'Admin@12345' },
+    admin: { name: `${code} Admin`, email: `admin@${code}.test`, phone: '9811111111', dob: '1980-05-05', password: 'Admin@12345' },
   });
   if (res.status !== 201) throw new Error(JSON.stringify(res.body));
   const admin = await login(`admin@${code}.test`, 'Admin@12345', 'admin');
@@ -75,8 +75,8 @@ export async function seedWorld(root, code = 'dps') {
   const c9 = (await post(h, '/api/school/classes', { name: 'Class 9' })).body;
   const sec8A = (await post(h, '/api/school/sections', { yearId: year._id, classId: c8._id, name: 'A', capacity: 3, room: '101' })).body;
   const sec8B = (await post(h, '/api/school/sections', { yearId: year._id, classId: c8._id, name: 'B', capacity: 30, room: '102' })).body;
-  const t1 = (await post(h, '/api/school/teachers', { name: 'Mr Sharma', employeeId: 'T001', email: `sharma@${code}.test`, subjects: ['Mathematics'] })).body;
-  const t2 = (await post(h, '/api/school/teachers', { name: 'Mrs Gupta', employeeId: 'T002', email: `gupta@${code}.test`, subjects: ['English'] })).body;
+  const t1 = (await post(h, '/api/school/teachers', { name: 'Mr Sharma', employeeId: 'T001', email: `sharma@${code}.test`, phone: '9822222221', dob: '1985-01-01', subjects: ['Mathematics'] })).body;
+  const t2 = (await post(h, '/api/school/teachers', { name: 'Mrs Gupta', employeeId: 'T002', email: `gupta@${code}.test`, phone: '9822222222', dob: '1986-02-02', subjects: ['English'] })).body;
   const subjects = (await api().get('/api/school/subjects').set(h)).body;
   const maths = subjects.find((x) => x.name === 'Mathematics'); const eng = subjects.find((x) => x.name === 'English');
   const asgM = (await post(h, '/api/school/teaching-assignments', { teacherId: t1.teacher._id, sectionId: sec8A._id, subjectId: maths._id, effectiveFrom: '2026-04-01' })).body;
@@ -85,7 +85,7 @@ export async function seedWorld(root, code = 'dps') {
   const periods = [];
   const times = [['08:00', '08:40'], ['08:40', '09:20'], ['09:20', '10:00']];
   for (let i = 0; i < times.length; i++) periods.push((await post(h, '/api/school/timetable/periods', { name: `Period ${i + 1}`, order: i + 1, startTime: times[i][0], endTime: times[i][1] })).body);
-  const mkStudent = async (name, dob, sectionId = sec8A._id) => (await post(h, '/api/school/students', { name, dob, sectionId, admissionDate: '2026-04-15', guardians: [{ name: `Parent of ${name}`, relationship: 'Father', phone: '9876543210', isPrimary: true }] })).body;
+  const mkStudent = async (name, dob, sectionId = sec8A._id) => (await post(h, '/api/school/students', { name, dob, sectionId, admissionDate: '2026-04-15', guardians: [{ name: `Parent of ${name}`, relationship: 'Father', phone: '9876543210', email: `parent.${name.split(' ')[0].toLowerCase()}@${code}.test`, isPrimary: true }] })).body;
   const st = [await mkStudent('Aarav Singh', '2013-01-10'), await mkStudent('Bhavna Rao', '2013-02-11'), await mkStudent('Chirag Das', '2013-03-12')];
   const tLogin1 = await login(t1.credentials.loginId, t1.credentials.temporaryPassword, 'teacher');
   const tLogin2 = await login(t2.credentials.loginId, t2.credentials.temporaryPassword, 'teacher');

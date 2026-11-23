@@ -11,7 +11,7 @@ describe('Extra leave: the admin adds leave on top of the school allowance, for 
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'xl');
     const des = (await api().get(A('/designations')).set(W.h)).body;
-    clerk = (await api().post(A('/support-staff')).set(W.h).send({ name: 'Chhaya Clerk', designationId: des.find((d) => d.name === 'Office Clerk')._id, phone: '9000000001' })).body;
+    clerk = (await api().post(A('/support-staff')).set(W.h).send({ name: 'Chhaya Clerk', designationId: des.find((d) => d.name === 'Office Clerk')._id, phone: '9000000001', email: 'clerk@fixture.test', dob: '1984-04-04' })).body;
   });
   afterAll(teardown);
 
@@ -71,7 +71,7 @@ describe('Extra leave: the admin adds leave on top of the school allowance, for 
   it('only the school admin can give extra leave; a sub-admin only for the group they hold', async () => {
     expect((await api().post(A('/leave-balances/grants')).set(W.teacher1.h).send({ personType: 'teacher', personId: W.t1.teacher._id, leaveType: 'casual', days: 5, reason: 'Give me more' })).status).toBe(403);
     expect((await api().get(A('/leave-balances?group=teachers')).set(W.teacher1.h)).status).toBe(403);
-    const c = await api().post(A('/sub-admins')).set(W.h).send({ name: 'Desk Two', email: 'desk2@xl.test', permissions: ['staff_attendance'] });
+    const c = await api().post(A('/sub-admins')).set(W.h).send({ name: 'Desk Two', email: 'desk2@xl.test', permissions: ['staff_attendance'], phone: '9833311111', dob: '1983-03-03' });
     const sub = await login(c.body.loginId, c.body.temporaryPassword, 'admin');
     expect((await api().get(A('/leave-balances?group=general')).set(sub.h)).status).toBe(200);
     expect((await api().get(A('/leave-balances?group=teachers')).set(sub.h)).status).toBe(403);

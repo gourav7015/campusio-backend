@@ -27,7 +27,7 @@ describe('Privacy: consent record, one student’s data as a download, erasure o
     expect((await api().get(A(`/students/${sid}/export`)).set(W.teacher1.h)).status).toBe(403);
     expect((await api().get(A(`/students/${sid}/export`)).set(W.studentLogins[0].h)).status).toBe(403);
     // a sub-admin (even with the students permission) does not get privacy tools
-    const sub = (await api().post('/api/school/sub-admins').set(W.h).send({ name: 'Clerk', email: 'clerk@prv.test', permissions: ['students'] })).body;
+    const sub = (await api().post('/api/school/sub-admins').set(W.h).send({ name: 'Clerk', email: 'clerk@prv.test', permissions: ['students'], phone: '9833311111', dob: '1983-03-03' })).body;
     const sl = await login(sub.loginId, sub.temporaryPassword, 'admin');
     expect((await api().get(A(`/students/${sid}/export`)).set(sl.h)).status).toBe(403);
     // another school cannot reach this student

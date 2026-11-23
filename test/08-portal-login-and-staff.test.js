@@ -34,13 +34,13 @@ describe('one login page per role, staff accounts, heat map', () => {
   });
 
   it('School Admin creates Finance and Library staff; they can only use their own portals', async () => {
-    const f = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@prt.test', role: 'finance' });
-    const l = await api().post('/api/school/staff').set(W.h).send({ name: 'Liam Library', email: 'liam@prt.test', role: 'library' });
+    const f = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@prt.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
+    const l = await api().post('/api/school/staff').set(W.h).send({ name: 'Liam Library', email: 'liam@prt.test', role: 'library', phone: '9833333333', dob: '1984-04-04' });
     expect([f.status, l.status]).toEqual([201, 201]);
-    expect((await api().post('/api/school/staff').set(W.h).send({ name: 'Bad', email: 'x@prt.test', role: 'school_admin' })).status).toBe(400); // admins are only created by the Super Admin
-    expect((await api().post('/api/school/staff').set(W.h).send({ name: 'Dup', email: 'fiona@prt.test', role: 'finance' })).status).toBe(409);
-    expect((await api().post('/api/school/staff').set(W.teacher1.h).send({ name: 'Sneaky', email: 's@prt.test', role: 'finance' })).status).toBe(403);
-    expect((await api().post('/api/school/staff').set({ ...root.h, 'X-Acting-School': W.id }).send({ name: 'Acted Clerk', email: 'acted@prt.test', role: 'finance' })).status).toBe(201);
+    expect((await api().post('/api/school/staff').set(W.h).send({ name: 'Bad', email: 'x@prt.test', role: 'school_admin', phone: '9833333333', dob: '1984-04-04' })).status).toBe(400); // admins are only created by the Super Admin
+    expect((await api().post('/api/school/staff').set(W.h).send({ name: 'Dup', email: 'fiona@prt.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' })).status).toBe(409);
+    expect((await api().post('/api/school/staff').set(W.teacher1.h).send({ name: 'Sneaky', email: 's@prt.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' })).status).toBe(403);
+    expect((await api().post('/api/school/staff').set({ ...root.h, 'X-Acting-School': W.id }).send({ name: 'Acted Clerk', email: 'acted@prt.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' })).status).toBe(201);
     fin = await login(f.body.loginId, f.body.temporaryPassword, 'finance');
     lib = await login(l.body.loginId, l.body.temporaryPassword, 'library');
     expect((await tryLogin(f.body.loginId, f.body.temporaryPassword, 'library')).status).toBe(401);
@@ -52,7 +52,7 @@ describe('one login page per role, staff accounts, heat map', () => {
     for (const who of [fin, lib]) {
       expect((await api().get('/api/school/students').set(who.h)).status).toBe(403);
       expect((await api().get('/api/teacher/dashboard').set(who.h)).status).toBe(403);
-      expect((await api().post('/api/school/staff').set(who.h).send({ name: 'x', email: 'y@prt.test', role: 'finance' })).status).toBe(403);
+      expect((await api().post('/api/school/staff').set(who.h).send({ name: 'x', email: 'y@prt.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' })).status).toBe(403);
     }
     expect((await api().get('/api/finance/dashboard').set(W.teacher1.h)).status).toBe(403);
     expect((await api().get('/api/library/dashboard').set(W.studentLogins[0].h)).status).toBe(403);

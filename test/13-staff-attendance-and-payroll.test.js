@@ -11,11 +11,11 @@ describe('Staff attendance registers feed payroll, and payroll covers non-teachi
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'sat');
     t1 = W.t1.teacher._id; t2 = W.t2.teacher._id;
     await CalendarEvent.create({ tenantId: W.id, title: 'Gandhi Jayanti', type: 'holiday', startDate: '2026-10-02', endDate: '2026-10-02', sectionIds: [] });
-    const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Tara Transport', email: 'tara@sat.test', role: 'transport' });
+    const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Tara Transport', email: 'tara@sat.test', role: 'transport', phone: '9833333333', dob: '1984-04-04' });
     tr = await login(c.body.loginId, c.body.temporaryPassword, 'transport');
     const des = [...(await api().get('/api/school/designations').set(W.h)).body, ...(await api().get('/api/transport/designations').set(tr.h)).body];
     const id = (n) => des.find((d) => d.name === n)._id;
-    kamla = (await api().post('/api/school/support-staff').set(W.h).send({ name: 'Kamla Devi', designationId: id('Sweeper'), joiningDate: '2020-01-01' })).body;
+    kamla = (await api().post('/api/school/support-staff').set(W.h).send({ name: 'Kamla Devi', designationId: id('Sweeper'), joiningDate: '2020-01-01', email: 'clerk@fixture.test', phone: '9833333333', dob: '1984-04-04' })).body;
     driver = (await api().post('/api/transport/staff').set(tr.h).send({ name: 'Ramesh Bhai', designationId: id('Driver'), joiningDate: '2020-01-01' })).body;
   });
   afterAll(teardown);

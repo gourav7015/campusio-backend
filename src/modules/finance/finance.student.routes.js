@@ -19,7 +19,7 @@ r.get('/fees', async (req, res) => {
     categories: [...cat.values()],
     advanceOffer: { eligible: plan.eligible, offer: plan.offer, months: plan.months, discount: plan.discount, payable: plan.payable, reason: plan.reason },
     charges: acct.charges.map((c) => ({ id: c._id, label: c.label, kind: c.kind, category: c.category, period: c.period, amount: c.amount, concession: c.concession, net: c.net, paid: c.paidAmount, outstanding: c.outstanding, dueDate: c.dueDate, status: c.status, overdue: c.overdue })),
-    payments: acct.payments.map((p) => ({ id: p._id, receiptNo: p.receiptNo, kind: p.kind, amount: p.amount, mode: p.mode, paidOn: p.paidOn, status: p.status, allocations: p.allocations.map((a) => a.label) })),
+    payments: acct.payments.map((p) => ({ id: p._id, receiptNo: p.receiptNo, kind: p.kind, amount: p.amount, mode: p.mode, paidOn: p.paidOn, status: p.status, allocations: p.allocations.map((a) => a.label), chargeIds: p.allocations.map((a) => String(a.chargeId)) })),
   });
 });
 

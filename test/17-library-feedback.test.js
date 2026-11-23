@@ -5,7 +5,7 @@ describe('Library feedback: class on loans, delete a book', () => {
   let root; let W; let lib;
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'libfb');
-    const l = await api().post('/api/school/staff').set(W.h).send({ name: 'Liam Library', email: 'liam@libfb.test', role: 'library' });
+    const l = await api().post('/api/school/staff').set(W.h).send({ name: 'Liam Library', email: 'liam@libfb.test', role: 'library', phone: '9833333333', dob: '1984-04-04' });
     lib = await login(l.body.loginId, l.body.temporaryPassword, 'library');
   });
   afterAll(teardown);

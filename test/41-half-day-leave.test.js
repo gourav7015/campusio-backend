@@ -11,7 +11,7 @@ describe('Half-day leave', () => {
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'hl');
     const des = (await api().get(A('/designations')).set(W.h)).body;
-    clerk = (await api().post(A('/support-staff')).set(W.h).send({ name: 'Chhaya Clerk', designationId: des.find((d) => d.name === 'Office Clerk')._id, phone: '9000000001' })).body;
+    clerk = (await api().post(A('/support-staff')).set(W.h).send({ name: 'Chhaya Clerk', designationId: des.find((d) => d.name === 'Office Clerk')._id, phone: '9000000001', email: 'clerk@fixture.test', dob: '1984-04-04' })).body;
   });
   afterAll(teardown);
 

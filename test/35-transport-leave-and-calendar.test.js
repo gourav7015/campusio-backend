@@ -13,7 +13,7 @@ describe('Transport staff leave: approved by the officer, or passed to the Schoo
   const adminNotes = () => Notification.find({ tenantId: W.id, category: 'leave', 'link.type': 'staff_leave' }).sort({ createdAt: 1 }).lean();
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'tl');
-    const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Tara Transport', email: 'tara@tl.test', role: 'transport' });
+    const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Tara Transport', email: 'tara@tl.test', role: 'transport', phone: '9833333333', dob: '1984-04-04' });
     tr = await login(c.body.loginId, c.body.temporaryPassword, 'transport');
     const des = (await api().get(T('/designations')).set(tr.h)).body; const id = (n) => des.find((d) => d.name === n)._id;
     driver = (await api().post(T('/staff')).set(tr.h).send({ name: 'Ramesh Bhai', designationId: id('Driver'), phone: '9876500001' })).body;
@@ -76,7 +76,7 @@ describe('Transport staff leave: approved by the officer, or passed to the Schoo
   });
 
   it('a sub-admin sees transport leave only with the staff attendance permission', async () => {
-    const mk = async (name, email, permissions) => { const c = await api().post('/api/school/sub-admins').set(W.h).send({ name, email, permissions }); return (await login(c.body.loginId, c.body.temporaryPassword, 'admin')).h; };
+    const mk = async (name, email, permissions) => { const c = await api().post('/api/school/sub-admins').set(W.h).send({ name, email, permissions, phone: '9833311111', dob: '1983-03-03' }); return (await login(c.body.loginId, c.body.temporaryPassword, 'admin')).h; };
     const desk = await mk('Desk A', 'a@tl.test', ['attendance']);
     const staffDesk = await mk('Desk B', 'b@tl.test', ['staff_attendance']);
     expect((await api().get('/api/school/transport-leave').set(desk)).status).toBe(403);
@@ -89,8 +89,8 @@ describe('Transport staff leave: approved by the officer, or passed to the Schoo
       expect((await api().post('/api/school/events').set(W.h).send({ title: 'Annual Day', type: 'event', startDate: day })).status).toBe(201);
       expect((await api().post('/api/school/events').set(W.h).send({ title: 'Class 8-A trip', type: 'event', startDate: day, sectionIds: [W.sec8A._id] })).status).toBe(201);
       const q = `?from=${addDays(TODAY, 0)}&to=${addDays(TODAY, 10)}`;
-      const fin = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona', email: 'f@tl.test', role: 'finance' });
-      const lib = await api().post('/api/school/staff').set(W.h).send({ name: 'Lila', email: 'l@tl.test', role: 'library' });
+      const fin = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona', email: 'f@tl.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
+      const lib = await api().post('/api/school/staff').set(W.h).send({ name: 'Lila', email: 'l@tl.test', role: 'library', phone: '9833333333', dob: '1984-04-04' });
       const f = await login(fin.body.loginId, fin.body.temporaryPassword, 'finance'); const l = await login(lib.body.loginId, lib.body.temporaryPassword, 'library');
       for (const [name, h, base] of [['finance', f.h, '/api/finance'], ['library', l.h, '/api/library'], ['transport', tr.h, '/api/transport']]) {
         const cal = (await api().get(`${base}/calendar${q}`).set(h)).body;

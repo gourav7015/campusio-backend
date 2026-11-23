@@ -128,7 +128,7 @@ describe('Email channel and the help desk', () => {
       expect(t2.body).toMatchObject({ reference: 'HD-2', scope: 'platform' });
       const a = await api().post('/api/school/helpdesk').set(W.h).send({ subject: 'Question about our invoice', body: 'Please resend the March invoice', category: 'billing', priority: 'high' });
       expect(a.status).toBe(201); expect(a.body).toMatchObject({ reference: 'HD-3', priority: 'high' });
-      const desk = await api().post('/api/school/sub-admins').set(W.h).send({ name: 'Desk', email: 'desk@hd.test', permissions: ['attendance'] });
+      const desk = await api().post('/api/school/sub-admins').set(W.h).send({ name: 'Desk', email: 'desk@hd.test', permissions: ['attendance'], phone: '9833311111', dob: '1983-03-03' });
       const dh = (await login(desk.body.loginId, desk.body.temporaryPassword, 'admin')).h;
       expect((await api().post('/api/school/helpdesk').set(dh).send({ subject: 'Sub-admin question', body: 'How do I mark staff?' })).status).toBe(201); // no permission needed to ask for help
       expect((await api().get('/api/school/helpdesk').set(dh)).body).toHaveLength(1); // and it sees only its own

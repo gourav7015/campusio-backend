@@ -13,12 +13,12 @@ const id = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id');
 // an officer (finance, library, transport) signs in with an email; a non-teaching staff member ('staff') is added with a job title and gets the Staff portal login
 const body = z.object({
   name: z.string().trim().min(2).max(100).optional(), staffMemberId: id.optional(), email: z.string().email().optional(), role: z.enum([...ROLES, 'staff']), loginId: z.string().optional(), password: z.string().optional(),
-  designationId: id.optional(), phone: z.string().trim().max(20).optional(), canMarkAttendance: z.boolean().optional(),
+  designationId: id.optional(), phone: z.string().trim().max(20).optional(), dob: z.string().optional(), canMarkAttendance: z.boolean().optional(),
 }).superRefine((b, c) => {
   if (!b.name && !b.staffMemberId) c.addIssue({ code: 'custom', path: ['name'], message: 'Enter the person\'s name, or choose who holds this role' });
   if (b.staffMemberId && b.role === 'staff') c.addIssue({ code: 'custom', path: ['staffMemberId'], message: 'A staff login is made from the staff list' });
   if (b.role === 'staff' && !b.designationId) c.addIssue({ code: 'custom', path: ['designationId'], message: 'Choose a job title' });
-  if (b.role !== 'staff' && !b.email) c.addIssue({ code: 'custom', path: ['email'], message: 'Enter an email address' });
+  if (!b.email && !b.staffMemberId) c.addIssue({ code: 'custom', path: ['email'], message: 'Enter an email address' });
 });
 
 /** The people who hold a desk role (finance, library, transport): the person, the role they hold, and how they sign in. */
@@ -35,7 +35,7 @@ r.post('/staff', async (req, res) => {
   const b = parse(body, req.body);
   if (b.role === 'staff') {
     const ctx = { tenantId: req.tenantId, actorId: req.user._id };
-    const m = await createStaff(ctx, 'general', { name: b.name, designationId: b.designationId, ...(b.phone ? { phone: b.phone } : {}), canMarkAttendance: true }); // a Staff portal login is the office desk: it is made only for someone who is given it
+    const m = await createStaff(ctx, 'general', { name: b.name, designationId: b.designationId, ...(b.phone ? { phone: b.phone } : {}), ...(b.email ? { email: b.email } : {}), ...(b.dob ? { dob: b.dob } : {}), canMarkAttendance: true }); // a Staff portal login is the office desk: it is made only for someone who is given it
     const cred = await createLogin(ctx, 'general', m._id);
     await audit(req, 'staff.created', 'StaffMember', m._id, `Added staff member ${m.name} with a Staff portal login`);
     return res.status(201).json({ id: m._id, name: m.name, role: 'staff', loginId: cred.loginId, temporaryPassword: cred.temporaryPassword });
@@ -49,8 +49,8 @@ r.post('/staff', async (req, res) => {
     if (holder.deskRole) throw conflict(`${holder.name} already holds a desk role`);
     if ((await Designation.findById(holder.designationId).lean())?.group === 'transport') throw bad('Drivers, conductors and other transport crew cannot hold an officer role');
   }
-  const { user, temporaryPassword } = await createUserAccount({ role: b.role, tenantId: req.tenantId, name: holder ? holder.name : b.name, email: b.email, loginId: b.loginId, password: b.password, createdBy: req.user._id });
-  if (holder) { holder.userId = user._id; holder.deskRole = b.role; holder.designationId = (await deskDesignation(req.tenantId, b.role))._id; await holder.save(); }
+  const { user, temporaryPassword } = await createUserAccount({ role: b.role, tenantId: req.tenantId, name: holder ? holder.name : b.name, email: b.email || holder?.email, phone: b.phone || holder?.phone, dob: b.dob || holder?.dob, loginId: b.loginId, password: b.password, createdBy: req.user._id });
+  if (holder) { if (!holder.email) holder.email = user.email; holder.userId = user._id; holder.deskRole = b.role; holder.designationId = (await deskDesignation(req.tenantId, b.role))._id; await holder.save(); }
   await ensureDeskStaff(req.tenantId, req.user._id); // an officer is an employee too
   if (b.phone && !holder) await StaffMember.updateOne({ tenantId: req.tenantId, userId: user._id }, { phone: b.phone });
   await audit(req, 'staff.created', 'User', user._id, `${holder ? `Gave ${user.name} (already on the staff) the ${b.role} desk` : `Created ${b.role} staff ${user.name}`}`);

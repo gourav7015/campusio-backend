@@ -1,14 +1,15 @@
 import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
-import { User, Session, School, AcademicYear, PasswordReset } from '../../models/index.js';
-import { seal, open, sha256 } from '../../core/crypto.js';
-import { newSecret, otpauthUri, qrSvg, verifyTotp, newRecoveryCodes } from '../../services/totp.js';
+import { User, Session, School, AcademicYear, PasswordResetCode } from '../../models/index.js';
+import { sha256 } from '../../core/crypto.js';
 import { isEmailEnabled, sendNotificationEmail } from '../../services/email.js';
 import { config } from '../../core/config.js';
 import { signToken } from '../../middleware/auth.js';
 import { checkPassword, hashPassword, assertPasswordPolicy, needsRehash } from '../../services/users.js';
 import { HttpError, bad } from '../../core/utils.js';
 import { PORTALS } from './auth.validation.js';
+import { registeredContact } from '../../services/contact.js';
+import { sendLoginCode, checkLoginCode, newCode, hashCode, sameHash, emailCode, MAX_TRIES } from '../../services/otp.js';
 
 const MAX_FAILURES = 8;
 const LOCK_MINUTES = 15;
@@ -55,8 +56,22 @@ export async function login({ loginId, password, portal }, ctx) {
   if (user.status !== 'active') throw new HttpError(403, 'This account has been disabled', 'DISABLED');
   // Each role signs in through its own portal. A right password at the wrong door gets the same answer as a wrong password: saying "wrong portal" would confirm the credentials are valid.
   if (PORTALS[portal] !== user.role) throw invalid();
-  if (user.totp?.enabled) return { user, challenge: jwt.sign({ sub: String(user._id), p: '2fa', portal }, config.jwtSecret, { expiresIn: '5m' }) };
+  if (user.otp?.enabled) {
+    const sentTo = await sendLoginCode(user); // the code goes to the registered email
+    return { user, challenge: jwt.sign({ sub: String(user._id), p: '2fa', portal }, config.jwtSecret, { expiresIn: '5m' }), sentTo };
+  }
   return startSession(user, ctx, password);
+}
+
+/** Asks for the sign-in code again (at most once every 30 seconds). */
+export async function resendLoginCode({ challenge }) {
+  let payload;
+  try { payload = jwt.verify(challenge, config.jwtSecret); } catch { throw new HttpError(401, 'That sign-in took too long. Start again.', 'CHALLENGE_EXPIRED'); }
+  if (payload.p !== '2fa') throw invalid();
+  const user = await User.findById(payload.sub);
+  if (!user || user.status !== 'active' || !user.otp?.enabled || PORTALS[payload.portal] !== user.role) throw invalid();
+  assertNotLocked(user);
+  return { sentTo: await sendLoginCode(user, { resend: true }) };
 }
 
 /** Step two: the challenge from step one plus a 6-digit code or a recovery code. */
@@ -65,64 +80,15 @@ export async function loginSecondStep({ challenge, code }, ctx) {
   try { payload = jwt.verify(challenge, config.jwtSecret); } catch { throw new HttpError(401, 'That sign-in took too long. Start again.', 'CHALLENGE_EXPIRED'); }
   if (payload.p !== '2fa') throw invalid();
   const user = await User.findById(payload.sub);
-  if (!user || user.status !== 'active' || !user.totp?.enabled || PORTALS[payload.portal] !== user.role) throw invalid();
+  if (!user || user.status !== 'active' || !user.otp?.enabled || PORTALS[payload.portal] !== user.role) throw invalid();
   assertNotLocked(user);
-  if (!(await consumeSecondFactor(user, code))) { await registerFailure(user); throw new HttpError(401, 'That code is not right', 'INVALID_CODE'); }
+  if (!(await checkLoginCode(user, String(code).replace(/\s/g, '')))) { await registerFailure(user); throw new HttpError(401, 'That code is not right', 'INVALID_CODE'); }
   return startSession(user, ctx);
 }
 
-const recoveryHash = (c) => sha256(String(c).trim().toLowerCase().replace(/\s/g, ''));
-/** A six-digit code (not used before) or one unused recovery code. Saves the user on success. */
-export async function consumeSecondFactor(user, code) {
-  const raw = String(code || '').trim();
-  if (/^\d{3}\s?\d{3}$/.test(raw)) {
-    const step = verifyTotp(open(user.totp.secretSealed), raw, { lastStep: user.totp.lastStep });
-    if (step == null) return false;
-    user.totp.lastStep = step; await user.save(); return true;
-  }
-  const h = recoveryHash(raw);
-  if (user.totp.recovery?.includes(h)) { user.totp.recovery = user.totp.recovery.filter((x) => x !== h); await user.save(); return true; }
-  return false;
-}
-
-// ───────────── two-factor set-up ─────────────
-export async function twoFactorSetup(user, { password }) {
-  if (!(await checkPassword(password || '', user.passwordHash))) throw bad('Password is incorrect');
-  if (user.totp?.enabled) throw bad('Two-factor sign-in is already on');
-  const secret = newSecret();
-  user.totp = { ...(user.totp?.toObject?.() || {}), enabled: false, pendingSealed: seal(secret) };
-  await user.save();
-  const uri = otpauthUri(secret, user.loginId);
-  return { secret, otpauth: uri, qrSvg: qrSvg(uri) };
-}
-export async function twoFactorEnable(user, { code }) {
-  if (user.totp?.enabled) throw bad('Two-factor sign-in is already on');
-  if (!user.totp?.pendingSealed) throw bad('Start the set-up first');
-  const secret = open(user.totp.pendingSealed);
-  const step = verifyTotp(secret, code);
-  if (step == null) throw bad('That code is not right. Check the time on your phone and try the next code.');
-  const codes = newRecoveryCodes();
-  user.totp = { enabled: true, secretSealed: seal(secret), pendingSealed: undefined, lastStep: step, recovery: codes.map(recoveryHash), enabledAt: new Date() };
-  await user.save();
-  return { recoveryCodes: codes };
-}
-export async function twoFactorDisable(user, { password, code }) {
-  if (!user.totp?.enabled) throw bad('Two-factor sign-in is not on');
-  if (!(await checkPassword(password || '', user.passwordHash))) throw bad('Password is incorrect');
-  if (!(await consumeSecondFactor(user, code))) throw bad('That code is not right');
-  user.totp = { enabled: false, recovery: [], lastStep: 0 };
-  await user.save();
-}
-export async function newRecovery(user, { password, code }) {
-  if (!user.totp?.enabled) throw bad('Two-factor sign-in is not on');
-  if (!(await checkPassword(password || '', user.passwordHash))) throw bad('Password is incorrect');
-  if (!(await consumeSecondFactor(user, code))) throw bad('That code is not right');
-  const codes = newRecoveryCodes(); user.totp.recovery = codes.map(recoveryHash); await user.save();
-  return { recoveryCodes: codes };
-}
-/** For an administrator (or the database owner) when someone has lost their phone and their recovery codes. */
+/** For an administrator (or the database owner) when someone can no longer receive their sign-in codes: the codes are switched off and every device is signed out. */
 export async function twoFactorReset(user) {
-  user.totp = { enabled: false, recovery: [], lastStep: 0 };
+  user.set('otp', {});
   await user.save();
   await Session.updateMany({ userId: user._id, revokedAt: null }, { revokedAt: new Date() });
 }
@@ -137,34 +103,54 @@ export async function refreshSession(user, session) {
   return { token: signToken(user, session.jti, config.jwtExpiresIn) };
 }
 
-// ───────────── forgotten password by email ─────────────
-export async function forgotPassword({ loginId }) {
+// ───────────── forgotten password: date of birth, then a code by email, then a new password ─────────────
+const RESET_TTL_MS = 10 * 60 * 1000;
+const normDob = (v) => String(v || '').trim().slice(0, 10);
+
+/**
+ * Step one: login id and date of birth. When they match what the school has on file and there is a registered email, a 6-digit code is sent to it.
+ * The answer is always the same, so this cannot be used to find out who has an account or when someone was born.
+ */
+export async function forgotPassword({ loginId, dob }) {
   if (!isEmailEnabled()) return false;
   const user = await User.findOne({ loginId: loginId.trim().toLowerCase() });
-  if (!user || user.status !== 'active' || !user.email) return false;
-  if (await PasswordReset.countDocuments({ userId: user._id, createdAt: { $gt: new Date(Date.now() - 3600 * 1000) } }) >= 3) return false; // at most three a hour
-  await PasswordReset.updateMany({ userId: user._id, usedAt: null }, { $set: { usedAt: new Date() } }); // an earlier link stops working when a newer one is sent
-  const token = crypto.randomBytes(32).toString('base64url');
-  await PasswordReset.create({ userId: user._id, tokenHash: sha256(token), expiresAt: new Date(Date.now() + 30 * 60 * 1000) });
-  sendNotificationEmail(user.email, {
-    subject: 'Reset your AtKaksha password', heading: 'Reset your password',
-    lines: [`Hello ${user.name},`, 'Someone asked to reset the password for your AtKaksha account. Use the button below within 30 minutes. If it was not you, ignore this email: your password stays as it is.'],
-    button: { label: 'Choose a new password', url: `${config.mail.appUrl}/reset-password?token=${token}` },
-  });
+  if (!user || user.status !== 'active') return false;
+  const contact = await registeredContact(user);
+  if (!contact.email || !contact.dob || contact.dob !== normDob(dob)) return false;
+  if (await PasswordResetCode.countDocuments({ userId: user._id, createdAt: { $gt: new Date(Date.now() - 3600 * 1000) } }) >= 5) return false; // at most five an hour
+  await PasswordResetCode.updateMany({ userId: user._id, usedAt: null }, { $set: { usedAt: new Date() } }); // an earlier request stops working
+  const code = newCode();
+  await PasswordResetCode.create({ userId: user._id, codeHash: hashCode(user._id, code), expiresAt: new Date(Date.now() + RESET_TTL_MS) });
+  emailCode(contact.email, code, 'reset');
   return true;
 }
-export async function resetPassword({ token, newPassword, code }) {
-  const rec = await PasswordReset.findOne({ tokenHash: sha256(token), usedAt: null, expiresAt: { $gt: new Date() } });
-  if (!rec) throw new HttpError(400, 'This reset link is not valid any more. Ask for a new one.', 'RESET_INVALID');
+
+/** Step two: the code. A right code gives a one-time token for step three; a wrong one is counted (five and the request is dead). */
+export async function verifyResetCode({ loginId, code }) {
+  const wrong = () => new HttpError(400, 'That code is not right, or it has expired. Check it, or start again.', 'RESET_INVALID');
+  const user = await User.findOne({ loginId: loginId.trim().toLowerCase() });
+  if (!user || user.status !== 'active') throw wrong();
+  const rec = await PasswordResetCode.findOne({ userId: user._id, usedAt: null, tokenHash: null, expiresAt: { $gt: new Date() } }).sort({ createdAt: -1 });
+  if (!rec || rec.tries >= MAX_TRIES) throw wrong();
+  if (!sameHash(hashCode(user._id, code), rec.codeHash)) { rec.tries += 1; await rec.save(); throw wrong(); }
+  const token = crypto.randomBytes(32).toString('base64url');
+  rec.tokenHash = sha256(token); rec.expiresAt = new Date(Date.now() + RESET_TTL_MS); await rec.save();
+  return { resetToken: token };
+}
+
+/** Step three: the new password. Works once; every device is signed out. */
+export async function resetPassword({ resetToken, newPassword }) {
+  const rec = await PasswordResetCode.findOne({ tokenHash: sha256(resetToken), usedAt: null, expiresAt: { $gt: new Date() } });
+  if (!rec) throw new HttpError(400, 'This reset has expired. Start again.', 'RESET_INVALID');
   const user = await User.findById(rec.userId);
-  if (!user || user.status !== 'active') throw new HttpError(400, 'This reset link is not valid any more. Ask for a new one.', 'RESET_INVALID');
-  if (user.totp?.enabled && !(await consumeSecondFactor(user, code))) throw new HttpError(401, 'Enter the code from your authenticator app', 'INVALID_CODE');
+  if (!user || user.status !== 'active') throw new HttpError(400, 'This reset has expired. Start again.', 'RESET_INVALID');
   assertPasswordPolicy(newPassword, { loginId: user.loginId, choosing: true });
   user.passwordHash = await hashPassword(newPassword); user.mustChangePassword = false; user.failedLogins = 0; user.lockedUntil = undefined;
   await user.save();
   rec.usedAt = new Date(); await rec.save();
   await Session.updateMany({ userId: user._id, revokedAt: null }, { revokedAt: new Date() }); // every device is signed out
-  if (user.email) sendNotificationEmail(user.email, { subject: 'Your AtKaksha password was changed', heading: 'Your password was changed', lines: [`Hello ${user.name},`, 'The password for your AtKaksha account was just changed using a reset link. If this was not you, contact your school office or AtKaksha support at once.'] });
+  const { email } = await registeredContact(user);
+  if (email) sendNotificationEmail(email, { subject: 'Your AtKaksha password was changed', heading: 'Your password was changed', lines: [`Hello ${user.name},`, 'The password for your AtKaksha account was just changed. If this was not you, contact your school office or AtKaksha support at once.'] });
   return user;
 }
 

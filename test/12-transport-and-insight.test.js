@@ -10,7 +10,7 @@ describe('Transport and the School Admin class/student views', () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'trn');
     sidA = W.students[0].student._id; sidB = W.students[1].student._id;
 
-    const l = await api().post('/api/school/staff').set(W.h).send({ name: 'Lib', email: 'l@trn.test', role: 'library' });
+    const l = await api().post('/api/school/staff').set(W.h).send({ name: 'Lib', email: 'l@trn.test', role: 'library', phone: '9833333333', dob: '1984-04-04' });
     lib = await login(l.body.loginId, l.body.temporaryPassword, 'library');
   });
   afterAll(teardown);
@@ -19,7 +19,7 @@ describe('Transport and the School Admin class/student views', () => {
   let tr; let driver; let conductor; let sweeper; let other;
 
   it('the Transport officer is created by the School Admin and signs in through its own door', async () => {
-    const c = await api().post(A('/staff')).set(W.h).send({ name: 'Tara Transport', email: 'tara@trn.test', role: 'transport' });
+    const c = await api().post(A('/staff')).set(W.h).send({ name: 'Tara Transport', email: 'tara@trn.test', role: 'transport', phone: '9833333333', dob: '1984-04-04' });
     expect(c.status).toBe(201);
     expect((await api().post('/api/auth/login').send({ loginId: c.body.loginId, password: c.body.temporaryPassword, portal: 'finance' })).status).toBe(401); // wrong door
     tr = await login(c.body.loginId, c.body.temporaryPassword, 'transport');
@@ -57,7 +57,7 @@ describe('Transport and the School Admin class/student views', () => {
     conductor = (await api().post(T('/staff')).set(tr.h).send({ name: 'Suresh Bhai', designationId: id('Conductor'), phone: '9876500002' })).body;
     expect(driver).toMatchObject({ staffId: 'S0001', designation: 'Driver', busRole: 'driver' }); expect(conductor.staffId).toBe('S0002');
     expect((await api().post(T('/staff')).set(tr.h).send({ name: 'Gopal', designationId: id('Sweeper') })).status).toBe(403); // not transport staff
-    sweeper = (await api().post(A('/support-staff')).set(W.h).send({ name: 'Kamla Devi', designationId: id('Sweeper'), phone: '9876500003' })).body;
+    sweeper = (await api().post(A('/support-staff')).set(W.h).send({ name: 'Kamla Devi', designationId: id('Sweeper'), phone: '9876500003', email: 'clerk@fixture.test', dob: '1984-04-04' })).body;
     expect(sweeper).toMatchObject({ designation: 'Sweeper', group: 'general', staffId: 'S0003' });
     expect((await api().post(A('/support-staff')).set(W.h).send({ name: 'X', designationId: id('Driver') })).status).toBe(400); // name too short
     const asOfficer = (await api().get(T('/staff')).set(tr.h)).body; const asAdmin = (await api().get(A('/support-staff')).set(W.h)).body;

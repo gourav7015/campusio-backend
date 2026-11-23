@@ -38,7 +38,7 @@ function claimNext() {
   return EmailOutbox.findOneAndUpdate(
     { $or: [{ status: 'pending', nextAt: { $lte: now } }, { status: 'processing', leaseUntil: { $lt: now } }] },
     { $set: { status: 'processing', leaseUntil: new Date(now.getTime() + 90 * 1000) }, $inc: { tries: 1 } },
-    { sort: { nextAt: 1 }, new: true },
+    { sort: { priority: -1, nextAt: 1 }, new: true },
   );
 }
 
@@ -69,9 +69,9 @@ export function kick() {
 
 /** Queue an email in the database. Returns false (and does nothing) when email is not set up or there is no address. */
 /** attachments: [{ filename, contentType, content }] with content as a Buffer (kept in the outbox as base64 until sent). */
-export function enqueueEmail({ to, subject, html, text, replyTo, attachments }) {
+export function enqueueEmail({ to, subject, html, text, replyTo, attachments, urgent }) {
   if (!isEmailEnabled() || !to || !/^\S+@\S+\.\S+$/.test(to)) return false;
-  const p = EmailOutbox.create({ to, subject: String(subject).slice(0, 200), html, text, replyTo: replyTo || config.mail.replyTo || undefined, attachments: (attachments || []).map((a) => ({ filename: a.filename, contentType: a.contentType, content: Buffer.isBuffer(a.content) ? a.content.toString('base64') : a.content })) })
+  const p = EmailOutbox.create({ to, subject: String(subject).slice(0, 200), html, text, priority: urgent ? 1 : 0, replyTo: replyTo || config.mail.replyTo || undefined, attachments: (attachments || []).map((a) => ({ filename: a.filename, contentType: a.contentType, content: Buffer.isBuffer(a.content) ? a.content.toString('base64') : a.content })) })
     .then(() => kick()).catch((e) => logger.warn('email could not be queued', { error: e.message }));
   creating.add(p); p.finally(() => creating.delete(p));
   return true;
@@ -101,7 +101,7 @@ ${footer ? `<p style="margin:22px 0 0;font-size:12px;color:#6b7280">${escapeHtml
 }
 
 /** Convenience: build and queue a notification-style email in one call. */
-export function sendNotificationEmail(to, { subject, heading, lines, button, footer, replyTo, attachments }) {
+export function sendNotificationEmail(to, { subject, heading, lines, button, footer, replyTo, attachments, urgent }) {
   const { html, text } = renderEmail({ heading: heading || subject, lines, button, footer });
-  return enqueueEmail({ to, subject, html, text, replyTo, attachments });
+  return enqueueEmail({ to, subject, html, text, replyTo, attachments, urgent });
 }
