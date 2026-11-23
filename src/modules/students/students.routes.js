@@ -63,7 +63,7 @@ r.delete('/students/:id', async (req, res) => {
 });
 
 r.post('/students/:id/reset-password', async (req, res) => {
-  const out = await svc.resetStudentPassword(req.tenantId, req.params.id);
+  const out = await svc.resetStudentPassword(req.tenantId, req.params.id, req.body);
   await audit(req, 'user.password_reset', 'Student', req.params.id, 'Reset student password');
   res.json(out);
 });

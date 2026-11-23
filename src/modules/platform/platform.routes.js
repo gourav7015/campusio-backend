@@ -73,7 +73,7 @@ r.post('/schools/:id/admins', async (req, res) => {
 });
 
 r.post('/users/:id/reset-password', async (req, res) => {
-  const { user, temporaryPassword } = await svc.resetAdminPassword(req.params.id);
+  const { user, temporaryPassword } = await svc.resetAdminPassword(req.params.id, req.body);
   req.tenantId = user.tenantId;
   await audit(req, 'user.password_reset', 'User', user._id, `Reset password for ${user.name}`);
   res.json({ loginId: user.loginId, temporaryPassword });
@@ -87,6 +87,7 @@ r.patch('/users/:id', async (req, res) => {
   res.json({ id: user._id, status: user.status });
 });
 
+r.get('/audit/facets', async (req, res) => res.json(await svc.auditSummary(req.query)));
 r.get('/audit', async (req, res) => res.json(await svc.listAudit(req.query)));
 
 export default r;

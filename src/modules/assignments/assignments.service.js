@@ -1,5 +1,5 @@
 import {
-  TeachingAssignment, ClassTeacherAssignment, Teacher, Section, Subject, TimetableEntry, } from '../../models/index.js';
+  TeachingAssignment, ClassTeacherAssignment, Teacher, Section, Subject, TimetableEntry, StudentEnrolment, ClassModel, } from '../../models/index.js';
 import { notFound, conflict, addDays } from '../../core/utils.js';
 import { schoolToday } from '../../services/context.js';
 import { findOrCreateSubject, ensureOffering } from '../../services/subjects.js';
@@ -72,8 +72,16 @@ export async function setClassTeacher(tenantId, sectionId, { teacherId, effectiv
   if (!section) throw notFound('Section not found');
   const { today } = await schoolToday(tenantId);
   const open = await ClassTeacherAssignment.findOne({ tenantId, sectionId, open: true });
+  if (open && String(open.teacherId) === String(teacherId)) return open;
+  // one teacher is in charge of one class at a time: another section of the same year always counts; a section of another year counts while its students are still in it
+  const others = await ClassTeacherAssignment.find({ tenantId, teacherId, open: true, sectionId: { $ne: sectionId } }).lean();
+  for (const o of others) {
+    const busy = String(o.yearId) === String(section.yearId) || (await StudentEnrolment.exists({ tenantId, sectionId: o.sectionId, status: 'active' }));
+    if (!busy) continue;
+    const sec = await Section.findById(o.sectionId).select('name classId').lean(); const cls = sec && (await ClassModel.findById(sec.classId).select('name').lean());
+    throw conflict(`${teacher.name} is already the class teacher of ${cls?.name || ''} ${sec?.name || ''}`.trim() + '. A teacher can be in charge of one class at a time: change that class teacher first.');
+  }
   if (open) {
-    if (String(open.teacherId) === String(teacherId)) return open;
     open.effectiveTo = addDays(effectiveFrom || today, -1) < (open.effectiveFrom || '') ? (open.effectiveFrom || today) : addDays(effectiveFrom || today, -1);
     open.open = false;
     await open.save();

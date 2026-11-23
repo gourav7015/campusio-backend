@@ -1,6 +1,6 @@
 import { Teacher, User, Session, TeachingAssignment, ClassTeacherAssignment } from '../../models/index.js';
 import { notFound, conflict, escapeRegex, generatePassword } from '../../core/utils.js';
-import { createUserAccount, schoolCode, hashPassword } from '../../services/users.js';
+import { createUserAccount, schoolCode, hashPassword, chosenPassword } from '../../services/users.js';
 import { initialPassword } from '../../services/initialPassword.js';
 import { settingsOf, loadSchool } from '../../services/context.js';
 import { schoolToday } from '../../services/context.js';
@@ -107,11 +107,11 @@ export async function reactivateTeacher(tenantId, id) {
   return t;
 }
 
-export async function resetTeacherPassword(tenantId, id) {
+export async function resetTeacherPassword(tenantId, id, body) {
   const t = await Teacher.findOne({ _id: id, tenantId });
   if (!t?.userId) throw notFound('Teacher account not found');
-  const temporaryPassword = initialPassword(settingsOf(await loadSchool(tenantId)), { name: t.name, dob: t.dob, phone: t.phone }) || generatePassword();
   const u = await User.findById(t.userId);
+  const temporaryPassword = chosenPassword(body, u.loginId) || initialPassword(settingsOf(await loadSchool(tenantId)), { name: t.name, dob: t.dob, phone: t.phone }) || generatePassword();
   u.passwordHash = await hashPassword(temporaryPassword); u.mustChangePassword = true; u.failedLogins = 0; u.lockedUntil = undefined;
   await u.save();
   await Session.updateMany({ userId: u._id, revokedAt: null }, { revokedAt: new Date() });

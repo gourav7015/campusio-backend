@@ -20,6 +20,9 @@ services:
       - { key: ALERT_WEBHOOK_URL, sync: false }
       - { key: RESEND_API_KEY, sync: false }
       - { key: MAIL_FROM, sync: false }
+      - { key: MAIL_REPLY_TO, sync: false }
+      - { key: MAIL_SUPPORT_TO, sync: false }
+      - { key: MAIL_SECURITY_TO, sync: false }
       - { key: PAYMENT_PROVIDER, value: "off" }
       # uploaded files: set all four to keep them in a private Cloudflare R2 bucket instead of the database (see docs/OPERATIONS.md)
       - { key: R2_ACCOUNT_ID, sync: false }

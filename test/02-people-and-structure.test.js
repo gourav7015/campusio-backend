@@ -86,7 +86,7 @@ describe('structure, admissions, transfers and history', () => {
   });
 
   it('"create next year" carries the set-up over: sections, subjects and teachers; students stay put until promotion', async () => {
-    const body = { fromYearId: W.year._id, name: '2028-2029', startDate: '2028-04-01', endDate: '2029-03-31' };
+    const body = { fromYearId: W.year._id, name: '2028-2029', startDate: '2028-04-01', endDate: '2029-03-31', copyTeachers: true };
     expect((await api().post('/api/school/years/rollover').set(W.teacher1.h).send(body)).status).toBe(403);
     expect((await api().post('/api/school/years/rollover').set(W.h).send({ ...body, startDate: '2026-01-01' })).status).toBe(400); // must follow the source year
     expect((await api().post('/api/school/years/rollover').set(W.h).send({ ...body, endDate: '2028-01-01' })).status).toBe(400);
@@ -108,9 +108,9 @@ describe('structure, admissions, transfers and history', () => {
   it('refuses unsafe deletes and supports withdraw / archive rules', async () => {
     expect((await api().delete(`/api/school/classes/${W.c8._id}`).set(W.h)).status).toBe(409);
     expect((await api().delete(`/api/school/sections/${W.sec8A._id}`).set(W.h)).status).toBe(409);
-    // there is no subject master list to delete from: subjects exist only through teachers
-    expect((await api().delete(`/api/school/subjects/${W.maths._id}`).set(W.h)).status).toBe(404);
-    expect((await api().post('/api/school/subjects').set(W.h).send({ name: 'Art', code: 'ART' })).status).toBe(404);
+    // the school's subject list: a subject classes and teachers use cannot be deleted; a new one can be added
+    expect((await api().delete(`/api/school/subjects/${W.maths._id}`).set(W.h)).status).toBe(409);
+    expect((await api().post('/api/school/subjects').set(W.h).send({ name: 'Mathematics' })).status).toBe(409); // already a subject (any capitals)
     // reduce capacity below enrolled count
     expect((await api().patch(`/api/school/sections/${W.sec8A._id}`).set(W.h).send({ capacity: 1 })).status).toBe(409);
     // student with attendance cannot be archived, can be withdrawn

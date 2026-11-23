@@ -2,7 +2,7 @@ import { rollStatus } from '../../services/context.js';
 import {
   Student, StudentEnrolment, TransferRecord, User, Session, AttendanceRecord, Marks, ReportCard, Section, ClassModel, AcademicYear, } from '../../models/index.js';
 import { notFound, conflict, bad, todayStr, escapeRegex, generatePassword } from '../../core/utils.js';
-import { createUserAccount, schoolCode, hashPassword } from '../../services/users.js';
+import { createUserAccount, schoolCode, hashPassword, chosenPassword } from '../../services/users.js';
 import { settingsOf, getCurrentYear, loadSchool } from '../../services/context.js';
 import { initialPassword } from '../../services/initialPassword.js';
 import { clearanceFor } from '../../services/clearance.js';
@@ -20,7 +20,9 @@ export async function listStudents(tenantId, q) {
     const rx = new RegExp(escapeRegex(q.q), 'i');
     filter.$or = [{ name: rx }, { admissionNo: rx }, { 'guardians.name': rx }];
   }
-  const enrolFilter = { tenantId, yearId: year?._id, status: rollStatus(year) };
+  // with no year chosen, a student is shown where they are now: classes change year on their own dates, so one school can have classes in two years at once
+  const anyYear = !q.yearId;
+  const enrolFilter = anyYear ? { tenantId, status: 'active' } : { tenantId, yearId: year?._id, status: rollStatus(year) };
   if (q.classId) enrolFilter.classId = q.classId;
   if (q.sectionId) enrolFilter.sectionId = q.sectionId;
   const enrolments = await StudentEnrolment.find(enrolFilter).lean();
@@ -31,17 +33,18 @@ export async function listStudents(tenantId, q) {
   ]);
   const enrolByStudent = new Map();
   if (!(q.classId || q.sectionId)) {
-    const extra = await StudentEnrolment.find({ tenantId, yearId: year?._id, status: rollStatus(year), studentId: { $in: students.map((s) => s._id) } }).lean();
+    const extra = await StudentEnrolment.find({ ...(anyYear ? { tenantId, status: 'active' } : { tenantId, yearId: year?._id, status: rollStatus(year) }), studentId: { $in: students.map((s) => s._id) } }).lean();
     extra.forEach((e) => enrolByStudent.set(String(e.studentId), e));
   } else enrolments.forEach((e) => enrolByStudent.set(String(e.studentId), e));
-  const [sections, classes] = await Promise.all([Section.find({ tenantId, yearId: year?._id }).lean(), ClassModel.find({ tenantId }).lean()]);
+  const [sections, classes, allYears] = await Promise.all([Section.find({ tenantId, ...(anyYear ? {} : { yearId: year?._id }) }).lean(), ClassModel.find({ tenantId }).lean(), AcademicYear.find({ tenantId }).select('name').lean()]);
+  const yearName = new Map(allYears.map((y) => [String(y._id), y.name]));
   const sec = new Map(sections.map((s) => [String(s._id), s]));
   const cls = new Map(classes.map((c) => [String(c._id), c]));
   return {
     total, page: q.page, limit: q.limit, year: year && { id: year._id, name: year.name },
     items: students.map((s) => {
       const e = enrolByStudent.get(String(s._id));
-      return { ...s, enrolment: e && { id: e._id, rollNo: e.rollNo, sectionId: e.sectionId, classId: e.classId, section: sec.get(String(e.sectionId))?.name, className: cls.get(String(e.classId))?.name } };
+      return { ...s, enrolment: e && { id: e._id, rollNo: e.rollNo, sectionId: e.sectionId, classId: e.classId, section: sec.get(String(e.sectionId))?.name, className: cls.get(String(e.classId))?.name, yearId: e.yearId, yearName: yearName.get(String(e.yearId)) } };
     }),
   };
 }
@@ -54,7 +57,9 @@ export async function admitStudent(ctx, body) {
   const { tenantId, actorId } = ctx;
   const school = await loadSchool(tenantId);
   const settings = settingsOf(school);
-  const year = body.yearId ? await AcademicYear.findOne({ _id: body.yearId, tenantId }) : await getCurrentYear(tenantId);
+  // a student is admitted into the year of the section chosen: classes run in different years, so the school's current year is only the fallback
+  const chosen = !body.yearId && body.sectionId ? await Section.findOne({ _id: body.sectionId, tenantId }).select('yearId').lean() : null;
+  const year = body.yearId ? await AcademicYear.findOne({ _id: body.yearId, tenantId }) : chosen ? await AcademicYear.findOne({ _id: chosen.yearId, tenantId }) : await getCurrentYear(tenantId);
   if (!year) throw bad('Create an academic year first');
   const { section, cls } = await resolvePlacement(tenantId, { yearId: year._id, classId: body.classId, sectionId: body.sectionId });
   if (year.status === 'closed') throw conflict('Cannot admit into a closed academic year');
@@ -193,11 +198,11 @@ export async function archiveStudent(tenantId, id) {
   return s;
 }
 
-export async function resetStudentPassword(tenantId, id) {
+export async function resetStudentPassword(tenantId, id, body) {
   const s = await Student.findOne({ _id: id, tenantId });
   if (!s?.userId) throw notFound('Student account not found');
-  const temporaryPassword = initialPassword(settingsOf(await loadSchool(tenantId)), { name: s.name, dob: s.dob, phone: s.phone || s.guardians?.[0]?.phone }) || generatePassword();
   const u = await User.findById(s.userId);
+  const temporaryPassword = chosenPassword(body, u.loginId) || initialPassword(settingsOf(await loadSchool(tenantId)), { name: s.name, dob: s.dob, phone: s.phone || s.guardians?.[0]?.phone }) || generatePassword();
   u.passwordHash = await hashPassword(temporaryPassword); u.mustChangePassword = true; u.failedLogins = 0; u.lockedUntil = undefined;
   await u.save();
   await Session.updateMany({ userId: u._id, revokedAt: null }, { revokedAt: new Date() });

@@ -36,6 +36,10 @@ describe('Transport: vehicle documents (registration, insurance, pollution, fitn
     expect((await put('insurance', { expiresOn: addDays(today, 100) }, { buf: Buffer.from('plain text'), name: 'a.pdf', type: 'application/pdf' })).status).toBe(400); // content must match
     const ok = await put('insurance', { number: 'POL-1', issuedOn: addDays(today, -265), expiresOn: addDays(today, 100), notes: 'Comprehensive' }, { buf: PDF, name: 'insurance.pdf', type: 'application/pdf' });
     expect(ok.status).toBe(200); expect(ok.body).toMatchObject({ type: 'insurance', number: 'POL-1', state: 'valid', fileId: expect.any(String), label: 'Insurance' });
+    // the list says what copy is on file, so the form can show it
+    const listed = (await api().get(T(`/buses/${bus._id}/documents`)).set(tr.h)).body.documents.find((x) => x.type === 'insurance');
+    expect(listed.file).toMatchObject({ name: 'insurance.pdf', mime: 'application/pdf', size: PDF.length });
+    expect((await api().get(T(`/buses/${bus._id}/documents`)).set(tr.h)).body.documents.find((x) => x.type === 'fitness').file).toBeNull();
     // the bus's own expiry date follows, so the dashboard and older screens agree
     expect((await Bus.findById(bus._id)).insuranceExpiry).toBe(addDays(today, 100));
     expect((await put('registration', { number: 'GJ03AB1234' })).body.state).toBe('valid'); // an RC need not expire

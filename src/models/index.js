@@ -107,6 +107,7 @@ export const AuditLog = model('AuditLog', new Schema({
   entityType: String, entityId: String, summary: String,
   meta: Schema.Types.Mixed, ip: String,
 }, opts));
+AuditLog.schema.index({ tenantId: 1, createdAt: -1 });
 
 export const Counter = model('Counter', new Schema({
   tenantId: tenant, key: { type: String, required: true }, seq: { type: Number, default: 0 },
@@ -200,6 +201,24 @@ export const Student = model('Student', (() => {
   }, opts);
   s.index({ tenantId: 1, admissionNo: 1 }, { unique: true });
   s.index({ tenantId: 1, name: 1 });
+  return s;
+})());
+
+/**
+ * A class teacher's request to move their class into the next academic year. The office approves it (which lets the teacher do the move),
+ * rejects it, or does the move itself. One request may be open per class section and year at a time.
+ */
+export const PromotionRequest = model('PromotionRequest', (() => {
+  const s = new Schema({
+    tenantId: tenant, yearId: ref('AcademicYear', { required: true }), toYearId: ref('AcademicYear', { required: true }),
+    sectionId: ref('Section', { required: true }), classId: ref('Class', { required: true }), label: String, teacherId: ref('Teacher'),
+    requestedBy: ref('User'), requestedByName: String, note: String, waiting: Number,
+    status: { type: String, enum: ['pending', 'approved', 'rejected', 'withdrawn', 'completed', 'cancelled'], default: 'pending' },
+    open: { type: Boolean, default: true }, // pending or approved: at most one per section and year
+    decidedBy: ref('User'), decidedByName: String, decidedAt: Date, decisionNote: String, completedAt: Date,
+  }, opts);
+  s.index({ tenantId: 1, sectionId: 1, yearId: 1 }, { unique: true, partialFilterExpression: { open: true } });
+  s.index({ tenantId: 1, status: 1, createdAt: -1 });
   return s;
 })());
 

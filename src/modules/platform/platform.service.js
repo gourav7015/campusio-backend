@@ -1,6 +1,7 @@
+import { listAuditEntries, auditFacets } from '../../services/auditQuery.js';
 import { School, Subscription, User, Student, Teacher, Session, AuditLog, defaultSettings } from '../../models/index.js';
 import { notFound, conflict, escapeRegex, todayStr, generatePassword } from '../../core/utils.js';
-import { createUserAccount, hashPassword } from '../../services/users.js';
+import { createUserAccount, hashPassword, chosenPassword } from '../../services/users.js';
 
 const revokeSessions = (userIds) => Session.updateMany({ userId: { $in: userIds }, revokedAt: null }, { revokedAt: new Date() });
 
@@ -104,10 +105,10 @@ export async function createSchoolAdmin(schoolId, body, actorId) {
   return { school, user, temporaryPassword };
 }
 
-export async function resetAdminPassword(userId) {
+export async function resetAdminPassword(userId, body) {
   const u = await User.findOne({ _id: userId, role: 'school_admin' });
   if (!u) throw notFound('School admin not found');
-  const temporaryPassword = generatePassword();
+  const temporaryPassword = chosenPassword(body, u.loginId) || generatePassword();
   u.passwordHash = await hashPassword(temporaryPassword);
   u.mustChangePassword = true; u.failedLogins = 0; u.lockedUntil = undefined;
   await u.save();
@@ -124,9 +125,6 @@ export async function setAdminStatus(userId, status) {
   return u;
 }
 
-export async function listAudit({ schoolId, action, limit }) {
-  const f = {};
-  if (schoolId) f.tenantId = schoolId;
-  if (action) f.action = new RegExp(`^${escapeRegex(action)}`);
-  return AuditLog.find(f).sort({ createdAt: -1 }).limit(Math.min(Number(limit) || 100, 500)).lean();
-}
+const platformBase = (q) => (q.schoolId && /^[a-f0-9]{24}$/i.test(q.schoolId) ? { tenantId: q.schoolId } : {});
+export const listAudit = (q) => listAuditEntries(platformBase(q), q); // dates are read in Indian time
+export const auditSummary = (q) => auditFacets(platformBase(q), q);

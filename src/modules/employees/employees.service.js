@@ -1,4 +1,4 @@
-import { Teacher, StaffMember, Designation, Bus, TeachingAssignment, ClassTeacherAssignment, Subject, ClassModel, Section } from '../../models/index.js';
+import { Teacher, StaffMember, User, Session, Designation, Bus, TeachingAssignment, ClassTeacherAssignment, Subject, ClassModel, Section } from '../../models/index.js';
 import { escapeRegex, addDays } from '../../core/utils.js';
 import { ensureDeskStaff, ensureDesignations } from '../support-staff/support-staff.service.js';
 
@@ -7,7 +7,7 @@ import { ensureDeskStaff, ensureDesignations } from '../support-staff/support-st
  * transport officer) and the transport crew. Each person is in exactly one category.
  */
 export const CATEGORIES = ['teaching', 'non_teaching', 'office', 'transport'];
-const DESK_LABEL = { finance: 'Finance', library: 'Library', transport: 'Transport' };
+const DESK_LABEL = { finance: 'Finance', library: 'Library', transport: 'Transport', office: 'Office' };
 
 export async function listEmployees(ctx, f) {
   const { category, q, status = 'active', limit = 500 } = f;
@@ -39,6 +39,13 @@ export async function listEmployees(ctx, f) {
   const bus = new Map();
   for (const b of buses) { if (b.driverId) bus.set(String(b.driverId), `${b.busNo} · driver`); if (b.conductorId) bus.set(String(b.conductorId), `${b.busNo} · conductor`); }
   const soon = addDays(ctx.today, 30);
+  // when each desk holder was last active: the latest the sign-in was used, else the last time they signed in
+  const deskUsers = staff.filter((s) => s.userId).map((s) => s.userId);
+  const seen = new Map();
+  if (deskUsers.length) {
+    for (const u of await User.find({ _id: { $in: deskUsers } }).select('lastLoginAt').lean()) if (u.lastLoginAt) seen.set(String(u._id), u.lastLoginAt);
+    for (const x of await Session.aggregate([{ $match: { userId: { $in: deskUsers } } }, { $group: { _id: '$userId', at: { $max: '$lastSeenAt' } } }])) if (x.at && (!seen.get(String(x._id)) || x.at > seen.get(String(x._id)))) seen.set(String(x._id), x.at);
+  }
 
   const all = [
     ...teachers.map((t) => {
@@ -49,9 +56,10 @@ export async function listEmployees(ctx, f) {
     }),
     ...staff.map((s) => {
       const d = D.get(String(s.designationId));
-      const category = s.deskRole ? 'office' : d?.group === 'transport' ? 'transport' : 'non_teaching';
-      return { id: s._id, kind: 'staff', category, name: s.name, code: s.staffId, designation: d?.name || '', phone: s.phone, joiningDate: s.joiningDate, status: s.status, hasLogin: !!s.userId,
-        canMarkAttendance: !!s.canMarkAttendance, desk: s.deskRole ? DESK_LABEL[s.deskRole] : undefined, bus: bus.get(String(s._id)) || undefined, licenseExpiry: s.licenseExpiry || undefined };
+      const deskOf = s.deskRole || (s.canMarkAttendance && s.userId ? 'office' : undefined); // the office desk is held through the attendance permission, the other three through a desk role
+      const category = deskOf ? 'office' : d?.group === 'transport' ? 'transport' : 'non_teaching';
+      return { id: s._id, kind: 'staff', category, name: s.name, code: s.staffId, designation: d?.name || '', phone: s.phone, joiningDate: s.joiningDate, status: s.status, hasLogin: !!s.userId, lastActiveAt: s.userId ? seen.get(String(s.userId)) : undefined,
+        canMarkAttendance: !!s.canMarkAttendance, desk: deskOf ? DESK_LABEL[deskOf] : undefined, bus: bus.get(String(s._id)) || undefined, licenseExpiry: s.licenseExpiry || undefined };
     }),
   ];
   const counts = { ...Object.fromEntries(CATEGORIES.map((c) => [c, all.filter((i) => i.category === c).length])), all: all.length };

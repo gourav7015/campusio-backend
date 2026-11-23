@@ -73,6 +73,7 @@ export const config = {
     resendKey: process.env.RESEND_API_KEY || '',
     from: process.env.MAIL_FROM || '', // e.g. AtKaksha <noreply@mail.example.com>; the domain must be verified at Resend
     replyTo: process.env.MAIL_REPLY_TO || '', // where replies to notification emails go (the support inbox)
+    securityTo: process.env.MAIL_SECURITY_TO || '', // where people are told to report a sign-in or password email they did not ask for (falls back to MAIL_REPLY_TO)
     supportTo: process.env.MAIL_SUPPORT_TO || process.env.MAIL_REPLY_TO || '', // who hears about new platform help desk tickets
     appUrl: (process.env.APP_URL || (process.env.CORS_ORIGIN || 'http://localhost:5173').split(',')[0]).replace(/\/$/, ''),
     // which in-app notification categories are also emailed. A person can still switch email off (notificationPrefs.email = false) or one category off.

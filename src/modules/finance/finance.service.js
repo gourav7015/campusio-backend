@@ -184,9 +184,16 @@ export async function autoAssignForEnrolment(tenantId, enrolment, actorId, disco
   return discount ? { billed: n, discountApplied: applied } : n;
 }
 
+/** The academic year a student is in now (from their enrolment), else the school's: a class that has moved on bills in its new year. */
+export async function yearOfStudent(ctx, studentId) {
+  const e = await StudentEnrolment.findOne({ tenantId: ctx.tenantId, studentId, status: 'active' }).sort({ startDate: -1 }).select('yearId').lean();
+  return e && String(e.yearId) !== String(ctx.year?._id) ? (await AcademicYear.findOne({ _id: e.yearId, tenantId: ctx.tenantId })) || ctx.year : ctx.year;
+}
+
 export async function createCharge(ctx, body, extra = {}) {
   if (!(await Student.exists({ _id: body.studentId, tenantId: ctx.tenantId }))) throw notFound('Student not found');
-  return StudentCharge.create({ tenantId: ctx.tenantId, studentId: body.studentId, yearId: ctx.year?._id, kind: 'other', label: body.label, amount: body.amount, dueDate: body.dueDate, createdBy: ctx.actorId, ...extra });
+  const year = await yearOfStudent(ctx, body.studentId);
+  return StudentCharge.create({ tenantId: ctx.tenantId, studentId: body.studentId, yearId: year?._id, kind: 'other', label: body.label, amount: body.amount, dueDate: body.dueDate, createdBy: ctx.actorId, ...extra });
 }
 
 /** Reduce what a student owes (scholarship, sibling discount…). Needs a reason and is kept on the charge. */
@@ -238,12 +245,13 @@ async function reapplyPersonalDiscount(ctx, student, byName) {
 // ───────────── transport fees (billed monthly to students who ride a bus) ─────────────
 /** Bill the monthly transport fare from this month to the end of the academic year. Months already billed are skipped. */
 export async function billTransport(ctx, studentId, { fare, busNo, stop }) {
-  if (!ctx.year || !(fare > 0)) return 0;
+  const year = await yearOfStudent(ctx, studentId);
+  if (!year || !(fare > 0)) return 0;
   const policy = policyOf(ctx.settings);
-  const months = billingMonths(ctx.year, ctx.today);
-  const have = new Set((await StudentCharge.find({ tenantId: ctx.tenantId, studentId, category: 'Transport', yearId: ctx.year._id }).select('period').lean()).map((c) => c.period));
+  const months = billingMonths(year, ctx.today);
+  const have = new Set((await StudentCharge.find({ tenantId: ctx.tenantId, studentId, category: 'Transport', yearId: year._id }).select('period').lean()).map((c) => c.period));
   const docs = months.filter((m) => !have.has(m)).map((m) => ({
-    tenantId: ctx.tenantId, studentId, yearId: ctx.year._id, kind: 'fee', category: 'Transport', period: m, label: `Transport fee — ${monthName(m)} (bus ${busNo}${stop ? `, ${stop}` : ''})`,
+    tenantId: ctx.tenantId, studentId, yearId: year._id, kind: 'fee', category: 'Transport', period: m, label: `Transport fee — ${monthName(m)} (bus ${busNo}${stop ? `, ${stop}` : ''})`,
     amount: fare, dueDate: dueOn(m, policy.dueDay), createdBy: ctx.actorId,
   }));
   if (docs.length) await StudentCharge.insertMany(docs);
@@ -464,7 +472,8 @@ export async function studentAccount(tenantId, studentId, today) {
  * so school-wide totals (dashboard, class report, reminders) do not have to download thousands of student records.
  */
 async function duesRows(ctx, q) {
-  const enrFilter = { tenantId: ctx.tenantId, yearId: ctx.year?._id, status: rollStatus(ctx.year) };
+  // with no year asked for, everyone who is enrolled now is counted, whichever year their class is in: a student whose class has moved on keeps the dues of the year they left
+  const enrFilter = ctx.yearExplicit ? { tenantId: ctx.tenantId, yearId: ctx.year?._id, status: rollStatus(ctx.year) } : { tenantId: ctx.tenantId, status: 'active' };
   if (q.sectionId) enrFilter.sectionId = q.sectionId;
   if (q.classId) enrFilter.classId = q.classId;
   const enrolments = await StudentEnrolment.find(enrFilter).select('studentId classId sectionId rollNo').lean();
@@ -478,7 +487,7 @@ async function duesRows(ctx, q) {
       nextDue: { $min: { $cond: [{ $eq: ['$status', 'open'] }, '$dueDate', null] } },
       oldestOverdue: { $min: { $cond: [{ $and: [{ $eq: ['$status', 'open'] }, { $lt: ['$dueDate', ctx.today] }, { $gt: [{ $subtract: [{ $subtract: ['$amount', '$concession'] }, '$paidAmount'] }, 0] }] }, '$dueDate', null] } },
     } }]),
-    Section.find({ tenantId: ctx.tenantId, yearId: ctx.year?._id }).select('name').lean(), ClassModel.find({ tenantId: ctx.tenantId }).select('name').lean(),
+    Section.find({ tenantId: ctx.tenantId, ...(ctx.yearExplicit ? { yearId: ctx.year?._id } : {}) }).select('name').lean(), ClassModel.find({ tenantId: ctx.tenantId }).select('name').lean(),
   ]);
   const B = new Map(agg.map((a) => [String(a._id), a]));
   const S = mk(secs); const C = mk(classes); const E = new Map(enrolments.map((e) => [String(e.studentId), e]));
@@ -543,7 +552,7 @@ export async function defaultersByClass(ctx, { classId, sectionId } = {}) {
   const [rows, classes, sections] = await Promise.all([
     duesRows(ctx, { classId, sectionId }),
     ClassModel.find({ tenantId: ctx.tenantId, status: 'active', ...(classId ? { _id: classId } : {}) }).sort({ level: 1 }).select('name level').lean(),
-    Section.find({ tenantId: ctx.tenantId, yearId: ctx.year?._id, status: 'active', ...(classId ? { classId } : {}), ...(sectionId ? { _id: sectionId } : {}) }).sort({ name: 1 }).select('name classId').lean(),
+    Section.find({ tenantId: ctx.tenantId, ...(ctx.yearExplicit ? { yearId: ctx.year?._id } : {}), status: 'active', ...(classId ? { classId } : {}), ...(sectionId ? { _id: sectionId } : {}) }).sort({ name: 1 }).select('name classId').lean(),
   ]);
   const tally = (list) => {
     const billed = list.filter((r) => r.billed); const bad = list.filter((r) => r.overdue > 0);

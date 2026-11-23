@@ -14,7 +14,7 @@ export const yearBody = z.object({ name: z.string().trim().min(3), startDate: da
   .refine((y) => y.endDate > y.startDate, { message: 'End date must be after start date', path: ['endDate'] });
 export const rolloverBody = z.object({
   fromYearId: objectId, name: z.string().trim().min(3).max(30), startDate: date, endDate: date,
-  copySections: z.boolean().default(true), copyOfferings: z.boolean().default(true), copyTeachers: z.boolean().default(true),
+  copySections: z.boolean().default(true), copyOfferings: z.boolean().default(true), copyTeachers: z.boolean().default(false), // teachers are assigned by hand for the new year unless asked for
 }).refine((y) => y.endDate > y.startDate, { message: 'End date must be after start date', path: ['endDate'] });
 export const yearPatch = z.object({ name: z.string().trim().min(3), startDate: date, endDate: date, classWindows }).partial();
 

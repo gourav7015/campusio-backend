@@ -45,6 +45,9 @@ export async function setCurrentYear(tenantId, id) {
 }
 export async function closeYear(tenantId, id) {
   const y = await owned(AcademicYear, tenantId, id, 'Academic year');
+  // classes finish on their own dates: a year closes only once every class has left it, so nobody is cut off from their live class
+  const waiting = await StudentEnrolment.countDocuments({ tenantId, yearId: y._id, status: 'active' });
+  if (waiting) throw conflict(`${waiting} students are still in classes of ${y.name} that have not moved on, so it cannot be closed yet. Move those classes on first (Year-end promotion).`);
   y.status = 'closed'; y.isCurrent = false;
   return y.save();
 }

@@ -26,8 +26,9 @@ export function assertPasswordPolicy(p, { loginId, choosing = false } = {}) {
  * The only way user accounts come into existence: created by Super Admin (school admins)
  * or by School Admin / acting Super Admin (everyone inside a school). No self-signup. Every account needs an email, a mobile number and a date of birth.
  */
-export async function createUserAccount({ role, tenantId, name, email, phone, dob, loginId, password, createdBy, extra = {} }) {
-  assertContact({ email, phone, dob }, name || 'this account'); // how a forgotten password is recovered and where sign-in codes go
+export async function createUserAccount({ role, tenantId, name, email, phone, dob, loginId, password, createdBy, extra = {}, requireContact = true }) {
+  // how a forgotten password is recovered and where sign-in codes go. A desk login (Finance, Library, Transport, office desk) is the desk's sign-in, not a person: it can be made without them.
+  if (requireContact) assertContact({ email, phone, dob }, name || 'this account');
   let id = (loginId || email || '').trim().toLowerCase();
   if (!id) throw bad('A login id or email is required');
   if (await User.exists({ loginId: id })) throw conflict(`Login id "${id}" is already in use`);
@@ -43,6 +44,14 @@ export async function createUserAccount({ role, tenantId, name, email, phone, do
 export async function schoolCode(tenantId) {
   const s = await School.findById(tenantId).select('code');
   return s?.code;
+}
+
+/** The password an administrator typed or generated in the reset dialog, checked against the password rules; null when none was given (then the usual starting password is made). */
+export function chosenPassword(body, loginId) {
+  const p = body?.password;
+  if (p === undefined || p === null || p === '') return null;
+  assertPasswordPolicy(String(p), { loginId, choosing: true });
+  return String(p);
 }
 
 export const publicUser = (u) => ({

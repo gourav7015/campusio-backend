@@ -1,7 +1,7 @@
 import { Designation, StaffMember, Bus, Teacher } from '../../models/index.js';
 import { notFound, conflict, bad, forbidden, escapeRegex } from '../../core/utils.js';
 import { nextSeq, settingsOf, loadSchool } from '../../services/context.js';
-import { createUserAccount, hashPassword, schoolCode } from '../../services/users.js';
+import { createUserAccount, hashPassword, schoolCode, chosenPassword } from '../../services/users.js';
 import { initialPassword } from '../../services/initialPassword.js';
 import { generatePassword } from '../../core/utils.js';
 import { User, Session } from '../../models/index.js';
@@ -52,6 +52,9 @@ const inScope = (scope, group) => group === groupOf(scope);
 
 // ───────────── the school's own officers (finance, librarian, transport officer) ─────────────
 export const DESK_TITLES = { finance: 'Finance Officer', library: 'Librarian', transport: 'Transport Officer' };
+/** A desk with nobody on it is named after the desk. It is a sign-in, not a person, so it has no employee record. (The older stand-in names are listed too.) */
+export const DESK_NAMES = { finance: 'Finance desk', library: 'Library desk', transport: 'Transport desk' };
+export const STAND_IN_NAMES = [...Object.values(DESK_NAMES), ...Object.values(DESK_TITLES), 'Accounts Officer', 'Library Officer'];
 /** The job title a desk role carries (made when first needed). A title is held by a person; it is never itself on the payroll. */
 export async function deskDesignation(tenantId, role) {
   await ensureDesignations(tenantId);
@@ -59,8 +62,8 @@ export async function deskDesignation(tenantId, role) {
   return (await Designation.findOne({ tenantId, name: new RegExp(`^${escapeRegex(title)}$`, 'i') })) || Designation.create({ tenantId, name: title, group: 'general' });
 }
 /**
- * Every desk login is also an employee: it needs a row in the staff list so that it shows in the employee directory and can be marked in the
- * attendance register. This creates the missing rows and keeps the status in step with the login. Safe to call as often as needed.
+ * A desk login that was made for a named person is also an employee (the staff list, the attendance register). A desk with nobody on it is not: it has no
+ * employee record until someone is assigned. This makes the missing rows for named logins and keeps the status in step with the login. Safe to call often.
  */
 export async function ensureDeskStaff(tenantId, actorId) {
   const users = await User.find({ tenantId, role: { $in: Object.keys(DESK_TITLES) } }).select('name role status createdAt').lean();
@@ -72,6 +75,7 @@ export async function ensureDeskStaff(tenantId, actorId) {
     const want = u.status === 'active' ? 'active' : 'inactive';
     const cur = have.get(String(u._id));
     if (cur) { if (cur.status !== want) await StaffMember.updateOne({ _id: cur._id }, { status: want }); continue; }
+    if (STAND_IN_NAMES.includes(u.name)) continue; // nobody on this desk yet: no employee record
     const d = await deskDesignation(tenantId, u.role);
     const seq = await nextSeq(tenantId, 'staff-officer'); // officers have their own numbers (OF0001…), so staff ids (S0001…) are never used up by them
     await StaffMember.create({ tenantId, userId: u._id, staffId: `OF${String(seq).padStart(4, '0')}`, name: u.name, designationId: d._id, deskRole: u.role, joiningDate: u.createdAt?.toISOString().slice(0, 10), status: want, createdBy: actorId });
@@ -213,7 +217,7 @@ export async function createLogin(ctx, scope, id) {
   // the Staff portal is the office desk (attendance, leave, queries): a login is for someone who is given that work, not for every employee
   if (!s.canMarkAttendance) throw bad(`${s.name} has no office desk duties. Switch on "Office desk" for this person first: only people who work for the office have a sign-in.`);
   const code = await schoolCode(ctx.tenantId);
-  const { user, temporaryPassword } = await createUserAccount({ role: 'staff', tenantId: ctx.tenantId, name: s.name, email: s.email, phone: s.phone, dob: s.dob, loginId: `${code}.${s.staffId.toLowerCase()}`, createdBy: ctx.actorId, password: initialPassword(settingsOf(await loadSchool(ctx.tenantId)), { name: s.name, dob: s.dob, phone: s.phone }) });
+  const { user, temporaryPassword } = await createUserAccount({ role: 'staff', tenantId: ctx.tenantId, name: s.name, email: s.email, phone: s.phone, dob: s.dob, requireContact: false, loginId: `${code}.${s.staffId.toLowerCase()}`, createdBy: ctx.actorId, password: initialPassword(settingsOf(await loadSchool(ctx.tenantId)), { name: s.name, dob: s.dob, phone: s.phone }) });
   s.userId = user._id;
   await s.save();
   return { loginId: user.loginId, temporaryPassword };
@@ -230,11 +234,11 @@ export async function removeLogin(ctx, scope, id) {
   return { ok: true };
 }
 
-export async function resetLogin(ctx, scope, id) {
+export async function resetLogin(ctx, scope, id, body) {
   const { s } = await ownStaff(ctx, scope, id);
   if (!s.userId) throw notFound(`${s.name} has no login yet`);
-  const temporaryPassword = initialPassword(settingsOf(await loadSchool(ctx.tenantId)), { name: s.name, dob: s.dob, phone: s.phone }) || generatePassword();
   const u = await User.findById(s.userId);
+  const temporaryPassword = chosenPassword(body, u.loginId) || initialPassword(settingsOf(await loadSchool(ctx.tenantId)), { name: s.name, dob: s.dob, phone: s.phone }) || generatePassword();
   u.passwordHash = await hashPassword(temporaryPassword); u.mustChangePassword = true; u.failedLogins = 0; u.lockedUntil = undefined;
   await u.save();
   await Session.updateMany({ userId: u._id, revokedAt: null }, { revokedAt: new Date() });

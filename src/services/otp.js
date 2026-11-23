@@ -4,6 +4,9 @@ import { HttpError, bad } from '../core/utils.js';
 import { isEmailEnabled, sendNotificationEmail } from './email.js';
 import { registeredContact, maskEmail } from './contact.js';
 
+/** Where a person is told to report a code they did not ask for. */
+export const reportTo = () => config.mail.securityTo || config.mail.replyTo;
+
 /**
  * A 6-digit one-time code sent to the registered email: used for two-factor sign-in and for a forgotten password.
  * A code lasts 5 minutes, allows 5 wrong tries, is kept only as a keyed hash, and at most 8 go out per person per hour.
@@ -31,7 +34,7 @@ export function allowSend(user) {
 export function emailCode(to, code, what = 'sign-in') {
   return !!sendNotificationEmail(to, {
     subject: what === 'sign-in' ? 'Your AtKaksha sign-in code' : 'Your AtKaksha password reset code', heading: what === 'sign-in' ? 'Your sign-in code' : 'Your password reset code', urgent: true,
-    lines: [`${code} is your AtKaksha code.`, 'It works for 5 minutes. Never share it with anyone: AtKaksha will never ask you for it. If it was not you, ignore this email and tell your school office.'],
+    lines: [`${code} is your AtKaksha code.`, `It works for 5 minutes. Never share it with anyone: AtKaksha will never ask you for it. If it was not you, ignore this email and tell your school office${reportTo() ? ` or write to ${reportTo()}` : ''}.`],
   });
 }
 

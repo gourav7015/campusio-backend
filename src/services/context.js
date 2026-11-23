@@ -73,6 +73,20 @@ export async function teacherScope(tenantId, teacherId, yearId, today) {
   };
 }
 
+/**
+ * The year a teacher works in by default. The school's current year if they have classes there; if all their classes have already moved into a
+ * later year (classes change year on their own dates), that later year. Someone with classes in both can switch with ?yearId.
+ */
+export async function teacherDefaultYear(tenantId, teacherId, current, today) {
+  if (!current) return current;
+  const here = await teacherScope(tenantId, teacherId, current._id, today);
+  if (here.sectionIds.length) return current;
+  const ids = [...new Set([...(await TeachingAssignment.distinct('yearId', { tenantId, teacherId })), ...(await ClassTeacherAssignment.distinct('yearId', { tenantId, teacherId }))].map(String))].filter((y) => y !== String(current._id));
+  const later = await AcademicYear.find({ tenantId, _id: { $in: ids }, status: { $ne: 'closed' } }).sort({ startDate: -1 });
+  for (const y of later) if ((await teacherScope(tenantId, teacherId, y._id, today)).sectionIds.length) return y;
+  return current;
+}
+
 export async function currentEnrolment(tenantId, studentId, yearId) {
   return StudentEnrolment.findOne({ tenantId, studentId, yearId, status: 'active' });
 }

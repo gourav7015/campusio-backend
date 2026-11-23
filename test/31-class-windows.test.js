@@ -33,7 +33,11 @@ describe('Class-wise session dates and viewing a past year', () => {
     const y = W.year;
     const other = (await api().post('/api/school/years').set(W.h).send({ name: '2027-2028', startDate: '2027-04-01', endDate: '2028-03-31' })).body;
     await api().post(`/api/school/years/${other._id}/current`).set(W.h).send({});
-    await api().post(`/api/school/years/${y._id}/close`).set(W.h).send({});
+    // a year closes only once every class has left it: while students are still active in it, closing is refused
+    expect((await api().post(`/api/school/years/${y._id}/close`).set(W.h).send({})).status).toBe(409);
+    const { StudentEnrolment: Enr } = await import('../src/models/index.js');
+    await Enr.updateMany({ tenantId: W.id, yearId: y._id }, { status: 'promoted' }); // the year-end promotion has moved everyone on
+    expect((await api().post(`/api/school/years/${y._id}/close`).set(W.h).send({})).status).toBe(200);
     for (const path of ['/api/school/students', '/api/school/sections', '/api/school/teaching-assignments', '/api/school/timetable/entries', '/api/school/finance/structures']) {
       const r = await api().get(`${path}${path.includes('?') ? '&' : '?'}yearId=${y._id}`).set(W.h);
       expect([200, 404], `${path} -> ${r.status} ${JSON.stringify(r.body).slice(0, 120)}`).toContain(r.status);

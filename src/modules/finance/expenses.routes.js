@@ -105,8 +105,16 @@ r.put('/school-finance-profile', async (req, res) => {
 export const approvalRoutes = Router();
 approvalRoutes.get('/approvals', async (req, res) => {
   const sched = await import('../scheduling/scheduling.service.js');
-  const [expenses, swaps, exceptions, vendorsWaiting] = await Promise.all([svc.pendingApprovals(req.ctx), sched.adminSwaps(req.ctx, { status: 'awaiting' }), sched.listExceptions(req.ctx, { status: 'pending' }), vendors.pendingVendors(req.ctx)]);
-  res.json({ expenses, vendors: vendorsWaiting, swaps, exceptions, counts: { expenses: expenses.length, vendors: vendorsWaiting.length, swaps: swaps.length, exceptions: exceptions.length } });
+  const promo = await import('../promotion/requests.service.js');
+  const [expenses, swaps, exceptions, vendorsWaiting, promotions] = await Promise.all([svc.pendingApprovals(req.ctx), sched.adminSwaps(req.ctx, { status: 'awaiting' }), sched.listExceptions(req.ctx, { status: 'pending' }), vendors.pendingVendors(req.ctx), promo.listForOffice(req.tenantId, { status: 'pending' })]);
+  res.json({ expenses, vendors: vendorsWaiting, swaps, exceptions, promotions, counts: { expenses: expenses.length, vendors: vendorsWaiting.length, swaps: swaps.length, exceptions: exceptions.length, promotions: promotions.length } });
+});
+approvalRoutes.post('/approvals/promotions/:id', async (req, res) => {
+  const promo = await import('../promotion/requests.service.js');
+  const b = parse(z.object({ approve: z.boolean(), note: z.string().trim().max(300).optional() }), req.body);
+  const r = await promo.decide(req.ctx, req.params.id, b, req.user);
+  await audit(req, `promotion.request_${r.status}`, 'PromotionRequest', r._id, `${r.status === 'approved' ? 'Approved' : 'Rejected'} the request to move ${r.label} to the next year${b.note ? `: ${b.note}` : ''}`);
+  res.json(promo.shape(r));
 });
 approvalRoutes.post('/approvals/expenses/:id', async (req, res) => {
   const b = parse(z.object({ approve: z.boolean(), note: z.string().trim().max(300).optional() }), req.body);

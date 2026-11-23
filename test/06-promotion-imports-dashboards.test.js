@@ -26,7 +26,7 @@ describe('promotion, bulk import, dashboards, profile and sessions', () => {
       // retain one student in Class 8, drop another from the school
       items[0] = { enrolmentId: items[0].enrolmentId, action: 'retain', toSectionId: s8A2._id };
       items[1] = { enrolmentId: items[1].enrolmentId, action: 'withdraw' };
-      const out = await api().post('/api/school/promotions/commit').set(W.h).send({ fromYearId: W.year._id, toYearId: y2._id, items, confirm: true, makeCurrent: true, closeFromYear: true });
+      const out = await api().post('/api/school/promotions/commit').set(W.h).send({ fromYearId: W.year._id, toYearId: y2._id, items, confirm: true, makeCurrent: true, closeFromYear: true, acknowledgeGaps: true }); // the new year has no teachers yet
       expect(out.body).toMatchObject({ promoted: 1, retained: 1, withdrawn: 1 });
       const retained = pv.items[0].studentId; const promoted = pv.items[2].studentId;
       const rd = (await api().get(`/api/school/students/${retained}`).set(W.h)).body;
@@ -37,7 +37,7 @@ describe('promotion, bulk import, dashboards, profile and sessions', () => {
       const years = (await api().get('/api/school/years').set(W.h)).body;
       expect(years.find((y) => y.name === '2026-2027')).toMatchObject({ status: 'closed', isCurrent: false });
       // second run is refused because those enrolments are already processed
-      expect((await api().post('/api/school/promotions/commit').set(W.h).send({ fromYearId: W.year._id, toYearId: y2._id, items, confirm: true })).status).toBe(409);
+      expect((await api().post('/api/school/promotions/commit').set(W.h).send({ fromYearId: W.year._id, toYearId: y2._id, items, confirm: true, acknowledgeGaps: true })).status).toBe(409);
     });
 
     it('old-year data stays readable and the portals follow the new current year', async () => {

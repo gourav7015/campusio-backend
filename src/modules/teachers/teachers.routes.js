@@ -30,7 +30,7 @@ r.post('/teachers/:id/reactivate', async (req, res) => {
   res.json(t);
 });
 r.post('/teachers/:id/reset-password', async (req, res) => {
-  const out = await svc.resetTeacherPassword(req.tenantId, req.params.id);
+  const out = await svc.resetTeacherPassword(req.tenantId, req.params.id, req.body);
   await audit(req, 'user.password_reset', 'Teacher', req.params.id, 'Reset teacher password');
   res.json(out);
 });

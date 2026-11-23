@@ -1,3 +1,4 @@
+import { gapsForSections } from '../structure/class-structure.service.js';
 import { rollStatus } from '../../services/context.js';
 import { monitorsOf } from '../class-life/class-life.service.js';
 import {
@@ -18,7 +19,7 @@ export async function myYears(ctx) {
   const asg = await TeachingAssignment.distinct('yearId', { tenantId: ctx.tenantId, teacherId: ctx.teacher._id });
   const ct = await ClassTeacherAssignment.distinct('yearId', { tenantId: ctx.tenantId, teacherId: ctx.teacher._id });
   const years = await AcademicYear.find({ tenantId: ctx.tenantId, _id: { $in: [...asg, ...ct] } }).sort({ startDate: -1 }).lean();
-  return years.map((y) => ({ id: y._id, name: y.name, isCurrent: y.isCurrent }));
+  return years.map((y) => ({ id: y._id, name: y.name, isCurrent: y.isCurrent, isDefault: String(y._id) === String(ctx.year?._id) })); // isDefault: the year the teacher's pages open on when none is chosen
 }
 
 // ── classes ──
@@ -227,6 +228,8 @@ export async function dashboard(ctx) {
   const examStatusCount = (s) => exams.filter((e) => e.status === s).length;
   const upcomingExams = exams.filter((e) => e.date && e.date >= today).slice(0, 5);
   return {
+    // what is still missing in the classes this teacher is class teacher of (a subject nobody has been assigned to teach)
+    classGaps: await gapsForSections(tenantId, year._id, scope.classTeacherSectionIds),
     permissions: { takeAttendance: scope.classTeacherSectionIds.length > 0 },
     greeting: { name: ctx.teacher.name, date: today, weekday: isoDay(today), periodsToday: rows.filter((r) => !r.covering || true).length, firstUpcoming: next || null, working },
     cards: { assignedStudents: studentsAssigned.length, assignedClasses: sectionIds.length, pendingAttendance, activeAssignments: published.filter((h) => h.dueDate >= today).length },

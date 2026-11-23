@@ -1,11 +1,14 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { parse } from '../../core/utils.js';
+import { classStructure as classStructureOf, addSubjectToClass, removeSubjectFromClass, subjectUsage, createSubject, renameSubject, deleteSubject, addSubjectToClasses } from './class-structure.service.js';
 import { audit } from '../../services/audit.js';
 import * as v from './structure.validation.js';
 import * as svc from './structure.service.js';
 
 const r = Router();
 const T = (req) => req.tenantId;
+const objectId = z.string().regex(/^[a-f0-9]{24}$/i);
 
 // academic years
 r.get('/years', async (req, res) => res.json(await svc.listYears(T(req))));
@@ -69,9 +72,43 @@ r.delete('/sections/:id', async (req, res) => {
 
 // subjects
 r.get('/subjects', async (req, res) => res.json(await svc.listSubjects(T(req))));
-// Subjects are created through teachers (profile / assignment); no separate master list to maintain.
+// the school's subjects: added here (or on the spot through a teacher), then given to the classes that study them
+r.get('/subjects/usage', async (req, res) => res.json(await subjectUsage(T(req), parse(z.object({ yearId: objectId }), req.query).yearId)));
+r.post('/subjects', async (req, res) => {
+  const s = await createSubject(T(req), parse(z.object({ name: z.string().trim().min(2).max(80) }), req.body));
+  await audit(req, 'subject.created', 'Subject', s._id, `Added the subject ${s.name}`);
+  res.status(201).json(s);
+});
+r.patch('/subjects/:id', async (req, res) => {
+  const s = await renameSubject(T(req), req.params.id, parse(z.object({ name: z.string().trim().min(2).max(80) }), req.body));
+  await audit(req, 'subject.renamed', 'Subject', s._id, `Renamed a subject to ${s.name}`);
+  res.json(s);
+});
+r.delete('/subjects/:id', async (req, res) => {
+  const out = await deleteSubject(T(req), req.params.id);
+  await audit(req, 'subject.deleted', 'Subject', req.params.id, 'Deleted a subject nobody used');
+  res.json(out);
+});
 
 // subject offerings
+r.get('/offerings/structure', async (req, res) => res.json(await classStructureOf(T(req), parse(z.object({ yearId: objectId }), req.query).yearId)));
+r.post('/offerings/bulk', async (req, res) => {
+  const b = parse(z.object({ yearId: objectId, subjectId: objectId, classIds: z.array(objectId).min(1).max(60), weeklyPeriods: z.number().int().min(1).max(40).optional() }), req.body);
+  const out = await addSubjectToClasses(T(req), b);
+  await audit(req, 'offering.added', 'SubjectOffering', null, `Gave a subject to ${out.created} classes`);
+  res.status(201).json(out);
+});
+r.post('/offerings', async (req, res) => {
+  const b = parse(z.object({ yearId: objectId, classId: objectId, subject: z.string().trim().max(80).optional(), subjectId: objectId.optional(), weeklyPeriods: z.number().int().min(1).max(40).optional() }).refine((x) => x.subject || x.subjectId, { message: 'Enter the subject name' }), req.body);
+  const o = await addSubjectToClass(T(req), b);
+  await audit(req, 'offering.added', 'SubjectOffering', o._id, 'Added a subject to a class');
+  res.status(201).json(o);
+});
+r.delete('/offerings/:id', async (req, res) => {
+  const out = await removeSubjectFromClass(T(req), req.params.id);
+  await audit(req, 'offering.removed', 'SubjectOffering', req.params.id, 'Removed a subject from a class');
+  res.json(out);
+});
 r.get('/offerings', async (req, res) => res.json(await svc.listOfferings(T(req), req.query)));
 r.post('/offerings/copy', async (req, res) => {
   const out = await svc.copyOfferings(T(req), parse(v.copyOfferingsBody, req.body));

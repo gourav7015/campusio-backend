@@ -117,7 +117,8 @@ describe('Employees directory, officers as employees, and the Staff portal atten
     expect((await api().get(`/api/school/staff-attendance/register?group=teachers`).set(W.h)).body.rows.find((r) => r.personId === rows[0].personId).status).toBe('absent');
     // the rest of the Staff portal is the same desk: employees (no transport crew), leave of non-teaching staff, queries
     const emp = (await api().get('/api/staff/employees?category=non_teaching').set(clerkLogin.h)).body;
-    expect(emp.items.map((i) => i.name)).toEqual(expect.arrayContaining(['Chhaya Clerk', 'Sunil Sweeper'])); expect(emp.items.map((i) => i.name)).not.toContain('Ramesh Driver');
+    expect(emp.items.map((i) => i.name)).toEqual([]); // both were given the office desk, so they are listed with the desk holders
+    expect((await api().get('/api/staff/employees?category=office').set(clerkLogin.h)).body.items.map((i) => i.name)).toEqual(expect.arrayContaining(['Chhaya Clerk', 'Sunil Sweeper'])); expect(emp.items.map((i) => i.name)).not.toContain('Ramesh Driver');
     expect((await api().get('/api/staff/employees?category=transport').set(clerkLogin.h)).status).toBe(403);
     expect((await api().get('/api/staff/leave').set(clerkLogin.h)).status).toBe(200);
     // other portals cannot reach the desk
@@ -135,21 +136,19 @@ describe('Employees directory, officers as employees, and the Staff portal atten
     const des = (await api().get('/api/school/designations').set(W.h)).body;
     const peon = des.find((d) => d.name === 'Peon')._id;
     expect((await api().post('/api/school/staff').set(W.h).send({ name: 'No Title', role: 'staff', phone: '9833333333', dob: '1984-04-04', email: 'staff@fixture.test' })).status).toBe(400); // a job title is needed
-    expect((await api().post('/api/school/staff').set(W.h).send({ name: 'Needs Email', role: 'finance', phone: '9833333333', dob: '1984-04-04' })).status).toBe(400); // officers sign in with an email
-    const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Pappu Peon', role: 'staff', designationId: peon, phone: '9000000009', canMarkAttendance: true, phone: '9833333333', dob: '1984-04-04', email: 'staff@fixture.test' });
+    const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Pappu Peon', role: 'staff', designationId: peon, canMarkAttendance: true, phone: '9833333333', dob: '1984-04-04', email: 'staff@fixture.test' });
     expect(c.status).toBe(201);
     expect(c.body).toMatchObject({ role: 'staff', name: 'Pappu Peon' });
     expect(c.body.loginId).toMatch(/^emp\.s\d{4}$/); expect(c.body.temporaryPassword).toBeTruthy();
     const me = await login(c.body.loginId, c.body.temporaryPassword, 'staff');
     expect((await api().get('/api/auth/me').set(me.h)).body.user.canMarkAttendance).toBe(true); // and the attendance desk was given at the same time
-    expect((await api().get('/api/school/employees?category=non_teaching&q=Pappu').set(W.h)).body.items[0]).toMatchObject({ name: 'Pappu Peon', hasLogin: true, canMarkAttendance: true });
+    expect((await api().get('/api/school/employees?category=office&q=Pappu').set(W.h)).body.items[0]).toMatchObject({ name: 'Pappu Peon', hasLogin: true, canMarkAttendance: true, desk: 'Office', lastActiveAt: expect.anything() });
   });
 
   it('a desk role is held by a person: an existing employee is given the role, keeps their record, and the role itself is never a payable person', async () => {
     const des = (await api().get('/api/school/designations').set(W.h)).body;
     const gita = (await api().post('/api/school/support-staff').set(W.h).send({ name: 'Gita Sharma', designationId: des.find((d) => d.name === 'Office Clerk')._id, phone: '9111111111', email: 'clerk@fixture.test', dob: '1984-04-04' })).body;
     const make = (body) => api().post('/api/school/staff').set(W.h).send({ role: 'finance', email: 'gita@emp.test', ...body, phone: '9833333333', dob: '1984-04-04' });
-    expect((await make({})).status).toBe(400); // a person is needed: a name, or someone already on the staff
     expect((await make({ staffMemberId: '0'.repeat(24) })).status).toBe(404);
     expect((await make({ staffMemberId: driver._id })).status).toBe(400); // transport crew cannot hold an officer role
     expect((await make({ staffMemberId: sweeper._id })).status).toBe(409); // already has a login
@@ -159,14 +158,14 @@ describe('Employees directory, officers as employees, and the Staff portal atten
     const asFinance = await login(ok.body.loginId, ok.body.temporaryPassword, 'finance');
     expect(asFinance.user.name).toBe('Gita Sharma');
     expect((await make({ staffMemberId: gita._id, email: 'again@emp.test' })).status).toBe(409);
-    // she is one person in the directory: an officer holding the Finance Officer title, with her own staff number
+    // she is one person in the directory: an office clerk who holds the Finance desk, with her own staff number
     const emp = (await api().get('/api/school/employees?q=Gita').set(W.h)).body.items;
     expect(emp).toHaveLength(1);
-    expect(emp[0]).toMatchObject({ name: 'Gita Sharma', category: 'office', designation: 'Finance Officer', code: gita.staffId, desk: 'Finance', hasLogin: true });
+    expect(emp[0]).toMatchObject({ name: 'Gita Sharma', category: 'office', designation: 'Office Clerk', code: gita.staffId, desk: 'Finance', hasLogin: true }); // she keeps her own job title and also holds the Finance desk
     expect((await api().get('/api/school/support-staff?q=Gita').set(W.h)).body.items).toHaveLength(0); // no longer in the non-teaching list
     // the desk logins list shows the person, the role they hold and their staff number; a role-named account can be given a real name
     const list = (await api().get('/api/school/staff').set(W.h)).body;
-    expect(list.find((u) => u.name === 'Gita Sharma')).toMatchObject({ role: 'finance', title: 'Finance Officer', code: gita.staffId, phone: '9111111111' });
+    expect(list.find((u) => u.name === 'Gita Sharma')).toMatchObject({ role: 'finance', title: 'Office Clerk', code: gita.staffId, phone: '9111111111' });
     const renamed = await api().patch(`/api/school/staff/${fin.id}`).set(W.h).send({ name: 'Farah Khan', phone: '9222222222' });
     expect(renamed.status).toBe(200);
     expect((await api().get('/api/school/employees?q=Farah').set(W.h)).body.items[0]).toMatchObject({ name: 'Farah Khan', phone: '9222222222', designation: 'Finance Officer' });

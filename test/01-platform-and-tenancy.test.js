@@ -94,10 +94,20 @@ describe('platform, provisioning rules and tenant isolation', () => {
     const other = await login(A.t1.credentials.loginId, A.t1.credentials.temporaryPassword);
     expect((await api().post('/api/auth/change-password').set(t.h).send({ currentPassword: A.t1.credentials.temporaryPassword, newPassword: 'short' })).status).toBe(400);
     expect((await api().post('/api/auth/change-password').set(t.h).send({ currentPassword: 'wrong', newPassword: 'Brand-new1' })).status).toBe(400);
+    const temp = A.t1.credentials.temporaryPassword;
+    expect((await api().post('/api/auth/change-password').set(t.h).send({ newPassword: temp })).status).toBe(400); // a first-time user is not asked for the temporary password, but cannot keep it
     expect((await api().post('/api/auth/change-password').set(t.h).send({ currentPassword: A.t1.credentials.temporaryPassword, newPassword: 'Brand-new1' })).status).toBe(200);
     expect((await api().get('/api/auth/me').set(other.h)).status).toBe(401);
     expect((await api().get('/api/auth/me').set(t.h)).status).toBe(200);
     expect((await api().post('/api/auth/login').send({ loginId: A.t1.credentials.loginId, password: 'Brand-new1', portal: 'teacher' })).status).toBe(200);
+  });
+
+  it('a first-time user sets their own password without being asked for the temporary one', async () => {
+    const t = await login(A.t2.credentials.loginId, A.t2.credentials.temporaryPassword);
+    expect(t.user.mustChangePassword).toBe(true);
+    expect((await api().post('/api/auth/change-password').set(t.h).send({ newPassword: 'First-own-pass1' })).status).toBe(200);
+    expect((await api().post('/api/auth/change-password').set(t.h).send({ newPassword: 'Another-pass22' })).status).toBe(400); // afterwards the current password is required again
+    expect((await api().post('/api/auth/login').send({ loginId: A.t2.credentials.loginId, password: 'First-own-pass1', portal: 'teacher' })).status).toBe(200);
   });
 
   it('platform stats and audit endpoints are Super Admin only', async () => {

@@ -9,7 +9,7 @@ import { checkPassword, hashPassword, assertPasswordPolicy, needsRehash } from '
 import { HttpError, bad } from '../../core/utils.js';
 import { PORTALS } from './auth.validation.js';
 import { registeredContact } from '../../services/contact.js';
-import { sendLoginCode, checkLoginCode, newCode, hashCode, sameHash, emailCode, MAX_TRIES } from '../../services/otp.js';
+import { sendLoginCode, checkLoginCode, newCode, hashCode, sameHash, emailCode, reportTo, MAX_TRIES } from '../../services/otp.js';
 
 const MAX_FAILURES = 8;
 const LOCK_MINUTES = 15;
@@ -150,14 +150,16 @@ export async function resetPassword({ resetToken, newPassword }) {
   rec.usedAt = new Date(); await rec.save();
   await Session.updateMany({ userId: user._id, revokedAt: null }, { revokedAt: new Date() }); // every device is signed out
   const { email } = await registeredContact(user);
-  if (email) sendNotificationEmail(email, { subject: 'Your AtKaksha password was changed', heading: 'Your password was changed', lines: [`Hello ${user.name},`, 'The password for your AtKaksha account was just changed. If this was not you, contact your school office or AtKaksha support at once.'] });
+  if (email) sendNotificationEmail(email, { subject: 'Your AtKaksha password was changed', heading: 'Your password was changed', lines: [`Hello ${user.name},`, `The password for your AtKaksha account was just changed. If this was not you, contact your school office${reportTo() ? ` or write to ${reportTo()}` : ' or AtKaksha support'} at once.`] });
   return user;
 }
 
 export async function changePassword(user, session, { currentPassword, newPassword }) {
-  if (!(await checkPassword(currentPassword, user.passwordHash))) throw bad('Current password is incorrect');
+  // someone signing in for the first time (or after a reset) has just typed the temporary password to get in, so they are not asked for it again; everyone else proves who they are with the current one
+  const first = user.mustChangePassword && !currentPassword;
+  if (!first && !(currentPassword && await checkPassword(currentPassword, user.passwordHash))) throw bad('Current password is incorrect');
   assertPasswordPolicy(newPassword, { loginId: user.loginId, choosing: true });
-  if (newPassword === currentPassword) throw bad('Choose a different password');
+  if (first ? await checkPassword(newPassword, user.passwordHash) : newPassword === currentPassword) throw bad('Choose a different password');
   user.passwordHash = await hashPassword(newPassword);
   user.mustChangePassword = false;
   await user.save();

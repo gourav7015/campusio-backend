@@ -216,9 +216,9 @@ export async function findStudents(ctx, { sectionId, q }) {
 // ───────────── vehicle documents ─────────────
 const LEGACY = { insurance: 'insuranceExpiry', pollution: 'pollutionExpiry', fitness: 'fitnessExpiry' };
 const stateOf = (d, today) => (d.expiresOn ? certState(d.expiresOn, today) : 'valid');
-const view = (d, today) => ({
+const view = (d, today, files) => ({
   id: d._id, type: d.type, label: d.type === 'other' ? (d.title || BUS_DOC_TYPES.other.label) : BUS_DOC_TYPES[d.type].label, number: d.number || '', issuedOn: d.issuedOn || '', expiresOn: d.expiresOn || '', notes: d.notes || '',
-  fileId: d.fileId || null, state: stateOf(d, today), daysLeft: d.expiresOn ? daysBetween(today, d.expiresOn) : null, updatedByName: d.updatedByName || '',
+  fileId: d.fileId || null, file: files?.get(String(d.fileId)) || null, state: stateOf(d, today), daysLeft: d.expiresOn ? daysBetween(today, d.expiresOn) : null, updatedByName: d.updatedByName || '',
 });
 const loadBus = async (ctx, id) => { const b = await Bus.findOne({ _id: id, tenantId: ctx.tenantId }); if (!b) throw notFound('Bus not found'); return b; };
 
@@ -226,12 +226,15 @@ const loadBus = async (ctx, id) => { const b = await Bus.findOne({ _id: id, tena
 export async function listBusDocuments(ctx, busId) {
   const bus = await loadBus(ctx, busId);
   const docs = await BusDocument.find({ tenantId: ctx.tenantId, busId }).sort({ createdAt: 1 }).lean();
+  // what each copy is (its name, kind and size), so the form can say what is already on file
+  const fileRows = docs.some((d) => d.fileId) ? await File.find({ _id: { $in: docs.map((d) => d.fileId).filter(Boolean) } }).select('originalName mime size').lean() : [];
+  const files = new Map(fileRows.map((f) => [String(f._id), { name: f.originalName, mime: f.mime, size: f.size }]));
   const by = new Map(docs.filter((d) => d.type !== 'other').map((d) => [d.type, d]));
   // a date that was only ever typed on the bus itself (before documents existed) still shows, as a document without a number or copy
   const legacy = (type) => (LEGACY[type] && bus[LEGACY[type]] ? { _id: null, type, expiresOn: bus[LEGACY[type]] } : null);
-  const standard = Object.entries(BUS_DOC_TYPES).filter(([t]) => t !== 'other').map(([type, def]) => (by.has(type) ? view(by.get(type), ctx.today) : legacy(type) ? view(legacy(type), ctx.today)
-    : { id: null, type, label: def.label, number: '', issuedOn: '', expiresOn: '', notes: '', fileId: null, state: 'missing', daysLeft: null, required: def.expiry === 'required', updatedByName: '' }));
-  return { types: Object.fromEntries(Object.entries(BUS_DOC_TYPES).map(([t, d]) => [t, d])), documents: [...standard, ...docs.filter((d) => d.type === 'other').map((d) => view(d, ctx.today))] };
+  const standard = Object.entries(BUS_DOC_TYPES).filter(([t]) => t !== 'other').map(([type, def]) => (by.has(type) ? view(by.get(type), ctx.today, files) : legacy(type) ? view(legacy(type), ctx.today)
+    : { id: null, type, label: def.label, number: '', issuedOn: '', expiresOn: '', notes: '', fileId: null, file: null, state: 'missing', daysLeft: null, required: def.expiry === 'required', updatedByName: '' }));
+  return { types: Object.fromEntries(Object.entries(BUS_DOC_TYPES).map(([t, d]) => [t, d])), documents: [...standard, ...docs.filter((d) => d.type === 'other').map((d) => view(d, ctx.today, files))] };
 }
 
 /** Records or renews a document (type 'other' adds another). A new copy replaces the old file. Insurance, pollution and fitness dates also update the bus's own expiry fields. */

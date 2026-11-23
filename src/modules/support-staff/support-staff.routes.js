@@ -31,7 +31,7 @@ export function staffRoutes(scope) {
     res.json(out);
   });
   r.post('/:id/reset-password', async (req, res) => {
-    const out = await svc.resetLogin(req.ctx, scope, req.params.id);
+    const out = await svc.resetLogin(req.ctx, scope, req.params.id, req.body);
     await audit(req, 'staff_member.password_reset', 'StaffMember', req.params.id, 'Reset a staff login password');
     res.json(out);
   });

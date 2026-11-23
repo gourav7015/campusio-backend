@@ -4,10 +4,12 @@ import {
   Homework, Announcement, Subject, File, AttendanceSession, AttendanceRecord,
 } from '../../models/index.js';
 import { escapeRegex, notFound, toCsv } from '../../core/utils.js';
+import { listAuditEntries, auditFacets } from '../../services/auditQuery.js';
 import { overview, trend } from '../attendance/attendance.service.js';
 import { summarizeCounts, sessionCounts, zeroCounts, addCounts } from '../../services/attendance.js';
 import { removeFileBytes } from '../../services/files.js';
 import { financeSummary } from '../finance/finance.service.js';
+import { coverageSummary } from '../structure/class-structure.service.js';
 import { LibraryIssue, BookCopy } from '../../models/index.js';
 
 export async function dashboard(ctx) {
@@ -22,8 +24,9 @@ export async function dashboard(ctx) {
   ]);
   const sheetStatus = Object.fromEntries(sheets.map((s) => [s._id, s.n]));
   const [finance, onLoan, overdueLoans] = await Promise.all([financeSummary(ctx), BookCopy.countDocuments({ tenantId, status: 'issued' }), LibraryIssue.countDocuments({ tenantId, status: 'issued', dueDate: { $lt: today } })]);
+  const coverage = await coverageSummary(tenantId, year?._id); // classes with no class teacher, subjects with no teacher, classes with no subjects
   return {
-    year: year && { id: year._id, name: year.name }, today,
+    year: year && { id: year._id, name: year.name }, today, coverage,
     cards: { students, teachers, sections, pendingLeave, unreadMessages, unresolvedPeriods: unresolved, openAttendanceQueries: openQueries },
     subscription: sub && { plan: sub.plan, status: sub.status, expiresOn: sub.expiresOn, studentsUsed: students, teachersUsed: teachers },
     finance, library: { onLoan, overdue: overdueLoans },
@@ -33,12 +36,8 @@ export async function dashboard(ctx) {
   };
 }
 
-export async function listAudit(ctx, { action, actorId, limit }) {
-  const f = { tenantId: ctx.tenantId };
-  if (action) f.action = new RegExp(`^${escapeRegex(action)}`);
-  if (actorId) f.actorId = actorId;
-  return AuditLog.find(f).sort({ createdAt: -1 }).limit(Math.min(Number(limit) || 100, 500)).lean();
-}
+export const listAudit = (ctx, q) => listAuditEntries({ tenantId: ctx.tenantId }, q, ctx.settings?.timezone);
+export const auditSummary = (ctx, q) => auditFacets({ tenantId: ctx.tenantId }, q, ctx.settings?.timezone);
 
 export async function search(ctx, q) {
   if (!q || q.length < 2) return {};
