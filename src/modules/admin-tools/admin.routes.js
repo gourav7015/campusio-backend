@@ -39,7 +39,7 @@ r.get('/export/attendance.csv', async (req, res) => {
 r.get('/export/results.csv', async (req, res) => csv(res, 'results.csv', await svc.exportResults(req.ctx, parse(z.object({ examId: id }), req.query).examId)));
 
 // promotion
-const promoBody = z.object({ fromYearId: id, toYearId: id, sectionIds: z.array(id).max(200).optional(), classIds: z.array(id).max(100).optional() });
+const promoBody = z.object({ fromYearId: id, toYearId: id, classIds: z.array(id).max(100).optional() });
 r.get('/promotions/progress', async (req, res) => res.json(await classProgress(req.tenantId, parse(z.object({ yearId: id }), req.query).yearId, req.ctx.today)));
 r.post('/promotions/undo', async (req, res) => {
   const { enrolmentId } = parse(z.object({ enrolmentId: id }), req.body);

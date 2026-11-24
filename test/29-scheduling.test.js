@@ -85,7 +85,7 @@ describe('Scheduling: period swaps, attendance on a closed day, period-wise atte
     const sec = W.sec8A._id;
     expect((await api().get(`/api/teacher/attendance/register?sectionId=${sec}&date=${TODAY}`).set(T1)).body.blocked).toBe('non_working_day');
     expect((await api().post('/api/teacher/attendance/exceptions').set(T2).send({ sectionId: sec, date: TODAY, reason: 'Talent test' })).status).toBe(403); // not the class teacher
-    expect((await api().post('/api/teacher/attendance/exceptions').set(T1).send({ sectionId: sec, date: nextWeekday(2), reason: 'A working day' })).status).toBe(400);
+    expect((await api().post('/api/teacher/attendance/exceptions').set(T1).send({ sectionId: sec, date: nextWeekday(isoDay(TODAY) === 2 ? 3 : 2), reason: 'A working day' })).status).toBe(400); // a day that is not today's weekday, so it is a working day whatever day the test runs on
     const x = await api().post('/api/teacher/attendance/exceptions').set(T1).send({ sectionId: sec, date: TODAY, reason: 'Sunday talent test' });
     expect(x.status).toBe(201);
     expect((await api().put('/api/teacher/attendance/register').set(T1).send({ sectionId: sec, date: TODAY, entries: [] })).status).toBe(400); // not yet

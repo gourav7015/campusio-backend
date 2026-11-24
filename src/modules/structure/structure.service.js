@@ -70,9 +70,11 @@ export async function deleteClass(tenantId, id) {
 }
 
 // ── sections ──
-export async function listSections(tenantId, { yearId, classId }) {
+export async function listSections(tenantId, { yearId, classId, open }) {
   const f = { tenantId };
   if (yearId) f.yearId = yearId;
+  // open=1: the sections of every year still running (classes change year on their own dates, so a school can have two), each tagged with its year
+  else if (open) f.yearId = { $in: (await AcademicYear.find({ tenantId, status: { $ne: 'closed' } }).select('_id').lean()).map((y) => y._id) };
   if (classId) f.classId = classId;
   const sections = await Section.find(f).sort({ classId: 1, name: 1 }).lean();
   const [counts, years] = await Promise.all([
@@ -80,7 +82,7 @@ export async function listSections(tenantId, { yearId, classId }) {
       { $match: { tenantId, status: { $in: ON_ROLL }, sectionId: { $in: sections.map((x) => x._id) } } },
       { $group: { _id: { s: '$sectionId', st: '$status' }, n: { $sum: 1 } } },
     ]),
-    AcademicYear.find({ tenantId }).select('isCurrent').lean(),
+    AcademicYear.find({ tenantId }).select('isCurrent name').lean(),
   ]);
   // the current year counts students in the class now; another year also counts those whose enrolment ended by promotion or completion
   const current = new Map(years.map((y) => [String(y._id), y.isCurrent]));
@@ -90,7 +92,8 @@ export async function listSections(tenantId, { yearId, classId }) {
     if (current.get(String(sec?.yearId)) && c._id.st !== 'active') continue;
     cm.set(String(c._id.s), (cm.get(String(c._id.s)) || 0) + c.n);
   }
-  return sections.map((x) => ({ ...x, studentCount: cm.get(String(x._id)) || 0 }));
+  const yname = new Map(years.map((y) => [String(y._id), y.name]));
+  return sections.map((x) => ({ ...x, studentCount: cm.get(String(x._id)) || 0, yearName: yname.get(String(x.yearId)) }));
 }
 export async function createSection(tenantId, body) {
   await owned(AcademicYear, tenantId, body.yearId, 'Academic year');

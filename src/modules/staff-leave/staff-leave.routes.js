@@ -22,6 +22,11 @@ export function leaveDeskRoutes(group) {
     await audit(req, 'staff_leave.passed_to_admin', 'StaffLeave', l._id, `Passed ${l.startDate} to ${l.endDate} leave to the School Admin`);
     res.json(l);
   });
+  r.post('/:id/withdraw', async (req, res) => {
+    const l = await svc.withdraw(req.ctx, group, req.params.id);
+    await audit(req, 'staff_leave.withdrawn', 'StaffLeave', l._id, `Leave withdrawn: ${l.startDate} to ${l.endDate}`);
+    res.json(l);
+  });
   r.post('/:id/decide', async (req, res) => {
     const l = await svc.decide(req.ctx, group, req.params.id, parse(v.decideBody, req.body));
     await audit(req, `staff_leave.${l.status}`, 'StaffLeave', l._id, `Leave ${l.status}: ${l.startDate} to ${l.endDate}`);

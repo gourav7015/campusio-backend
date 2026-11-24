@@ -62,6 +62,17 @@ describe('Transport staff leave: approved by the officer, or passed to the Schoo
     expect((await api().post(`/api/school/transport-leave/${l._id}/pass-to-admin`).set(W.h)).status).toBe(400); // the admin has no one above to pass it to
   });
 
+  it('the desk withdraws a leave that is waiting or approved but not begun; the staff member and the admin are told', async () => {
+    const rec = await api().post(T('/leave')).set(tr.h).send({ staffId: conductor._id, leaveType: 'casual', startDate: addDays(nextMonday, 21), endDate: addDays(nextMonday, 21), reason: 'Wedding' });
+    expect(rec.status, JSON.stringify(rec.body)).toBe(201); const l = rec.body;
+    expect(l.status).toBe('approved');
+    const w = await api().post(T(`/leave/${l._id}/withdraw`)).set(tr.h); expect(w.status).toBe(200); expect(w.body).toMatchObject({ status: 'cancelled' }); expect(w.body.withdrawnAt).toBeTruthy();
+    expect((await adminNotes()).some((n) => /cancelled/i.test(n.title))).toBe(true);
+    expect((await api().post(T(`/leave/${l._id}/withdraw`)).set(tr.h)).status).toBe(409); // already withdrawn
+    expect((await api().post(T('/leave/000000000000000000000000/withdraw')).set(tr.h)).status).toBe(404);
+    expect((await api().post(`/api/school/transport-leave/${l._id}/withdraw`).set(W.h)).status).toBe(409); // the admin's desk sees the same record
+  });
+
   it('the school can keep leave approval for its admin: then everything the officer records goes to the admin', async () => {
     expect((await api().get(T('/leave/policy')).set(tr.h)).body.approver).toBe('self');
     expect((await api().put('/api/school/settings').set(W.h).send({ transportLeaveApprover: 'admin' })).status).toBe(200);

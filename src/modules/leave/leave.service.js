@@ -1,4 +1,4 @@
-import { LeaveApplication, LeaveGrant, Teacher } from '../../models/index.js';
+import { LeaveApplication, LeaveGrant, Teacher, User } from '../../models/index.js';
 import { notFound, conflict, bad, forbidden, eachDate, isoDay } from '../../core/utils.js';
 import { notifyUsers } from '../../services/notify.js';
 
@@ -64,8 +64,15 @@ export async function cancel(ctx, id) {
   if (!l) throw notFound('Leave application not found');
   if (!['draft', 'submitted', 'approved'].includes(l.status)) throw conflict(`A ${l.status} application cannot be cancelled`);
   if (l.status === 'approved' && l.startDate <= ctx.today) throw conflict('Approved leave that has already started cannot be cancelled');
-  l.status = 'cancelled';
-  return l.save();
+  const was = l.status;
+  l.status = 'cancelled'; l.withdrawnAt = new Date(); l.withdrawnBy = ctx.actorId;
+  await l.save();
+  // the office is told when an application it was about to decide, or leave it had approved, is taken back
+  if (was !== 'draft') {
+    const admins = (await User.find({ tenantId: ctx.tenantId, role: 'school_admin', status: 'active' }).select('_id adminLevel permissions').lean()).filter((u) => u.adminLevel !== 'sub' || (u.permissions || []).includes('teachers')).map((u) => u._id);
+    await notifyUsers(ctx.tenantId, admins, { category: 'leave', title: was === 'approved' ? 'Approved leave cancelled' : 'Leave application withdrawn', body: `${ctx.teacher.name}: ${l.leaveType} leave, ${l.startDate} to ${l.endDate}`, link: { type: 'leave', id: String(l._id) }, dedupeKey: `leave:${l._id}:withdrawn` });
+  }
+  return l;
 }
 
 export async function listAll(ctx, { status }) {

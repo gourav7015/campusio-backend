@@ -93,6 +93,23 @@ export async function decide(ctx, group, id, { decision, remark }) {
   return l;
 }
 
+/**
+ * The desk takes a leave back: one still waiting for a decision, or approved leave that has not begun. Staff do not sign in to apply, so the desk that
+ * recorded or looks after it is who withdraws it. The staff member is told, and for transport staff so are the admins.
+ */
+export async function withdraw(ctx, group, id) {
+  const l = await StaffLeave.findOne({ _id: id, tenantId: ctx.tenantId, group });
+  if (!l) throw notFound('Leave application not found');
+  if (!['submitted', 'approved'].includes(l.status)) throw conflict(`A ${l.status === 'cancelled' ? 'withdrawn' : l.status} application cannot be withdrawn`);
+  if (l.status === 'approved' && l.startDate <= ctx.today) throw conflict('Approved leave that has already begun cannot be cancelled');
+  const was = l.status;
+  l.status = 'cancelled'; l.awaitingAdmin = false; l.withdrawnAt = new Date(); l.withdrawnBy = ctx.actorId;
+  await l.save();
+  await notifyUsers(ctx.tenantId, [l.userId], { category: 'leave', title: was === 'approved' ? 'Your approved leave was cancelled' : 'Your leave application was withdrawn', body: `${l.startDate} to ${l.endDate}`, link: { type: 'leave', id: String(l._id) }, dedupeKey: `staffleave:${l._id}:withdrawn` });
+  if (!isAdmin(ctx) && group === 'transport') await tellAdmins(ctx, l, await nameOf(l), { title: was === 'approved' ? 'Approved transport staff leave cancelled' : 'Transport staff leave withdrawn', key: 'withdrawn' });
+  return l;
+}
+
 /** The Transport officer passes a waiting application to the School Admin to decide. */
 export async function passToAdmin(ctx, group, id) {
   if (group !== 'transport' || isAdmin(ctx)) throw bad('Only the Transport officer can pass transport leave on to the admin');

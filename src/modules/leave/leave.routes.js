@@ -14,11 +14,13 @@ teacherRoutes.post('/leave', async (req, res) => {
   res.status(201).json(l);
 });
 teacherRoutes.post('/leave/:id/submit', async (req, res) => res.json(await svc.submitDraft(req.ctx, req.params.id)));
-teacherRoutes.post('/leave/:id/cancel', async (req, res) => {
+const withdrawLeave = async (req, res) => {
   const l = await svc.cancel(req.ctx, req.params.id);
-  await audit(req, 'leave.cancelled', 'LeaveApplication', l._id, 'Leave cancelled');
+  await audit(req, 'leave.withdrawn', 'LeaveApplication', l._id, `Leave withdrawn: ${l.startDate} to ${l.endDate}`);
   res.json(l);
-});
+};
+teacherRoutes.post('/leave/:id/withdraw', withdrawLeave);
+teacherRoutes.post('/leave/:id/cancel', withdrawLeave); // the old name still works
 
 export const adminRoutes = Router();
 adminRoutes.get('/leave', async (req, res) => res.json(await svc.listAll(req.ctx, req.query)));

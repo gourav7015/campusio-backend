@@ -243,5 +243,27 @@ describe('timetable, substitutions, attendance and leave', () => {
       expect(notes.items.some((n) => n.category === 'leave')).toBe(true);
       expect((await api().get('/api/teacher/leave').set(W.teacher2.h)).body.applications).toHaveLength(0); // sees only own
     });
+
+    it('a teacher can withdraw an application before it is decided, or cancel approved leave that has not begun; the office is told', async () => {
+      const { Notification } = await import('../src/models/index.js');
+      const T = W.teacher1.h;
+      const day = addDays(back(0, 1), 21);
+      const apply = async (d) => (await api().post('/api/teacher/leave').set(T).send({ leaveType: 'casual', startDate: d, endDate: d, reason: 'Family function' })).body;
+      // withdrawn while waiting: it can no longer be decided, and the balance is not used
+      const a = await apply(day);
+      expect((await api().post(`/api/teacher/leave/${a._id}/withdraw`).set(W.teacher2.h)).status).toBe(404); // not theirs
+      const w = await api().post(`/api/teacher/leave/${a._id}/withdraw`).set(T); expect(w.status).toBe(200); expect(w.body.status).toBe('cancelled'); expect(w.body.withdrawnAt).toBeTruthy();
+      expect((await api().post(`/api/school/leave/${a._id}/decide`).set(W.h).send({ decision: 'approve' })).status).toBe(409);
+      expect((await api().post(`/api/teacher/leave/${a._id}/withdraw`).set(T)).status).toBe(409); // already withdrawn
+      expect(await Notification.countDocuments({ tenantId: W.id, title: 'Leave application withdrawn' })).toBeGreaterThan(0);
+      // approved and still ahead: cancel it (the old /cancel name works too)
+      const b = await apply(day);
+      await api().post(`/api/school/leave/${b._id}/decide`).set(W.h).send({ decision: 'approve' });
+      expect((await api().post(`/api/teacher/leave/${b._id}/cancel`).set(T)).status).toBe(200);
+      expect(await Notification.countDocuments({ tenantId: W.id, title: 'Approved leave cancelled' })).toBeGreaterThan(0);
+      // the balance is back
+      const bal = (await api().get('/api/teacher/leave').set(T)).body.balances.casual;
+      expect(bal.used).toBeLessThanOrEqual(bal.allowance);
+    });
   });
 });

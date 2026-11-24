@@ -3,7 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { config } from '../../core/config.js';
 import { authenticate } from '../../middleware/auth.js';
 import { publicUser } from '../../services/users.js';
-import { StaffMember, School, Teacher, ClassTeacherAssignment } from '../../models/index.js';
+import { StaffMember, School } from '../../models/index.js';
 import { isEmailEnabled } from '../../services/email.js';
 import { checkPassword } from '../../services/users.js';
 import * as otp from '../../services/otp.js';
@@ -16,8 +16,6 @@ async function shaped(u) {
   if (u.role === 'staff') pu.canMarkAttendance = !!(await StaffMember.findOne({ userId: u._id, tenantId: u.tenantId }).select('canMarkAttendance').lean())?.canMarkAttendance;
   // a teacher sees "Period attendance" only in a school that takes attendance period by period
   if (u.role === 'teacher') pu.periodWise = !!(await School.findById(u.tenantId).select('settings.attendance.periodWise').lean())?.settings?.attendance?.periodWise;
-  // a class teacher also gets the page that moves their class on to the next year
-  if (u.role === 'teacher') { const t = await Teacher.findOne({ userId: u._id, tenantId: u.tenantId }).select('_id').lean(); pu.classTeacher = !!t && !!(await ClassTeacherAssignment.exists({ tenantId: u.tenantId, teacherId: t._id, open: true })); }
   return pu;
 }
 import { audit } from '../../services/audit.js';

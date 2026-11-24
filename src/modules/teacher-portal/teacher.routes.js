@@ -5,7 +5,6 @@ import { teacherDay, teacherWeek, periodsOf } from '../../services/timetable.js'
 import { teacherPerformance } from '../../services/analytics.js';
 import { isDateStr } from '../../core/utils.js';
 import * as svc from './teacher.service.js';
-import * as classPromo from './class-promotion.service.js';
 import { personAttendance } from '../staff-attendance/staff-attendance.service.js';
 import { selfPunchRoutes } from '../staff-punch/staff-punch.routes.js';
 
@@ -25,16 +24,6 @@ r.get('/timetable', async (req, res) => {
   const c = req.ctx; const d = date || c.today;
   const base = { tenantId: c.tenantId, yearId: c.year._id, teacherId: c.teacher._id, date: d, today: c.today, tz: c.settings.timezone };
   res.json({ date: d, day: await teacherDay(base), week: await teacherWeek({ ...base, days: c.settings.workingDays }), periods: await periodsOf(c.tenantId) });
-});
-
-// a class teacher moves their own class into the next academic year once the class's session has ended
-r.get('/promotion', async (req, res) => res.json(await classPromo.overview(req.ctx)));
-r.post('/promotion/request', async (req, res) => res.status(201).json(await classPromo.ask(req.ctx, parse(z.object({ sectionId: z.string().regex(/^[a-f0-9]{24}$/i), toYearId: z.string().regex(/^[a-f0-9]{24}$/i), note: z.string().trim().max(300).optional() }), req.body))));
-r.post('/promotion/request/:id/withdraw', async (req, res) => res.json(await classPromo.withdraw(req.ctx, req.params.id)));
-r.get('/promotion/preview', async (req, res) => res.json(await classPromo.preview(req.ctx, parse(z.object({ sectionId: z.string().regex(/^[a-f0-9]{24}$/i), toYearId: z.string().regex(/^[a-f0-9]{24}$/i) }), req.query))));
-r.post('/promotion', async (req, res) => {
-  const out = await classPromo.commit(req, parse(z.object({ sectionId: z.string().regex(/^[a-f0-9]{24}$/i), toYearId: z.string().regex(/^[a-f0-9]{24}$/i), confirm: z.literal(true), items: z.array(z.object({ enrolmentId: z.string().regex(/^[a-f0-9]{24}$/i), action: z.enum(['promote', 'retain', 'complete']), toSectionId: z.string().regex(/^[a-f0-9]{24}$/i).optional() })).min(1).max(200) }), req.body));
-  res.json(out);
 });
 
 r.get('/classes', async (req, res) => res.json(await svc.myClasses(req.ctx)));
