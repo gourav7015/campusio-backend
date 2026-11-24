@@ -9,11 +9,47 @@ import { School } from '../../models/index.js';
 import { flagsView, setFlags } from '../../services/flags.js';
 import { z } from 'zod';
 import { handlerRoutes as ticketHandler } from '../helpdesk/helpdesk.routes.js';
+import * as connect from '../connect/connect.service.js';
+import { memberBody, settingsBody } from '../connect/connect.routes.js';
 
 const r = Router();
 r.use(requireRole('super_admin'));
 
 r.use('/helpdesk', ticketHandler('platform')); // tickets schools send to AtKaksha support
+// the public Connect page: its team (who people can reach), its wording and hours, and the messages sent from it
+const oid = z.string().regex(/^[a-f0-9]{24}$/i);
+r.get('/team', async (_req, res) => res.json(await connect.adminTeam()));
+r.post('/team', async (req, res) => {
+  const m = await connect.addMember(parse(memberBody, req.body));
+  await audit(req, 'connect.member_added', 'TeamMember', m.id, `Added ${m.name} to the Connect page`);
+  res.status(201).json(m);
+});
+r.post('/team/reorder', async (req, res) => {
+  const out = await connect.reorder(parse(z.object({ ids: z.array(oid).min(1).max(100) }), req.body).ids);
+  await audit(req, 'connect.team_reordered', 'TeamMember', null, 'Changed the order of the Connect page team');
+  res.json(out);
+});
+r.patch('/team/:id', async (req, res) => {
+  const m = await connect.updateMember(req.params.id, parse(memberBody.partial(), req.body));
+  await audit(req, 'connect.member_updated', 'TeamMember', m.id, `Updated ${m.name} on the Connect page`);
+  res.json(m);
+});
+r.delete('/team/:id', async (req, res) => {
+  const m = await connect.removeMember(req.params.id);
+  await audit(req, 'connect.member_removed', 'TeamMember', m._id, `Removed ${m.name} from the Connect page`);
+  res.json({ removed: true });
+});
+r.get('/connect', async (_req, res) => { const s = (await connect.getSettings()).toObject(); res.json({ title: s.title, intro: s.intro, hoursNote: s.hoursNote || '', hoursDays: s.hoursDays, opensAt: s.opensAt, closesAt: s.closesAt, mailboxes: s.mailboxes, helloTo: s.helloTo || '', supportTo: s.supportTo || '' }); });
+r.put('/connect', async (req, res) => {
+  const b = parse(settingsBody, req.body);
+  await connect.saveSettings({ ...b, hoursNote: b.hoursNote || '', helloTo: b.helloTo || '', supportTo: b.supportTo || '' });
+  await audit(req, 'connect.settings_saved', 'ConnectSettings', null, 'Saved the Connect page wording, hours and mailboxes');
+  res.json({ saved: true });
+});
+r.get('/connect/messages', async (req, res) => res.json(await connect.listMessages(parse(z.object({ status: z.enum(['new', 'handled']).optional() }), req.query).status)));
+r.get('/connect/messages/summary', async (_req, res) => res.json({ count: await connect.newMessageCount() }));
+r.patch('/connect/messages/:id', async (req, res) => res.json(await connect.setMessageStatus(req.params.id, parse(z.object({ status: z.enum(['new', 'handled']) }), req.body).status, req.user._id)));
+r.delete('/connect/messages/:id', async (req, res) => { await connect.removeMessage(req.params.id); res.json({ removed: true }); });
 r.get('/errors', async (req, res) => {
   const q = parse(z.object({ source: z.enum(['server', 'client']).optional(), limit: z.coerce.number().int().min(1).max(200).default(50) }), req.query);
   const rows = await ErrorLog.find(q.source ? { source: q.source } : {}).sort({ at: -1 }).limit(q.limit).lean();

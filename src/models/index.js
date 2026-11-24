@@ -965,3 +965,34 @@ export const PasswordResetCode = model('PasswordResetCode', (() => {
   s.index({ expiresAt: 1 }, { expireAfterSeconds: 24 * 3600 });
   return s;
 })());
+
+// ───────────── the public "Connect" page: the team people can reach, and the messages they send ─────────────
+/** A person on the AtKaksha team shown on the public Connect page. Managed by the platform administrator. */
+export const TeamMember = model('TeamMember', new Schema({
+  name: { type: String, required: true, trim: true }, role: { type: String, trim: true }, about: { type: String, trim: true },
+  topics: { type: [String], default: [] }, // what to talk to this person about
+  phone: String, whatsapp: String, email: { type: String, lowercase: true, trim: true }, languages: String,
+  tone: { type: Number, min: 1, max: 4, default: 1 }, // the colour of their card
+  order: { type: Number, default: 0 }, visible: { type: Boolean, default: true },
+}, opts));
+
+/** The wording and opening hours of the Connect page, and where its messages are sent. One document. */
+export const ConnectSettings = model('ConnectSettings', new Schema({
+  key: { type: String, unique: true, default: 'connect' },
+  title: String, intro: String,
+  hoursDays: { type: [Number], default: [1, 2, 3, 4, 5, 6] }, opensAt: { type: String, default: '10:00' }, closesAt: { type: String, default: '18:00' }, timezone: { type: String, default: 'Asia/Kolkata' }, hoursNote: String,
+  mailboxes: { type: [new Schema({ address: String, purpose: String }, { _id: false })], default: [] }, // "Prefer email?" list
+  seeded: { type: Boolean, default: false }, // the first team member has been added once
+  helloTo: String, supportTo: String, // where demo/pricing/other messages, and school help messages, are emailed
+}, opts));
+
+/** A message someone sent from the Connect page. Kept here so none is lost even if email is not working. */
+export const ConnectMessage = model('ConnectMessage', (() => {
+  const s = new Schema({
+    ref: { type: String, required: true, unique: true }, reason: { type: String, enum: ['demo', 'price', 'help', 'other'], required: true },
+    name: String, email: String, school: String, phone: String, size: String, bestTime: String, message: String,
+    status: { type: String, enum: ['new', 'handled'], default: 'new' }, handledBy: ref('User'), handledAt: Date, ip: String,
+  }, opts);
+  s.index({ status: 1, createdAt: -1 });
+  return s;
+})());

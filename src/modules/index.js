@@ -5,6 +5,7 @@ import { AcademicYear } from '../models/index.js';
 import { adminContext, teacherContext, studentContext, staffContext } from '../middleware/context.js';
 import authRoutes from './auth/auth.routes.js';
 import platformRoutes from './platform/platform.routes.js';
+import { publicRoutes as connectPublic } from './connect/connect.routes.js';
 import structureRoutes from './structure/structure.routes.js';
 import studentsRoutes from './students/students.routes.js';
 import teachersRoutes from './teachers/teachers.routes.js';
@@ -75,6 +76,7 @@ const stack = (routers) => { const r = Router(); routers.forEach((x) => r.use(x)
 
 export function mountModules(app, authenticate) {
   app.use('/api/auth', authRoutes);
+  app.use('/api/public/connect', connectPublic); // the public Connect page: no sign-in
   app.use('/api/files', downloadRoutes); // signed-token downloads (token issued only after a permission check)
   app.use('/api/payments', paymentsWebhook); // the payment gateway calls this itself: no sign-in, the signature is the proof
   app.use('/api/platform', authenticate, platformRoutes);
