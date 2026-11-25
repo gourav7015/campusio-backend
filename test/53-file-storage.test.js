@@ -26,6 +26,9 @@ describe('Files live in the database, so every server (and every deploy) sees th
     expect(await mongoose.connection.db.collection('files.files').countDocuments({ _id: f.gridId })).toBe(1);
     const dl = await download(f._id);
     expect(dl.status).toBe(200); expect(dl.headers['content-type']).toBe('image/png'); expect(dl.body.equals(PNG)).toBe(true);
+    // the site and the API are on different addresses: without this the browser blocks the picture on the live site (it worked on one computer, where they share an address)
+    expect(dl.headers['cross-origin-resource-policy']).toBe('cross-origin');
+    expect((await api().get('/health')).headers['cross-origin-resource-policy']).toBe('same-site'); // everything else stays closed
   });
 
   it('removing the picture removes its stored bytes', async () => {
