@@ -32,6 +32,9 @@ export const defaultSettings = () => ({
   passwordFormat: '{NAME4}{DDMMYYYY}',
   leaveBalances: { casual: 12, sick: 10, earned: 0, other: 0 },
   staffLeaveBalances: { casual: 12, sick: 10, earned: 0, other: 0 },
+  // the rules on how leave is applied for, separately for teaching staff and for non-teaching staff (and the transport crew and officers). 0 = no limit.
+  // maxDays: the most days one application may cover. noticeDays: how many days ahead it must be applied for (sick leave is always exempt). halfDay: whether half-day leave is allowed.
+  leaveRules: { teaching: { maxDays: 0, noticeDays: 0, halfDay: true }, nonTeaching: { maxDays: 0, noticeDays: 0, halfDay: true } },
   // who approves the leave of transport staff: the Transport officer ('officer'), or the School Admin ('admin': the officer can only pass applications on)
   transportLeaveApprover: 'officer',
   // working hours for staff. A check-in after shiftStart + graceMinutes is late; less than halfDayHours is a half day.

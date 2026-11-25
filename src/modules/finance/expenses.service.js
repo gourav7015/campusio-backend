@@ -103,6 +103,11 @@ export async function payExpense(ctx, id, { mode, reference, paidOn, note }, use
   return e.save();
 }
 
+/** Expenses in the given states (waiting, approved, rejected), newest decision first: the approvals page's history. */
+export async function expensesByStatus(ctx, statuses) {
+  return Expense.find({ tenantId: ctx.tenantId, status: { $in: statuses } }).sort({ decidedAt: -1, date: -1 }).limit(200).lean();
+}
+
 export async function pendingApprovals(ctx) {
   return (await Expense.find({ tenantId: ctx.tenantId, status: 'pending' }).sort({ date: 1 }).lean());
 }

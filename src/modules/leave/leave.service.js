@@ -18,6 +18,20 @@ export function leaveDays(settings, { startDate, endDate, halfDay }) {
   return days;
 }
 
+/**
+ * The school's rules on applying for leave, which differ for teaching and non-teaching staff (Settings → Leave rules).
+ * Checked when a person applies for themselves; the office recording leave on someone's behalf is not held to them. 0 means no limit.
+ */
+export function assertLeaveRules(ctx, rules, who, days, { leaveType, startDate, halfDay }) {
+  const r = rules || {};
+  if (halfDay && r.halfDay === false) throw conflict(`Half-day leave is not allowed for ${who}`);
+  if (r.maxDays > 0 && days > r.maxDays) throw conflict(`One application for ${who} can cover at most ${r.maxDays} day${r.maxDays === 1 ? '' : 's'}. Apply in parts, or ask the office.`);
+  if (r.noticeDays > 0 && leaveType !== 'sick') {
+    const ahead = startDate > ctx.today ? eachDate(ctx.today, startDate).length - 1 : 0;
+    if (ahead < r.noticeDays) throw conflict(`Leave for ${who} must be applied for at least ${r.noticeDays} day${r.noticeDays === 1 ? '' : 's'} ahead (sick leave is exempt)`);
+  }
+}
+
 export async function balances(ctx, teacherId) {
   const approved = await LeaveApplication.find({
     tenantId: ctx.tenantId, teacherId, status: 'approved', startDate: { $gte: ctx.year.startDate }, endDate: { $lte: ctx.year.endDate },
@@ -38,6 +52,7 @@ export const listMine = (ctx) => LeaveApplication.find({ tenantId: ctx.tenantId,
 
 export async function apply(ctx, body) {
   const days = leaveDays(ctx.settings, body);
+  assertLeaveRules(ctx, ctx.settings.leaveRules?.teaching, 'teaching staff', days, body);
   const overlap = await LeaveApplication.exists({
     tenantId: ctx.tenantId, teacherId: ctx.teacher._id, status: { $in: ['submitted', 'approved'] }, startDate: { $lte: body.endDate }, endDate: { $gte: body.startDate },
   });

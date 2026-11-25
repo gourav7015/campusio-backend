@@ -68,3 +68,25 @@ describe('Houses and ranks are the school\'s own', () => {
     expect((await api().get(A('/designations')).set(W.h)).body.map((d) => d.name)).toEqual(expect.arrayContaining(['PT Teacher', 'Accountant', 'Lab Assistant']));
   });
 });
+
+describe('a house always has a colour of its own', () => {
+  let root; let W;
+  beforeAll(async () => { await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'hc'); });
+  afterAll(teardown);
+  it('takes the first free colour when none is chosen, and refuses a fifth house when all four are used', async () => {
+    const A = (p) => `/api/school${p}`;
+    const colours = [];
+    for (const n of ['One', 'Two', 'Three', 'Four']) { const r = await api().post(A('/houses')).set(W.h).send({ name: n }); expect(r.status).toBe(201); colours.push(r.body.color); }
+    expect(new Set(colours).size).toBe(4);
+    expect(colours.every((c) => /^#[0-9a-f]{6}$/i.test(c))).toBe(true);
+    const fifth = await api().post(A('/houses')).set(W.h).send({ name: 'Five' });
+    expect(fifth.status).toBe(409);
+    expect(fifth.body.message || fifth.body.error).toMatch(/All four house colours/);
+    // clearing a colour is ignored: a house never ends up without one
+    const list = (await api().get(A('/houses')).set(W.h)).body.houses;
+    const one = list.find((h) => h.name === 'One');
+    const patched = await api().patch(A(`/houses/${one._id}`)).set(W.h).send({ color: '' });
+    expect(patched.status).toBe(200);
+    expect(patched.body.color).toBe(one.color);
+  });
+});

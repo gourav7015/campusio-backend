@@ -52,6 +52,7 @@ export const settingsBody = z.object({
   passwordFormat: z.string().max(80).refine((f) => f === '' || PASSWORD_FORMAT_RE.test(f), 'Use tokens such as {NAME4}{DDMMYYYY}, plus letters, digits or @ # _ -').refine((f) => f === '' || /\{(NAME4|NAME3|name4|DDMMYYYY|DDMM|YYYY|YY|PHONE4)\}/.test(f), 'Include at least one token, or leave it empty for random passwords'),
   admissionFormat: z.string().refine((f) => /\{SEQ:\d\}/.test(f), 'Must contain {SEQ:n}, e.g. ADM{YYYY}{SEQ:4}'),
   leaveBalances: z.object({ casual: z.number().min(0), sick: z.number().min(0), earned: z.number().min(0), other: z.number().min(0) }).partial(),
+  leaveRules: z.object({ teaching: z.object({ maxDays: z.number().int().min(0).max(365), noticeDays: z.number().int().min(0).max(60), halfDay: z.boolean() }).partial(), nonTeaching: z.object({ maxDays: z.number().int().min(0).max(365), noticeDays: z.number().int().min(0).max(60), halfDay: z.boolean() }).partial() }).partial(),
   transportLeaveApprover: z.enum(['officer', 'admin']),
   staffLeaveBalances: z.object({ casual: z.number().min(0), sick: z.number().min(0), earned: z.number().min(0), other: z.number().min(0) }).partial(),
   staffAttendance: z.object({

@@ -29,6 +29,14 @@ describe('Finance: expenses, budgets, approvals; the school page, licences and t
     const ok = await api().post(`/api/school/approvals/expenses/${e.body._id}`).set(W.h).send({ approve: true });
     expect(ok.body).toMatchObject({ status: 'approved', decidedByName: expect.any(String) });
     expect((await api().post(`/api/school/approvals/expenses/${e.body._id}`).set(W.h).send({ approve: true })).status).toBe(409); // decided once
+    // the page also keeps the earlier decisions: approved, rejected, or everything
+    const hist = (st) => api().get(`/api/school/approvals?status=${st}`).set(W.h);
+    expect((await hist('pending')).body.expenses).toEqual([]);
+    expect((await hist('approved')).body.expenses.map((x) => x.title)).toEqual(['Microscopes']);
+    expect((await hist('rejected')).body.expenses).toEqual([]);
+    expect((await hist('all')).body.expenses.map((x) => x.title)).toEqual(['Microscopes']);
+    expect((await api().get('/api/school/approvals?status=nonsense').set(W.h)).status).toBe(400);
+    expect((await api().get('/api/school/approvals').set(fin.h)).status).toBe(403); // only the School Admin sees it
     expect((await api().delete(F(`/expenses/${e.body._id}`)).set(fin.h)).status).toBe(409); // an approved expense is locked
     expect((await api().patch(F(`/expenses/${e.body._id}`)).set(fin.h).send({ amount: 1 })).status).toBe(409);
     // a rejected one can be corrected and goes back for approval

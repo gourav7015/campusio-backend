@@ -221,6 +221,7 @@ export async function updateSettings(tenantId, body) {
     attendance: { ...current.attendance, ...(rest.attendance || {}) },
     leaveBalances: { ...current.leaveBalances, ...(rest.leaveBalances || {}) },
     staffLeaveBalances: { ...current.staffLeaveBalances, ...(rest.staffLeaveBalances || {}) },
+    leaveRules: { teaching: { ...current.leaveRules?.teaching, ...(rest.leaveRules?.teaching || {}) }, nonTeaching: { ...current.leaveRules?.nonTeaching, ...(rest.leaveRules?.nonTeaching || {}) } },
     staffAttendance: { ...current.staffAttendance, ...(rest.staffAttendance || {}) },
     statutory: { pf: { ...current.statutory.pf, ...(rest.statutory?.pf || {}) }, esi: { ...current.statutory.esi, ...(rest.statutory?.esi || {}) }, pt: { ...current.statutory.pt, ...(rest.statutory?.pt || {}) } },
   };

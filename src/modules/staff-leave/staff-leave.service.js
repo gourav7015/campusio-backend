@@ -1,7 +1,7 @@
 import { StaffLeave, LeaveGrant, StaffMember, Designation, User } from '../../models/index.js';
 import { notFound, conflict, bad, forbidden } from '../../core/utils.js';
 import { notifyUsers } from '../../services/notify.js';
-import { leaveDays } from '../leave/leave.service.js';
+import { leaveDays, assertLeaveRules } from '../leave/leave.service.js';
 
 /** The year leave is counted in: the academic year if there is one, otherwise the calendar year. */
 const spanOf = (ctx) => (ctx.year ? { from: ctx.year.startDate, to: ctx.year.endDate } : { from: `${ctx.today.slice(0, 4)}-01-01`, to: `${ctx.today.slice(0, 4)}-12-31` });
@@ -36,6 +36,7 @@ export const listMine = (ctx) => StaffLeave.find({ tenantId: ctx.tenantId, staff
 
 export async function apply(ctx, body) {
   const days = await assertAvailable(ctx, ctx.staff._id, body);
+  assertLeaveRules(ctx, ctx.settings.leaveRules?.nonTeaching, 'non-teaching staff', days, body);
   return StaffLeave.create({ tenantId: ctx.tenantId, staffId: ctx.staff._id, userId: ctx.actorId, group: ctx.group, ...body, days, status: 'submitted' });
 }
 

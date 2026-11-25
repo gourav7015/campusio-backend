@@ -40,10 +40,23 @@ async function ensureColourFree(tenantId, color, exceptId) {
   if (other) throw conflict(`That colour already belongs to ${other.name}. Pick a different one.`);
 }
 
+/** The four colours a school's houses come in (red, green, blue, yellow). Every house gets one of its own, so a school has up to four houses. */
+export const HOUSE_COLOURS = ['#dc2626', '#16a34a', '#2563eb', '#eab308'];
+async function firstFreeColour(tenantId, exceptId) {
+  const used = new Set((await House.find({ tenantId, ...(exceptId ? { _id: { $ne: exceptId } } : {}) }).select('color').lean()).map((h) => (h.color || '').toLowerCase()));
+  return HOUSE_COLOURS.find((c) => !used.has(c));
+}
+
 export async function createHouse(ctx, body) {
   if (await byName(ctx.tenantId, body.name)) throw conflict(`"${body.name}" already exists`);
-  await ensureColourFree(ctx.tenantId, body.color);
-  return House.create({ tenantId: ctx.tenantId, ...body });
+  let color = body.color;
+  if (color) await ensureColourFree(ctx.tenantId, color);
+  else {
+    // never a house without a colour: take the first free one, and say so plainly when there is none
+    color = await firstFreeColour(ctx.tenantId);
+    if (!color) throw conflict('All four house colours are already in use, and every house needs one of its own. Delete a house, or change its colour, first.');
+  }
+  return House.create({ tenantId: ctx.tenantId, ...body, color });
 }
 
 /** Renaming a house renames it for everyone in it. */
@@ -51,6 +64,10 @@ export async function updateHouse(ctx, id, patch) {
   const h = await House.findOne({ _id: id, tenantId: ctx.tenantId });
   if (!h) throw notFound('House not found');
   if (patch.name && patch.name.toLowerCase() !== h.name.toLowerCase() && await byName(ctx.tenantId, patch.name)) throw conflict(`"${patch.name}" already exists`);
+  if (patch.color === '') { // a colour is never cleared; a house that has none takes a free one if there is one
+    if (h.color) delete patch.color;
+    else { const free = await firstFreeColour(ctx.tenantId, h._id); if (free) patch.color = free; else delete patch.color; }
+  }
   if (patch.color && patch.color.toLowerCase() !== (h.color || '').toLowerCase()) await ensureColourFree(ctx.tenantId, patch.color, h._id);
   if (patch.status === 'archived' && (await Student.exists({ tenantId: ctx.tenantId, house: h.name, status: 'active' }) || await Teacher.exists({ tenantId: ctx.tenantId, house: h.name, status: 'active' }))) throw conflict('People are still in this house. Move them first.');
   const old = h.name;

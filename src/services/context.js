@@ -11,6 +11,7 @@ export function settingsOf(school) {
     attendance: { ...d.attendance, ...(s.attendance || {}) },
     leaveBalances: { ...d.leaveBalances, ...(s.leaveBalances || {}) },
     staffLeaveBalances: { ...d.staffLeaveBalances, ...(s.staffLeaveBalances || {}) },
+    leaveRules: { teaching: { ...d.leaveRules.teaching, ...(s.leaveRules?.teaching || {}) }, nonTeaching: { ...d.leaveRules.nonTeaching, ...(s.leaveRules?.nonTeaching || {}) } },
     staffAttendance: { ...d.staffAttendance, ...(s.staffAttendance || {}) },
     statutory: { pf: { ...d.statutory.pf, ...(s.statutory?.pf || {}) }, esi: { ...d.statutory.esi, ...(s.statutory?.esi || {}) }, pt: { ...d.statutory.pt, ...(s.statutory?.pt || {}) } },
   };

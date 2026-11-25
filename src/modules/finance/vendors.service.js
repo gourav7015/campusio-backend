@@ -98,6 +98,7 @@ export async function decideVendors(ctx, { approve, ids, note }, user) {
   return { decided: list.length };
 }
 
+export async function vendorsByStatus(ctx, statuses) { return Vendor.find({ tenantId: ctx.tenantId, status: { $in: statuses } }).sort({ decidedAt: -1, createdAt: -1 }).limit(200).lean(); }
 export async function pendingVendors(ctx) { return Vendor.find({ tenantId: ctx.tenantId, status: 'pending' }).sort({ createdAt: 1 }).lean(); }
 
 /** The approved vendors, for the pick-list on an expense. */

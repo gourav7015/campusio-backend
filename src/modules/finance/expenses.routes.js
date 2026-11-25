@@ -109,10 +109,25 @@ approvalRoutes.get('/approvals/summary', async (req, res) => {
   const [expenses, swaps, exceptions, vendorsWaiting] = await Promise.all([svc.pendingApprovals(req.ctx), sched.adminSwaps(req.ctx, { status: 'awaiting' }), sched.listExceptions(req.ctx, { status: 'pending' }), vendors.pendingVendors(req.ctx)]);
   res.json({ count: expenses.length + swaps.length + exceptions.length + vendorsWaiting.length });
 });
+/**
+ * The approvals page. ?status=pending (the default) is what waits for a decision; approved and rejected are the earlier decisions; all is everything,
+ * so the admin can look back at what was decided and by whom.
+ */
 approvalRoutes.get('/approvals', async (req, res) => {
+  const { status } = parse(z.object({ status: z.enum(['pending', 'approved', 'rejected', 'all']).default('pending') }), req.query);
   const sched = await import('../scheduling/scheduling.service.js');
-  const [expenses, swaps, exceptions, vendorsWaiting] = await Promise.all([svc.pendingApprovals(req.ctx), sched.adminSwaps(req.ctx, { status: 'awaiting' }), sched.listExceptions(req.ctx, { status: 'pending' }), vendors.pendingVendors(req.ctx)]);
-  res.json({ expenses, vendors: vendorsWaiting, swaps, exceptions, counts: { expenses: expenses.length, vendors: vendorsWaiting.length, swaps: swaps.length, exceptions: exceptions.length } });
+  const want = status === 'all' ? ['pending', 'approved', 'rejected'] : [status];
+  const swapStatus = (s) => (s === 'pending' ? 'awaiting' : s); // a swap waits for the admin only once both teachers have agreed
+  const [expenses, vendorsRows, swapsParts, exceptionParts] = await Promise.all([
+    svc.expensesByStatus(req.ctx, want), vendors.vendorsByStatus(req.ctx, want),
+    Promise.all(want.map((s) => sched.adminSwaps(req.ctx, { status: swapStatus(s) }))),
+    Promise.all(want.map((s) => sched.listExceptions(req.ctx, { status: s }))),
+  ]);
+  const swaps = swapsParts.flat(); const exceptions = exceptionParts.flat();
+  const byTime = (a, b) => String(b.decidedAt || b.createdAt || '').localeCompare(String(a.decidedAt || a.createdAt || ''));
+  // what waits comes first, then the decisions, newest first
+  const order = (rows) => [...rows].sort((a, b) => ((a.status === 'pending') === (b.status === 'pending') ? byTime(a, b) : a.status === 'pending' ? -1 : 1));
+  res.json({ status, expenses: order(expenses), vendors: order(vendorsRows), swaps: order(swaps), exceptions: order(exceptions), counts: { expenses: expenses.length, vendors: vendorsRows.length, swaps: swaps.length, exceptions: exceptions.length } });
 });
 approvalRoutes.post('/approvals/expenses/:id', async (req, res) => {
   const b = parse(z.object({ approve: z.boolean(), note: z.string().trim().max(300).optional() }), req.body);
