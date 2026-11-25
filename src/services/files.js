@@ -15,7 +15,7 @@ import { objectStoreEnabled, putObject, getObject, hasObject, deleteObject } fro
 fs.mkdirSync(config.uploadDir, { recursive: true });
 
 const ALLOWED = new Set([
-  'application/pdf', 'image/png', 'image/jpeg', 'image/webp', 'application/msword',
+  'application/pdf', 'image/png', 'image/jpeg', 'image/webp', 'image/gif', 'text/csv', 'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-powerpoint',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/plain',
@@ -35,6 +35,8 @@ const SIGNATURES = {
   'application/pdf': (b) => startsWith(b, [0x25, 0x50, 0x44, 0x46]),
   'image/png': (b) => startsWith(b, [0x89, 0x50, 0x4e, 0x47]),
   'image/jpeg': (b) => startsWith(b, [0xff, 0xd8, 0xff]),
+  'image/gif': (b) => startsWith(b, [0x47, 0x49, 0x46, 0x38]),
+  'text/csv': (b) => !b.includes(0),
   'image/webp': (b) => startsWith(b, [0x52, 0x49, 0x46, 0x46]) && startsWith(b, [0x57, 0x45, 0x42, 0x50], 8),
   'application/msword': (b) => startsWith(b, [0xd0, 0xcf, 0x11, 0xe0]), 'application/vnd.ms-powerpoint': (b) => startsWith(b, [0xd0, 0xcf, 0x11, 0xe0]), 'application/vnd.ms-excel': (b) => startsWith(b, [0xd0, 0xcf, 0x11, 0xe0]),
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': (b) => startsWith(b, [0x50, 0x4b, 0x03, 0x04]),

@@ -172,6 +172,21 @@ describe('examinations with configurable mark fields → approval → publish �
     expect((await api().get(`/api/student/class-results/${exam._id}`).set(outsider.h)).body).toMatchObject({ published: false, rows: [] });
   });
 
+  it('class analysis tells a student where they stand, with classmates anonymous', async () => {
+    const a = (await api().get('/api/student/class-analysis').set(W.studentLogins[0].h)).body;
+    expect(a.ready).toBe(true);
+    expect(a.overall).toMatchObject({ myAverage: 77.5, rank: 1, of: 3, ahead: 2, testsCounted: 1 });
+    expect(a.standing.key).toBe('top');
+    expect(a.tests[0]).toMatchObject({ name: 'Unit Test 2', myRank: 1, highest: 77.5, lowest: 10, takers: 3 });
+    expect(a.distribution.reduce((n, b) => n + b.count, 0)).toBe(3);
+    expect(a.distribution.filter((b) => b.mine)).toHaveLength(1);
+    expect(JSON.stringify(a)).not.toMatch(/Bhavna|Chirag/); // other students are never named
+    const b = (await api().get('/api/student/class-analysis').set(W.studentLogins[1].h)).body;
+    expect(b.overall).toMatchObject({ rank: 2 });
+    // a student whose section has no published result yet gets an honest "not ready", not made-up numbers
+    expect((await api().get('/api/student/class-analysis').set(outsider.h)).body).toMatchObject({ ready: false, overall: null });
+  });
+
   it('published results are locked; changes go through a formal correction that keeps version 1', async () => {
     const locked = await api().put('/api/teacher/marks/sheet').set(W.teacher1.h).send({ examSubjectId: esMaths._id, sectionId: W.sec8A._id, marks: [{ studentId: ids.a, values: { written: 80, practical: 20 } }] });
     expect(locked.status).toBe(409);

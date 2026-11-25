@@ -1,7 +1,7 @@
 import PDFDocument from 'pdfkit';
-import { Examination, ExaminationSubject, ReportCard, Subject, StudentEnrolment, Student } from '../../models/index.js';
+import { Examination, ExaminationSubject, ReportCard, Subject, StudentEnrolment, Student, Section, ClassModel } from '../../models/index.js';
 import { notFound, daysBetween, round1 } from '../../core/utils.js';
-import { submittedRecords, summarize } from '../../services/attendance.js';
+import { submittedRecords, summarize, studentCounts, summarizeCounts } from '../../services/attendance.js';
 
 const classIdsOf = (ctx) => [...new Set(ctx.enrolments.map((e) => String(e.classId)))];
 
@@ -157,4 +157,76 @@ export async function classExamDetail(ctx, examId) {
   })).sort((a, b) => a.rank - b.rank || String(a.name).localeCompare(String(b.name)));
   const me = rows.find((r) => r.isMe) || null;
   return { exam: { id: exam._id, name: exam.name, type: exam.type }, published: true, subjects: subjectCols, rows, me, classSize: rows.length, average: Math.round((rows.reduce((n, r) => n + (r.percentage ?? 0), 0) / rows.length) * 10) / 10 };
+}
+
+// ── the student's standing in the whole class: built only from published results and submitted registers, other students stay anonymous ──
+const avg = (xs) => (xs.length ? round1(xs.reduce((a, b) => a + b, 0) / xs.length) : null);
+const median = (xs) => { if (!xs.length) return null; const a = [...xs].sort((x, y) => x - y); const m = Math.floor(a.length / 2); return a.length % 2 ? a[m] : round1((a[m - 1] + a[m]) / 2); };
+/** Competition rank (ties share) of `value` among `values`, highest first. */
+const rankIn = (values, value) => 1 + values.filter((v) => v > value).length;
+
+export async function classAnalysis(ctx) {
+  const me = String(ctx.student._id);
+  const [section, cls, classSize] = await Promise.all([
+    ctx.enrolment ? Section.findById(ctx.enrolment.sectionId).select('name').lean() : null,
+    ctx.enrolment ? ClassModel.findById(ctx.enrolment.classId).select('name').lean() : null,
+    StudentEnrolment.countDocuments({ tenantId: ctx.tenantId, yearId: ctx.year._id, sectionId: { $in: ctx.sectionIds }, status: 'active' }),
+  ]);
+  const { exams, cards } = await visibleClassExams(ctx);
+  const done = exams.filter((e) => cards.some((c) => String(c.examId) === String(e._id)))
+    .map((e) => ({ e, list: cards.filter((c) => String(c.examId) === String(e._id) && attempted(c)) }))
+    .sort((a, b) => String(a.e.startDate || a.e.createdAt).localeCompare(String(b.e.startDate || b.e.createdAt)));
+  const out = { className: cls?.name, section: section?.name, classSize, tests: [], overall: null, subjects: [], distribution: [], attendance: null, standing: null };
+  const pctOf = (c) => c.snapshot.percentage ?? 0;
+  out.tests = done.map(({ e, list }) => {
+    const mine = list.find((c) => String(c.studentId) === me);
+    const ps = list.map(pctOf);
+    return { examId: e._id, name: e.name, type: e.type, takers: list.length, myPercentage: mine ? pctOf(mine) : null, myRank: mine ? rankIn(ps, pctOf(mine)) : null, average: avg(ps), highest: ps.length ? Math.max(...ps) : null, lowest: ps.length ? Math.min(...ps) : null, median: median(ps) };
+  });
+
+  // overall: each student's average over the tests they sat, ranked against the section
+  const byStudent = new Map();
+  done.forEach(({ list }) => list.forEach((c) => { const k = String(c.studentId); if (!byStudent.has(k)) byStudent.set(k, []); byStudent.get(k).push(pctOf(c)); }));
+  const averages = new Map([...byStudent].map(([k, v]) => [k, avg(v)]));
+  if (averages.has(me)) {
+    const all = [...averages.values()];
+    const mineAvg = averages.get(me);
+    const rank = rankIn(all, mineAvg);
+    const classAvg = avg(all);
+    const behind = all.filter((v) => v < mineAvg).length;
+    const top = rank / all.length;
+    const gap = round1(mineAvg - classAvg);
+    const standing = rank === 1 || top <= 0.1 ? { key: 'top', label: 'At the top of the class' } : top <= 0.25 ? { key: 'leading', label: 'Among the leaders of the class' }
+      : gap >= 0 ? { key: 'above', label: 'Above the class average' } : gap >= -5 ? { key: 'near', label: 'Close to the class average' } : { key: 'below', label: 'Below the class average' };
+    out.overall = { testsCounted: byStudent.get(me).length, myAverage: mineAvg, classAverage: classAvg, gap, rank, of: all.length, ahead: behind, highest: Math.max(...all), lowest: Math.min(...all) };
+    out.standing = standing;
+    // the trend of the student's own rank over the last tests, to say whether they are moving up or down
+    const ranks = out.tests.filter((t) => t.myRank != null).map((t) => t.myRank / t.takers);
+    if (ranks.length >= 2) { const d = ranks[ranks.length - 1] - ranks[ranks.length - 2]; out.overall.movement = Math.abs(d) < 0.03 ? 'steady' : d < 0 ? 'up' : 'down'; }
+  }
+
+  // subject by subject, over all published tests
+  const sub = new Map();
+  done.forEach(({ list }) => list.forEach((c) => c.snapshot.subjects.forEach((s) => {
+    if (s.percentage == null || s.absent) return;
+    if (!sub.has(s.code)) sub.set(s.code, { subject: s.subject, all: [], mine: [] });
+    const x = sub.get(s.code); x.all.push(s.percentage); if (String(c.studentId) === me) x.mine.push(s.percentage);
+  })));
+  out.subjects = [...sub.values()].filter((x) => x.mine.length).map((x) => ({ subject: x.subject, mine: avg(x.mine), classAverage: avg(x.all), highest: Math.max(...x.all), gap: round1(avg(x.mine) - avg(x.all)) })).sort((a, b) => b.gap - a.gap);
+
+  // where the whole class sits in the latest test: how many classmates in each band, and which band is the student's
+  const latest = done[done.length - 1];
+  if (latest && latest.list.some((c) => String(c.studentId) === me)) {
+    const bands = [['Below 40%', 0, 40], ['40–59%', 40, 60], ['60–74%', 60, 75], ['75–89%', 75, 90], ['90% and above', 90, 1e9]];
+    const mp = pctOf(latest.list.find((c) => String(c.studentId) === me));
+    out.distribution = bands.map(([label, lo, hi]) => ({ label, count: latest.list.filter((c) => pctOf(c) >= lo && pctOf(c) < hi).length, mine: mp >= lo && mp < hi }));
+    out.distributionExam = latest.e.name;
+  }
+
+  // attendance against the section
+  const counts = await studentCounts(ctx.tenantId, { yearId: ctx.year._id, sectionId: { $in: ctx.sectionIds } });
+  const pcts = new Map([...counts].map(([k, c]) => [k, summarizeCounts(c, ctx.settings).percentage]).filter(([, v]) => v != null));
+  if (pcts.has(me)) { const all = [...pcts.values()]; out.attendance = { mine: pcts.get(me), classAverage: avg(all), rank: rankIn(all, pcts.get(me)), of: all.length }; }
+  out.ready = !!out.overall;
+  return out;
 }
