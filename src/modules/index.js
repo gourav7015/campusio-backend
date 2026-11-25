@@ -85,7 +85,7 @@ export function mountModules(app, authenticate) {
   app.use('/api/school/transport', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, subAdminGate('transport'), adminContext, viewOnly, transportRouter);
   app.use('/api/school/library', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, subAdminGate('library'), adminContext, viewOnly, libraryRoutes);
   app.use('/api/school', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, subAdminGate(), adminContext, stack(adminRouters));
-  app.use('/api/finance', authenticate, requireRole('finance'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, financeRoutes]));
+  app.use('/api/finance', authenticate, requireRole('finance'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, financeRoutes, payrollAdmin]));
   app.use('/api/library', authenticate, requireRole('library'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, libraryRoutes]));
   app.use('/api/transport', authenticate, requireRole('transport'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, transportRouter]));
   app.use('/api/staff', authenticate, requireRole('staff'), rejectActing, requireTenant, staffContext, deskGate, stack([at('/attendance-desk', attendanceRoutes(DESK_GROUPS)), at('/leave', leaveDeskRoutes('general')), at('/queries', ticketHandler('school')), at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, staffPortal]));

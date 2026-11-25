@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { parse, notFound } from '../../core/utils.js';
+import { parse, notFound, forbidden } from '../../core/utils.js';
 import { audit } from '../../services/audit.js';
 import * as v from './payroll.validation.js';
 import * as svc from './payroll.service.js';
@@ -11,9 +11,19 @@ const pdf = async (req, res, p) => {
   await svc.renderPayslip(req.tenantId, p, res);
 };
 
-/** School Admin (and Super Admin acting on a school): pay levels, salaries, payroll runs. */
+/**
+ * Payroll: pay levels, salaries, payroll runs and payslips. The money is run by the Finance department (mounted for Finance), the same way fees and expenses are.
+ * The School Admin sees everything and approves each month's payroll, and does nothing else here; the Super Admin acting on a school can do it all (support, data work).
+ * The Finance role prepares and pays but cannot approve its own run.
+ */
 export const adminRoutes = Router();
 const a = adminRoutes;
+a.use('/payroll', (req, _res, next) => {
+  const approving = req.method === 'POST' && /^\/runs\/[a-f0-9]{24}\/approve$/i.test(req.path);
+  if (req.user.role === 'finance' && approving) throw forbidden('The School Admin approves each month\'s payroll');
+  if (req.user.role === 'school_admin' && !approving && !['GET', 'HEAD'].includes(req.method)) throw forbidden('Payroll is run by Finance. The School Admin can view it and approve each month.');
+  next();
+});
 const withName = (req) => { req.ctx.actorName = req.user.name; return req.ctx; };
 
 a.get('/payroll/summary', async (req, res) => res.json(await svc.summary(req.ctx)));

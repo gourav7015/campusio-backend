@@ -92,3 +92,9 @@ export async function seedWorld(root, code = 'dps') {
   const sLogin = await Promise.all(st.map((x) => login(x.credentials.loginId, x.credentials.temporaryPassword, 'student')));
   return { ...s, year, c8, c9, sec8A, sec8B, maths, eng, t1, t2, asgM, asgE, periods, students: st, teacher1: tLogin1, teacher2: tLogin2, studentLogins: sLogin, post };
 }
+
+/** A Finance-department login for a world made by seedWorld (payroll is run from Finance; the School Admin only views it and approves). Made directly, so it is not an employee on the payroll. */
+export async function makeFinance(W, tag = 'payfin') {
+  await User.create({ tenantId: W.id, role: 'finance', loginId: `${tag}@${W.code}.test`, name: 'Fiona Finance', email: `${tag}@${W.code}.test`, phone: '9833333333', dob: '1984-04-04', passwordHash: await hashPassword('Fin@12345'), mustChangePassword: false });
+  return login(`${tag}@${W.code}.test`, 'Fin@12345', 'finance');
+}

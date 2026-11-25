@@ -243,16 +243,16 @@ export async function buildDemo(base) {
     await transport('PUT', '/attendance/register', { group: 'transport', date, submit: true, entries: k === 4 ? [{ personId: cnd._id, status: 'late', remark: 'Bus breakdown' }] : [] });
   }
 
-  // payroll: pay levels, everyone's salary, and last month's payroll approved and paid
-  const prt = await admin('POST', '/payroll/levels', { name: 'PRT', description: 'Primary Teacher', basic: 28000, allowances: [{ label: 'HRA', kind: 'percent', value: 40 }, { label: 'Transport', kind: 'fixed', value: 2000 }], deductions: [{ label: 'Provident Fund', kind: 'percent', value: 12 }] });
-  await admin('POST', '/payroll/levels', { name: 'TGT', description: 'Trained Graduate Teacher', basic: 38000, allowances: [{ label: 'HRA', kind: 'percent', value: 40 }, { label: 'Transport', kind: 'fixed', value: 2500 }], deductions: [{ label: 'Provident Fund', kind: 'percent', value: 12 }] });
-  await admin('POST', '/payroll/salaries/bulk', { levelId: prt._id, personIds: Object.values(T).map((t) => t._id), effectiveFrom: '2026-04-01', reason: 'Initial salary setup' });
-  const supportLevel = await admin('POST', '/payroll/levels', { name: 'Support Grade', appliesTo: 'non_teaching', description: 'Non-teaching and transport staff', basic: 13000, allowances: [{ label: 'Conveyance', kind: 'fixed', value: 1000 }], deductions: [{ label: 'Provident Fund', kind: 'percent', value: 12 }] });
-  await admin('POST', '/payroll/salaries/bulk', { levelId: supportLevel._id, personIds: [...generalStaff.map((m) => m._id), drv._id, cnd._id], effectiveFrom: '2026-04-01', reason: 'Initial salary setup' });
+  // payroll is run by Finance (levels, salaries, the month, payments); the School Admin approves the month
+  const prt = await finance('POST', '/payroll/levels', { name: 'PRT', description: 'Primary Teacher', basic: 28000, allowances: [{ label: 'HRA', kind: 'percent', value: 40 }, { label: 'Transport', kind: 'fixed', value: 2000 }], deductions: [{ label: 'Provident Fund', kind: 'percent', value: 12 }] });
+  await finance('POST', '/payroll/levels', { name: 'TGT', description: 'Trained Graduate Teacher', basic: 38000, allowances: [{ label: 'HRA', kind: 'percent', value: 40 }, { label: 'Transport', kind: 'fixed', value: 2500 }], deductions: [{ label: 'Provident Fund', kind: 'percent', value: 12 }] });
+  await finance('POST', '/payroll/salaries/bulk', { levelId: prt._id, personIds: Object.values(T).map((t) => t._id), effectiveFrom: '2026-04-01', reason: 'Initial salary setup' });
+  const supportLevel = await finance('POST', '/payroll/levels', { name: 'Support Grade', appliesTo: 'non_teaching', description: 'Non-teaching and transport staff', basic: 13000, allowances: [{ label: 'Conveyance', kind: 'fixed', value: 1000 }], deductions: [{ label: 'Provident Fund', kind: 'percent', value: 12 }] });
+  await finance('POST', '/payroll/salaries/bulk', { levelId: supportLevel._id, personIds: [...generalStaff.map((m) => m._id), drv._id, cnd._id], effectiveFrom: '2026-04-01', reason: 'Initial salary setup' });
   const prev = new Date(`${today.slice(0, 7)}-01T00:00:00Z`); prev.setUTCMonth(prev.getUTCMonth() - 1);
-  const lastRun = await admin('POST', '/payroll/runs', { month: prev.toISOString().slice(0, 7) });
+  const lastRun = await finance('POST', '/payroll/runs', { month: prev.toISOString().slice(0, 7) });
   await admin('POST', `/payroll/runs/${lastRun._id}/approve`);
-  await admin('POST', `/payroll/runs/${lastRun._id}/pay`, { mode: 'bank_transfer', reference: 'NEFT-DEMO-001' });
+  await finance('POST', `/payroll/runs/${lastRun._id}/pay`, { mode: 'bank_transfer', reference: 'NEFT-DEMO-001' });
 
   return { rahul, students, teachers: teacherDefs, sections: sec };
 }

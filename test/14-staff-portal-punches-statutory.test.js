@@ -1,14 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { setup, teardown, reset, api, makeSuperAdmin, seedWorld, login } from './helpers.js';
+import { setup, teardown, reset, api, makeSuperAdmin, seedWorld, makeFinance, login } from './helpers.js';
 import { todayStr, addDays } from '../src/core/utils.js';
 
 const TODAY = todayStr('Asia/Kolkata');
 const MONTH = '2026-10';
 
+let F;
 describe('Staff portal, staff leave, check-in times, bank file and statutory deductions', () => {
   let root; let W; let tr; let kamla; let driver; let kLogin; let t1; let t2; let level;
   beforeAll(async () => {
-    await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'stp');
+    await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'stp'); F = await makeFinance(W);
     t1 = W.t1.teacher._id; t2 = W.t2.teacher._id;
     // every day is a working day, so "today" is always open for check-in whenever this runs
     await api().put('/api/school/settings').set(W.h).send({ workingDays: [1, 2, 3, 4, 5, 6, 7] });
@@ -21,6 +22,7 @@ describe('Staff portal, staff leave, check-in times, bank file and statutory ded
   });
   afterAll(teardown);
   const A = (p) => `/api/school${p}`;
+  const FA = (p) => `/api/finance${p}`; // payroll is run from Finance
   const STF = (p) => `/api/staff${p}`;
 
   it('the Staff portal is the office desk: only staff given it have a login, and it is not a personal portal', async () => {
@@ -140,39 +142,39 @@ describe('Staff portal, staff leave, check-in times, bank file and statutory ded
     expect(ok.status).toBe(200);
     expect(ok.body.bank).toMatchObject({ ifsc: 'HDFC0001234', accountNo: '123456789012' }); // upper-cased
     // pay levels and salaries: a teaching level for the teachers, a support level for staff
-    level = (await api().post(A('/payroll/levels')).set(W.h).send({ name: 'Support Grade', appliesTo: 'non_teaching', basic: 13000, allowances: [], deductions: [] })).body;
-    const prt = (await api().post(A('/payroll/levels')).set(W.h).send({ name: 'Senior', basic: 30000, allowances: [], deductions: [] })).body;
-    const gupta = (await api().post(A('/payroll/levels')).set(W.h).send({ name: 'Junior', basic: 20000, allowances: [], deductions: [{ label: 'Provident Fund', kind: 'percent', value: 12 }] })).body;
-    await api().post(A('/payroll/salaries/bulk')).set(W.h).send({ levelId: level._id, personIds: [kamla._id, driver._id], effectiveFrom: '2026-04-01' });
-    await api().post(A(`/payroll/salaries/${t1}`)).set(W.h).send({ levelId: prt._id, effectiveFrom: '2026-04-01' });
-    await api().post(A(`/payroll/salaries/${t2}`)).set(W.h).send({ levelId: gupta._id, effectiveFrom: '2026-04-01' });
-    const run = (await api().post(A('/payroll/runs')).set(W.h).send({ month: MONTH })).body;
+    level = (await api().post(FA('/payroll/levels')).set(F.h).send({ name: 'Support Grade', appliesTo: 'non_teaching', basic: 13000, allowances: [], deductions: [] })).body;
+    const prt = (await api().post(FA('/payroll/levels')).set(F.h).send({ name: 'Senior', basic: 30000, allowances: [], deductions: [] })).body;
+    const gupta = (await api().post(FA('/payroll/levels')).set(F.h).send({ name: 'Junior', basic: 20000, allowances: [], deductions: [{ label: 'Provident Fund', kind: 'percent', value: 12 }] })).body;
+    await api().post(FA('/payroll/salaries/bulk')).set(F.h).send({ levelId: level._id, personIds: [kamla._id, driver._id], effectiveFrom: '2026-04-01' });
+    await api().post(FA(`/payroll/salaries/${t1}`)).set(F.h).send({ levelId: prt._id, effectiveFrom: '2026-04-01' });
+    await api().post(FA(`/payroll/salaries/${t2}`)).set(F.h).send({ levelId: gupta._id, effectiveFrom: '2026-04-01' });
+    const run = (await api().post(FA('/payroll/runs')).set(F.h).send({ month: MONTH })).body;
     W.run = run;
-    expect((await api().get(A(`/payroll/runs/${run._id}/bank-file`)).set(W.h)).status).toBe(409); // approve first
+    expect((await api().get(FA(`/payroll/runs/${run._id}/bank-file`)).set(F.h)).status).toBe(409); // approve first
     await api().post(A(`/payroll/runs/${run._id}/approve`)).set(W.h);
-    const f = (await api().get(A(`/payroll/runs/${run._id}/bank-file`)).set(W.h)).body;
+    const f = (await api().get(FA(`/payroll/runs/${run._id}/bank-file`)).set(F.h)).body;
     expect(f).toMatchObject({ month: MONTH, count: 1, total: 13000 });
     expect(f.ready[0]).toMatchObject({ name: 'Kamla Devi', accountNo: '123456789012', ifsc: 'HDFC0001234', amount: 13000, narration: 'Salary 2026-10' });
     expect(f.missing.map((m) => [m.name, m.reason]).sort()).toEqual([['Mr Sharma', 'No bank account on record'], ['Mrs Gupta', 'No bank account on record'], ['Ramesh Bhai', 'No bank account on record']]);
-    const csv = await api().get(A(`/payroll/runs/${run._id}/bank-file.csv`)).set(W.h);
+    const csv = await api().get(FA(`/payroll/runs/${run._id}/bank-file.csv`)).set(F.h);
     expect(csv.status).toBe(200);
     expect(csv.text.split('\n')[0]).toBe('Beneficiary Name,Account Number,IFSC,Amount,Payment Mode,Narration,Reference,Employee Id,Bank');
     expect(csv.text).toContain('Kamla Devi,123456789012,HDFC0001234,13000,NEFT,Salary 2026-10');
-    expect((await api().get(A(`/payroll/runs/${run._id}/bank-file.csv`)).set(W.teacher1.h)).status).toBe(403);
+    expect((await api().get(FA(`/payroll/runs/${run._id}/bank-file.csv`)).set(W.teacher1.h)).status).toBe(403);
     // once paid, the person is no longer in the file
-    await api().post(A(`/payroll/runs/${run._id}/pay`)).set(W.h).send({ mode: 'bank_transfer', payslipIds: [f.ready[0].payslipId] });
-    expect((await api().get(A(`/payroll/runs/${run._id}/bank-file`)).set(W.h)).body.count).toBe(0);
+    await api().post(FA(`/payroll/runs/${run._id}/pay`)).set(F.h).send({ mode: 'bank_transfer', payslipIds: [f.ready[0].payslipId] });
+    expect((await api().get(FA(`/payroll/runs/${run._id}/bank-file`)).set(F.h)).body.count).toBe(0);
   });
 
   it('PF, ESI and Professional Tax follow the school\'s own policy; nothing is deducted twice; reports and files come out per month', async () => {
     // statutory deductions are OFF until a school switches them on: the October run above has none
-    const before = (await api().get(A(`/payroll/runs/${W.run._id}`)).set(W.h)).body.payslips;
+    const before = (await api().get(FA(`/payroll/runs/${W.run._id}`)).set(F.h)).body.payslips;
     expect(before.find((p) => p.personName === 'Kamla Devi')).toMatchObject({ gross: 13000, net: 13000, totalDeductions: 0 });
     expect((await api().put(A('/settings')).set(W.h).send({ statutory: { pf: { enabled: true }, esi: { enabled: true }, pt: { enabled: true, slabs: [{ upTo: 12000, amount: 0 }, { upTo: 1000000000, amount: 200 }] } } })).status).toBe(200);
     expect((await api().put(A('/settings')).set(W.h).send({ statutory: { pf: { employeeRate: 99 } } })).status).toBe(400);
     // a new month, so nothing is locked: 2026-09
-    const run = (await api().post(A('/payroll/runs')).set(W.h).send({ month: '2026-09' })).body;
-    const { payslips } = (await api().get(A(`/payroll/runs/${run._id}`)).set(W.h)).body;
+    const run = (await api().post(FA('/payroll/runs')).set(F.h).send({ month: '2026-09' })).body;
+    const { payslips } = (await api().get(FA(`/payroll/runs/${run._id}`)).set(F.h)).body;
     const by = (n) => payslips.find((p) => p.personName === n);
     // Mr Sharma, 30000: PF 12% of 15000 (the wage ceiling) = 1800; no ESI (above 21000); PT 200
     expect(by('Mr Sharma')).toMatchObject({ gross: 30000, totalDeductions: 2000, net: 28000 });
@@ -185,29 +187,29 @@ describe('Staff portal, staff leave, check-in times, bank file and statutory ded
     expect(by('Mrs Gupta').net).toBe(20000 - 2400 - 150 - 200);
     expect(by('Mrs Gupta').statutory.pf).toMatchObject({ wages: 15000, employee: 2400, employer: 1800, eps: 1249.5, epf: 550.5 });
     // the monthly statutory report, with the ids still missing for filing
-    const rep = (await api().get(A(`/payroll/runs/${run._id}/statutory`)).set(W.h)).body;
+    const rep = (await api().get(FA(`/payroll/runs/${run._id}/statutory`)).set(F.h)).body;
     // four people: Mr Sharma, Kamla, the driver (same pay as Kamla) and Mrs Gupta
     expect(rep.totals).toMatchObject({ pfEmployee: 1800 + 1560 + 1560 + 2400, esiEmployee: 98 + 98 + 150, pt: 800 });
     expect(rep.pf).toHaveLength(4); expect(rep.esi.map((x) => x.name).sort()).toEqual(['Kamla Devi', 'Mrs Gupta', 'Ramesh Bhai']);
     expect(rep.missingIds.some((m) => m.name === 'Mr Sharma' && m.what.includes('UAN'))).toBe(true);
     expect(rep.missingIds.some((m) => m.name === 'Kamla Devi' && m.what.includes('ESI'))).toBe(false); // her ESI number was entered above
     await api().patch(A(`/teachers/${t1}`)).set(W.h).send({ statutory: { uan: '100200300400' } });
-    const ecr = await api().get(A(`/payroll/runs/${run._id}/statutory/pf-ecr.txt`)).set(W.h);
+    const ecr = await api().get(FA(`/payroll/runs/${run._id}/statutory/pf-ecr.txt`)).set(F.h);
     expect(ecr.status).toBe(200); expect(ecr.headers['content-type']).toContain('text/plain');
     expect(ecr.text.split('\n')).toHaveLength(1); // only people with a UAN can be in the file
     expect(ecr.text).toBe('100200300400#~#MR SHARMA#~#30000#~#15000#~#15000#~#15000#~#1800#~#1250#~#550#~#0#~#0');
-    expect((await api().get(A(`/payroll/runs/${run._id}/statutory/esi.csv`)).set(W.h)).text.split('\n')[0]).toBe('IP Number,IP Name,No of Days,Total Monthly Wages,Employee Contribution,Employer Contribution');
-    expect((await api().get(A(`/payroll/runs/${run._id}/statutory/pt.csv`)).set(W.h)).text).toContain('Professional Tax');
-    expect((await api().get(A(`/payroll/runs/${run._id}/statutory`)).set(W.teacher1.h)).status).toBe(403);
+    expect((await api().get(FA(`/payroll/runs/${run._id}/statutory/esi.csv`)).set(F.h)).text.split('\n')[0]).toBe('IP Number,IP Name,No of Days,Total Monthly Wages,Employee Contribution,Employer Contribution');
+    expect((await api().get(FA(`/payroll/runs/${run._id}/statutory/pt.csv`)).set(F.h)).text).toContain('Professional Tax');
+    expect((await api().get(FA(`/payroll/runs/${run._id}/statutory`)).set(W.teacher1.h)).status).toBe(403);
     expect((await api().get(`/api/transport/payroll/runs/${run._id}/statutory`).set(tr.h)).status).toBe(404); // the officer does not see pay
   });
 
   it('payslips are given out by the office: nobody on the staff side has a personal payslip page', async () => {
-    const all = (await api().get(A(`/payroll/runs/${W.run._id}`)).set(W.h)).body.payslips;
+    const all = (await api().get(FA(`/payroll/runs/${W.run._id}`)).set(F.h)).body.payslips;
     expect(all.find((p) => p.personName === 'Kamla Devi')).toMatchObject({ status: 'paid', net: 13000 });
     expect((await api().get(STF('/payslips')).set(kLogin.h)).status).toBe(404);
     // the admin can still print any payslip
     const one = all.find((p) => p.personName === 'Kamla Devi');
-    expect((await api().get(A(`/payroll/payslips/${one._id}/pdf`)).set(W.h)).status).toBe(200);
+    expect((await api().get(FA(`/payroll/payslips/${one._id}/pdf`)).set(F.h)).status).toBe(200);
   });
 });

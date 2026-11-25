@@ -1,21 +1,23 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { setup, teardown, reset, api, makeSuperAdmin, seedWorld } from './helpers.js';
+import { setup, teardown, reset, api, makeSuperAdmin, seedWorld, makeFinance } from './helpers.js';
 import { todayStr } from '../src/core/utils.js';
 
 const monthsAgo = (n) => { const [y, m] = todayStr('Asia/Kolkata').slice(0, 7).split('-').map(Number); const d = new Date(Date.UTC(y, m - 1 - n, 1)); return d.toISOString().slice(0, 7); };
 const M2 = monthsAgo(2); const M1 = monthsAgo(1); const M0 = monthsAgo(0);
 
+let F;
 describe('every payslip keeps its own figures; a later salary revision is explained, not hidden', () => {
   let root; let W; let t1;
   beforeAll(async () => {
-    await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'slip'); t1 = W.t1.teacher._id;
+    await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'slip'); F = await makeFinance(W); t1 = W.t1.teacher._id;
   });
   afterAll(teardown);
-  const P = (p) => `/api/school/payroll${p}`;
-  const setPay = (basic, effectiveFrom) => api().post(P(`/salaries/${t1}`)).set(W.h).send({ basic, effectiveFrom, reason: 'test' });
+  const P = (p) => `/api/finance/payroll${p}`; // payroll is run from Finance
+  const PA = (p) => `/api/school/payroll${p}`; // the School Admin's window: view and approve
+  const setPay = (basic, effectiveFrom) => api().post(P(`/salaries/${t1}`)).set(F.h).send({ basic, effectiveFrom, reason: 'test' });
   const runMonth = async (month) => {
-    const run = (await api().post(P('/runs')).set(W.h).send({ month })).body;
-    expect((await api().post(P(`/runs/${run._id}/approve`)).set(W.h).send({})).status).toBe(200);
+    const run = (await api().post(P('/runs')).set(F.h).send({ month })).body;
+    expect((await api().post(PA(`/runs/${run._id}/approve`)).set(W.h).send({})).status).toBe(200);
     return run;
   };
 
@@ -57,37 +59,38 @@ describe('every payslip keeps its own figures; a later salary revision is explai
 
 describe('salary paid in parts', () => {
   let root; let W; let t1;
-  beforeAll(async () => { await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'part'); t1 = W.t1.teacher._id; });
+  beforeAll(async () => { await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'part'); F = await makeFinance(W); t1 = W.t1.teacher._id; });
   afterAll(teardown);
-  const P = (p) => `/api/school/payroll${p}`;
+  const P = (p) => `/api/finance/payroll${p}`; // payroll is run from Finance
+  const PA = (p) => `/api/school/payroll${p}`; // the School Admin's window: view and approve
   it('half a month now and the rest later; the slip, the run and the person all follow', async () => {
-    await api().post(P(`/salaries/${t1}`)).set(W.h).send({ basic: 30000, effectiveFrom: '2026-01-01' });
-    const run = (await api().post(P('/runs')).set(W.h).send({ month: M1 })).body;
-    const slip = (await api().get(P(`/runs/${run._id}`)).set(W.h)).body.payslips[0];
-    expect((await api().post(P(`/payslips/${slip._id}/pay`)).set(W.h).send({ amount: 100 })).status).toBe(409); // approve first
-    await api().post(P(`/runs/${run._id}/approve`)).set(W.h).send({});
+    await api().post(P(`/salaries/${t1}`)).set(F.h).send({ basic: 30000, effectiveFrom: '2026-01-01' });
+    const run = (await api().post(P('/runs')).set(F.h).send({ month: M1 })).body;
+    const slip = (await api().get(P(`/runs/${run._id}`)).set(F.h)).body.payslips[0];
+    expect((await api().post(P(`/payslips/${slip._id}/pay`)).set(F.h).send({ amount: 100 })).status).toBe(409); // approve first
+    await api().post(PA(`/runs/${run._id}/approve`)).set(W.h).send({});
     const half = Math.round(slip.net / 2 * 100) / 100;
-    const a = await api().post(P(`/payslips/${slip._id}/pay`)).set(W.h).send({ amount: half, mode: 'cash', note: 'First half' });
+    const a = await api().post(P(`/payslips/${slip._id}/pay`)).set(F.h).send({ amount: half, mode: 'cash', note: 'First half' });
     expect(a.body).toMatchObject({ status: 'partial', paidAmount: half });
-    expect((await api().post(P(`/payslips/${slip._id}/pay`)).set(W.h).send({ amount: slip.net })).status).toBe(400); // more than what is left
-    expect((await api().get(P(`/runs/${run._id}`)).set(W.h)).body.run).toMatchObject({ status: 'approved', totals: { paid: half } });
+    expect((await api().post(P(`/payslips/${slip._id}/pay`)).set(F.h).send({ amount: slip.net })).status).toBe(400); // more than what is left
+    expect((await api().get(P(`/runs/${run._id}`)).set(F.h)).body.run).toMatchObject({ status: 'approved', totals: { paid: half } });
     expect((await api().get('/api/teacher/payslips').set(W.teacher1.h)).body[0].status).toBe('partial');
-    const bank = (await api().get(P(`/runs/${run._id}/bank-file`)).set(W.h)).body;
+    const bank = (await api().get(P(`/runs/${run._id}/bank-file`)).set(F.h)).body;
     expect([...bank.ready, ...bank.missing].map((r) => r.amount ?? r.net)).toEqual([Math.round((slip.net - half) * 100) / 100]); // the file asks only for the rest
     const rest = Math.round((slip.net - half) * 100) / 100;
-    const b = await api().post(P(`/payslips/${slip._id}/pay`)).set(W.h).send({ amount: rest });
+    const b = await api().post(P(`/payslips/${slip._id}/pay`)).set(F.h).send({ amount: rest });
     expect(b.body).toMatchObject({ status: 'paid', paidAmount: slip.net }); expect(b.body.payments).toHaveLength(2);
-    expect((await api().get(P(`/runs/${run._id}`)).set(W.h)).body.run.status).toBe('paid');
-    expect((await api().post(P(`/payslips/${slip._id}/pay`)).set(W.h).send({ amount: 1 })).status).toBe(409);
+    expect((await api().get(P(`/runs/${run._id}`)).set(F.h)).body.run.status).toBe('paid');
+    expect((await api().post(P(`/payslips/${slip._id}/pay`)).set(F.h).send({ amount: 1 })).status).toBe(409);
   });
   it('"mark paid" settles what is left after part payments', async () => {
     const m0 = monthsAgo(0);
-    await api().post(P(`/salaries/${t1}`)).set(W.h).send({ basic: 31000, effectiveFrom: `${m0}-01` });
-    const run = (await api().post(P('/runs')).set(W.h).send({ month: m0 })).body;
-    await api().post(P(`/runs/${run._id}/approve`)).set(W.h).send({});
-    const slip = (await api().get(P(`/runs/${run._id}`)).set(W.h)).body.payslips[0];
-    await api().post(P(`/payslips/${slip._id}/pay`)).set(W.h).send({ amount: 1000 });
-    const out = await api().post(P(`/runs/${run._id}/pay`)).set(W.h).send({ mode: 'bank_transfer' });
+    await api().post(P(`/salaries/${t1}`)).set(F.h).send({ basic: 31000, effectiveFrom: `${m0}-01` });
+    const run = (await api().post(P('/runs')).set(F.h).send({ month: m0 })).body;
+    await api().post(PA(`/runs/${run._id}/approve`)).set(W.h).send({});
+    const slip = (await api().get(P(`/runs/${run._id}`)).set(F.h)).body.payslips[0];
+    await api().post(P(`/payslips/${slip._id}/pay`)).set(F.h).send({ amount: 1000 });
+    const out = await api().post(P(`/runs/${run._id}/pay`)).set(F.h).send({ mode: 'bank_transfer' });
     expect(out.body.status).toBe('paid'); expect(out.body.totals.paid).toBe(slip.net);
   });
 });

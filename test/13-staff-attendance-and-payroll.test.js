@@ -1,14 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { setup, teardown, reset, api, makeSuperAdmin, seedWorld, login } from './helpers.js';
+import { setup, teardown, reset, api, makeSuperAdmin, seedWorld, makeFinance, login } from './helpers.js';
 import { CalendarEvent } from '../src/models/index.js';
 
 const MONTH = '2026-10'; // 31 days, 4 Sundays, 1 holiday (Fri 2 Oct) => 26 working days
 const D1 = '2026-10-05'; const D2 = '2026-10-06'; const D3 = '2026-10-07';
 
+let F;
 describe('Staff attendance registers feed payroll, and payroll covers non-teaching and transport staff', () => {
   let root; let W; let tr; let kamla; let driver; let supportLevel; let prt; let t1; let t2;
   beforeAll(async () => {
-    await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'sat');
+    await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'sat'); F = await makeFinance(W);
     t1 = W.t1.teacher._id; t2 = W.t2.teacher._id;
     await CalendarEvent.create({ tenantId: W.id, title: 'Gandhi Jayanti', type: 'holiday', startDate: '2026-10-02', endDate: '2026-10-02', sectionIds: [] });
     const c = await api().post('/api/school/staff').set(W.h).send({ name: 'Tara Transport', email: 'tara@sat.test', role: 'transport', phone: '9833333333', dob: '1984-04-04' });
@@ -21,7 +22,8 @@ describe('Staff attendance registers feed payroll, and payroll covers non-teachi
   afterAll(teardown);
   const S = (p) => `/api/school/staff-attendance${p}`;
   const T = (p) => `/api/transport/attendance${p}`;
-  const P = (p) => `/api/school/payroll${p}`;
+  const P = (p) => `/api/finance/payroll${p}`; // payroll is run from Finance
+  const PA = (p) => `/api/school/payroll${p}`; // the School Admin's window: view and approve
 
   it('everyone starts as present; teachers and general staff are the admin\'s register, transport staff the officer\'s', async () => {
     const reg = (await api().get(S(`/register?group=teachers&date=${D1}`)).set(W.h)).body;
@@ -88,29 +90,29 @@ describe('Staff attendance registers feed payroll, and payroll covers non-teachi
   });
 
   it('payroll covers staff too: pay levels for non-teaching staff, one salary list, and the right level for the right person', async () => {
-    supportLevel = (await api().post(P('/levels')).set(W.h).send({ name: 'Support Grade', appliesTo: 'non_teaching', basic: 13000, allowances: [], deductions: [] })).body;
-    prt = (await api().post(P('/levels')).set(W.h).send({ name: 'PRT', basic: 26000, allowances: [], deductions: [] })).body;
+    supportLevel = (await api().post(P('/levels')).set(F.h).send({ name: 'Support Grade', appliesTo: 'non_teaching', basic: 13000, allowances: [], deductions: [] })).body;
+    prt = (await api().post(P('/levels')).set(F.h).send({ name: 'PRT', basic: 26000, allowances: [], deductions: [] })).body;
     expect(supportLevel.appliesTo).toBe('non_teaching');
-    expect((await api().post(P(`/salaries/${kamla._id}`)).set(W.h).send({ levelId: prt._id, effectiveFrom: '2026-04-01' })).status).toBe(400); // a teaching level cannot be given to a sweeper
-    expect((await api().post(P(`/salaries/${t1}`)).set(W.h).send({ levelId: supportLevel._id, effectiveFrom: '2026-04-01' })).status).toBe(400);
-    const bulk = await api().post(P('/salaries/bulk')).set(W.h).send({ levelId: supportLevel._id, personIds: [kamla._id, driver._id], effectiveFrom: '2026-04-01', reason: 'Initial setup' });
+    expect((await api().post(P(`/salaries/${kamla._id}`)).set(F.h).send({ levelId: prt._id, effectiveFrom: '2026-04-01' })).status).toBe(400); // a teaching level cannot be given to a sweeper
+    expect((await api().post(P(`/salaries/${t1}`)).set(F.h).send({ levelId: supportLevel._id, effectiveFrom: '2026-04-01' })).status).toBe(400);
+    const bulk = await api().post(P('/salaries/bulk')).set(F.h).send({ levelId: supportLevel._id, personIds: [kamla._id, driver._id], effectiveFrom: '2026-04-01', reason: 'Initial setup' });
     expect(bulk.body).toMatchObject({ updated: 2, failed: [] });
-    expect((await api().post(P(`/salaries/${t1}`)).set(W.h).send({ levelId: prt._id, effectiveFrom: '2026-04-01' })).status).toBe(201);
-    const all = (await api().get(P('/salaries')).set(W.h)).body;
-    expect(all.items.map((x) => [x.name, x.personType]).sort()).toEqual([['Kamla Devi', 'staff'], ['Mr Sharma', 'teacher'], ['Mrs Gupta', 'teacher'], ['Ramesh Bhai', 'staff'], ['Tara Transport', 'staff']]); // the Transport officer is an employee too
-    expect(all).toMatchObject({ withSalary: 3, withoutSalary: 2 }); // Mrs Gupta and the officer have none yet
-    expect((await api().get(P('/salaries?type=staff')).set(W.h)).body.items.map((x) => x.name).sort()).toEqual(['Kamla Devi', 'Ramesh Bhai', 'Tara Transport']);
-    expect((await api().get(P('/salaries?type=teachers&status=without')).set(W.h)).body.items.map((x) => x.name)).toEqual(['Mrs Gupta']);
-    expect((await api().get(P(`/salaries/${kamla._id}`)).set(W.h)).body.person).toMatchObject({ name: 'Kamla Devi', designation: 'Sweeper', personType: 'staff' });
-    expect((await api().get(P('/summary')).set(W.h)).body).toMatchObject({ people: 5, teachers: 2, staff: 3, withSalary: 3, withoutSalary: 2 });
+    expect((await api().post(P(`/salaries/${t1}`)).set(F.h).send({ levelId: prt._id, effectiveFrom: '2026-04-01' })).status).toBe(201);
+    const all = (await api().get(P('/salaries')).set(F.h)).body;
+    expect(all.items.map((x) => [x.name, x.personType]).sort()).toEqual([['Fiona Finance', 'staff'], ['Kamla Devi', 'staff'], ['Mr Sharma', 'teacher'], ['Mrs Gupta', 'teacher'], ['Ramesh Bhai', 'staff'], ['Tara Transport', 'staff']]); // the Transport officer is an employee too
+    expect(all).toMatchObject({ withSalary: 3, withoutSalary: 3 }); // Mrs Gupta, the finance officer and the transport officer have none yet
+    expect((await api().get(P('/salaries?type=staff')).set(F.h)).body.items.map((x) => x.name).sort()).toEqual(['Fiona Finance', 'Kamla Devi', 'Ramesh Bhai', 'Tara Transport']);
+    expect((await api().get(P('/salaries?type=teachers&status=without')).set(F.h)).body.items.map((x) => x.name)).toEqual(['Mrs Gupta']);
+    expect((await api().get(P(`/salaries/${kamla._id}`)).set(F.h)).body.person).toMatchObject({ name: 'Kamla Devi', designation: 'Sweeper', personType: 'staff' });
+    expect((await api().get(P('/summary')).set(F.h)).body).toMatchObject({ people: 6, teachers: 2, staff: 4, withSalary: 3, withoutSalary: 3 });
     expect((await api().post(P(`/salaries/${kamla._id}`)).set(tr.h).send({ basic: 1, effectiveFrom: '2026-04-01' })).status).toBe(403); // the transport officer does not run payroll
   });
 
   it('absences from the registers reduce pay automatically: a day absent costs a day, a half day costs half', async () => {
-    const run = (await api().post(P('/runs')).set(W.h).send({ month: MONTH })).body;
+    const run = (await api().post(P('/runs')).set(F.h).send({ month: MONTH })).body;
     expect(run).toMatchObject({ month: MONTH, workingDays: 26, totals: { count: 3 } });
-    expect(run.skipped.map((s) => [s.name, s.reason]).sort()).toEqual([['Mrs Gupta', 'No salary set'], ['Tara Transport', expect.stringMatching(/^Joins on /)]]); // the officer started after this month
-    const { payslips } = (await api().get(P(`/runs/${run._id}`)).set(W.h)).body;
+    expect(run.skipped.map((s) => [s.name, s.reason]).sort()).toEqual([['Fiona Finance', expect.stringMatching(/^Joins on /)], ['Mrs Gupta', 'No salary set'], ['Tara Transport', expect.stringMatching(/^Joins on /)]]); // the officers started after this month
+    const { payslips } = (await api().get(P(`/runs/${run._id}`)).set(F.h)).body;
     const by = (n) => payslips.find((p) => p.personName === n);
     // Mr Sharma: 26000 a month, absent 5 Oct (1 day) + half day 6 Oct = 1.5 days => 26000 x 1.5 / 26 = 1500
     expect(by('Mr Sharma')).toMatchObject({ personType: 'teacher', workingDays: 26, unpaidDays: 1.5, paidDays: 24.5, gross: 26000, lossOfPay: 1500, net: 24500 });
@@ -125,15 +127,15 @@ describe('Staff attendance registers feed payroll, and payroll covers non-teachi
   });
 
   it('staff payslips go through the same approval, PDF and payment steps; nobody else can read them', async () => {
-    const { payslips } = (await api().get(P(`/runs/${W.run._id}`)).set(W.h)).body;
+    const { payslips } = (await api().get(P(`/runs/${W.run._id}`)).set(F.h)).body;
     const k = payslips.find((p) => p.personName === 'Kamla Devi');
-    const pdf = await api().get(P(`/payslips/${k._id}/pdf`)).set(W.h);
+    const pdf = await api().get(P(`/payslips/${k._id}/pdf`)).set(F.h);
     expect(pdf.status).toBe(200); expect(pdf.headers['content-type']).toContain('application/pdf');
-    expect((await api().post(P(`/runs/${W.run._id}/approve`)).set(W.h)).body.status).toBe('approved'); // staff have no login: nothing to notify, nothing breaks
+    expect((await api().post(PA(`/runs/${W.run._id}/approve`)).set(W.h)).body.status).toBe('approved'); // staff have no login: nothing to notify, nothing breaks
     expect((await api().get(`/api/teacher/payslips/${k._id}/pdf`).set(W.teacher1.h)).status).toBe(404); // a teacher cannot read a sweeper's payslip
-    const paid = await api().post(P(`/runs/${W.run._id}/pay`)).set(W.h).send({ mode: 'cash', reference: 'Cash payroll' });
+    const paid = await api().post(P(`/runs/${W.run._id}/pay`)).set(F.h).send({ mode: 'cash', reference: 'Cash payroll' });
     expect(paid.body).toMatchObject({ status: 'paid', totals: { paid: 49500 } });
-    const csv = await api().get(P(`/runs/${W.run._id}/export.csv`)).set(W.h);
+    const csv = await api().get(P(`/runs/${W.run._id}/export.csv`)).set(F.h);
     expect(csv.text).toContain('Kamla Devi'); expect(csv.text).toContain('Ramesh Bhai');
     // the teacher still sees only their own payslip
     expect((await api().get('/api/teacher/payslips').set(W.teacher1.h)).body.map((p) => p.personName)).toEqual(['Mr Sharma']);

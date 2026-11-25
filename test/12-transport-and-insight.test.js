@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { setup, teardown, reset, api, makeSuperAdmin, seedWorld, login, makeSchool } from './helpers.js';
+import { setup, teardown, reset, api, makeSuperAdmin, seedWorld, login, makeSchool, makeFinance } from './helpers.js';
 import { todayStr, addDays } from '../src/core/utils.js';
 
 const TODAY = todayStr('Asia/Kolkata');
@@ -201,7 +201,8 @@ describe('Transport and the School Admin class/student views', () => {
     const leaveDay = (() => { let d = addDays(TODAY, -3); while ([0, 6].includes(new Date(`${d}T00:00:00Z`).getUTCDay()) || new Date(`${d}T00:00:00Z`).getUTCDay() === 0) d = addDays(d, -1); return d; })();
     const lv = await api().post('/api/teacher/leave').set(W.teacher1.h).send({ leaveType: 'sick', startDate: leaveDay, endDate: leaveDay, reason: 'Fever and rest' });
     await api().post(`/api/school/leave/${lv.body._id}/decide`).set(W.h).send({ decision: 'approve' });
-    await api().post(`/api/school/payroll/salaries/${t1}`).set(W.h).send({ basic: 30000, allowances: [{ label: 'HRA', kind: 'percent', value: 40 }], effectiveFrom: '2026-04-01' });
+    const fin = await makeFinance(W, 'insfin');
+    await api().post(`/api/finance/payroll/salaries/${t1}`).set(fin.h).send({ basic: 30000, allowances: [{ label: 'HRA', kind: 'percent', value: 40 }], effectiveFrom: '2026-04-01' });
     const o = (await api().get(A(`/teachers/${t1}/overview`)).set(W.h)).body;
     expect(o.profile).toMatchObject({ name: 'Mr Sharma', employeeId: 'T001', subjects: ['Mathematics'] });
     expect(o.classes).toMatchObject([{ className: 'Class 8', section: 'A', subject: 'Mathematics', students: 3 }]);
