@@ -196,6 +196,41 @@ export async function createCharge(ctx, body, extra = {}) {
   return StudentCharge.create({ tenantId: ctx.tenantId, studentId: body.studentId, yearId: year?._id, kind: 'other', label: body.label, amount: body.amount, dueDate: body.dueDate, createdBy: ctx.actorId, ...extra });
 }
 
+/**
+ * An extra charge (a special teacher, a trip, an activity) for every student of a section or a class, or for exactly the students given.
+ * Anyone who already has a charge with the same name is left out, so adding it twice never bills anyone twice. With `preview` nothing is saved.
+ */
+export async function createChargesBulk(ctx, { sectionId, classId, studentIds, label, amount, dueDate, preview }) {
+  const tenantId = ctx.tenantId;
+  let ids;
+  if (studentIds?.length) ids = studentIds;
+  else {
+    if (sectionId && !(await Section.exists({ _id: sectionId, tenantId }))) throw notFound('Section not found');
+    if (classId && !(await ClassModel.exists({ _id: classId, tenantId }))) throw notFound('Class not found');
+    const enr = await StudentEnrolment.find({ tenantId, status: 'active', ...(sectionId ? { sectionId } : {}), ...(classId ? { classId } : {}) }).select('studentId').lean();
+    ids = enr.map((e) => String(e.studentId));
+  }
+  const students = await Student.find({ tenantId, _id: { $in: ids }, status: 'active' }).select('name admissionNo userId').sort({ name: 1 }).lean();
+  if (!students.length) throw bad('There are no active students there to charge');
+  const enrs = await StudentEnrolment.find({ tenantId, status: 'active', studentId: { $in: students.map((s) => s._id) } }).select('studentId classId sectionId').lean();
+  const [classes, sections] = await Promise.all([ClassModel.find({ tenantId, _id: { $in: enrs.map((e) => e.classId) } }).select('name').lean(), Section.find({ tenantId, _id: { $in: enrs.map((e) => e.sectionId) } }).select('name').lean()]);
+  const C = new Map(classes.map((c) => [String(c._id), c.name])); const S = new Map(sections.map((x) => [String(x._id), x.name]));
+  const E = new Map(enrs.map((e) => [String(e.studentId), e]));
+  const had = new Set((await StudentCharge.find({ tenantId, studentId: { $in: students.map((s) => s._id) }, kind: 'other', label: new RegExp(`^${escapeRegex(label)}$`, 'i') }).select('studentId').lean()).map((c) => String(c.studentId)));
+  const rows = []; const skipped = [];
+  for (const st of students) {
+    const e = E.get(String(st._id));
+    const row = { studentId: st._id, name: st.name, admissionNo: st.admissionNo, className: C.get(String(e?.classId)), section: S.get(String(e?.sectionId)) };
+    if (had.has(String(st._id))) skipped.push({ ...row, reason: 'Already has this charge' }); else rows.push(row);
+  }
+  if (!preview) {
+    for (const r of rows) await createCharge(ctx, { studentId: r.studentId, label, amount, dueDate });
+    const users = students.filter((s) => rows.some((r) => String(r.studentId) === String(s._id))).map((s) => s.userId).filter(Boolean);
+    if (users.length) await notifyUsers(tenantId, users, { category: 'fees', title: 'New charge added', body: `${label}: ₹${amount}${dueDate ? `, due ${dueDate}` : ''}.`, link: { type: 'fees' } });
+  }
+  return { preview: !!preview, label, amount, dueDate, applied: preview ? 0 : rows.length, count: rows.length, total: money(rows.length * amount), rows, skipped };
+}
+
 /** Reduce what a student owes (scholarship, sibling discount…). Needs a reason and is kept on the charge. */
 export async function addConcession(ctx, chargeId, { amount, reason }, byName) {
   const c = await StudentCharge.findOne({ _id: chargeId, tenantId: ctx.tenantId });
@@ -517,11 +552,18 @@ export async function listPayments(ctx, q) {
   const f = { tenantId: ctx.tenantId };
   if (q.from || q.to) f.paidOn = { ...(q.from ? { $gte: q.from } : {}), ...(q.to ? { $lte: q.to } : {}) };
   if (q.mode) f.mode = q.mode;
+  // a class or section: the receipts of everyone who has been enrolled in it, whatever their status now (a student who left keeps their receipts)
+  const and = [];
+  if (q.sectionId || q.classId) {
+    const enr = await StudentEnrolment.find({ tenantId: ctx.tenantId, ...(q.sectionId ? { sectionId: q.sectionId } : {}), ...(q.classId ? { classId: q.classId } : {}) }).select('studentId').lean();
+    and.push({ studentId: { $in: [...new Set(enr.map((e) => String(e.studentId)))] } });
+  }
   if (q.q) {
     const rx = new RegExp(escapeRegex(q.q), 'i');
     const ids = (await Student.find({ tenantId: ctx.tenantId, $or: [{ name: rx }, { admissionNo: rx }] }).select('_id').lean()).map((s) => s._id);
-    f.$or = [{ receiptNo: rx }, { reference: rx }, { studentId: { $in: ids } }];
+    and.push({ $or: [{ receiptNo: rx }, { reference: rx }, { studentId: { $in: ids } }] });
   }
+  if (and.length) f.$and = and;
   const rows = await Payment.find(f).sort({ paidOn: -1, createdAt: -1 }).limit(q.limit).lean();
   const stu = mk(await Student.find({ tenantId: ctx.tenantId, _id: { $in: rows.map((r) => r.studentId) } }).select('name admissionNo').lean());
   return rows.map((r) => ({ ...r, student: stu.get(String(r.studentId))?.name, admissionNo: stu.get(String(r.studentId))?.admissionNo }));

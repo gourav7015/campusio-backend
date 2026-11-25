@@ -35,6 +35,7 @@ export async function buildDemo(base) {
     name: 'Greenfield Public School', code: 'gps', board: 'CBSE', address: '12 Park Road, Pune', phone: '020 5550 1234',
     subscription: { plan: 'standard', status: 'active' }, admin: { name: 'Anita Deshmukh', email: DEMO.admin.loginId, phone: '9811000001', dob: '1978-03-15' },
   });
+  await call('PUT', `/api/platform/schools/${created.school?._id || created.school?.id || created.id}/flags`, root, { onlinePayments: true }); // the demo shows the pay-online flow with the test gateway (no money moves)
   const keep = async (userId, pw) => User.updateOne({ _id: userId }, { passwordHash: await hashPassword(pw), mustChangePassword: false });
   await keep(created.admin.id, DEMO.admin.password);
   const A = await login(DEMO.admin.loginId, DEMO.admin.password, 'admin');
@@ -124,6 +125,21 @@ export async function buildDemo(base) {
   const conc = await finance('GET', `/students/${students[1]._id}/account`);
   const stillOpen = conc.charges.find((c) => c.status === 'open'); // the next unpaid month
   await finance('POST', `/charges/${stillOpen._id}/concession`, { amount: Math.min(500, stillOpen.outstanding), reason: 'Sibling discount' });
+
+  // vendors: two the School Admin has approved, with bills in different states (part paid and overdue, paid in full, and one coming up)
+  const vend = async (v) => { const x = await finance('POST', '/vendors', v); await admin('POST', `/approvals/vendors/${x._id}`, { approve: true }); return x; };
+  const stationer = await vend({ name: 'Sharma Stationers', category: 'Stationery', contactPerson: 'Mahesh Sharma', phone: '9876501234', email: 'accounts@sharmastationers.example', city: 'Rajkot', bankName: 'State Bank of India', accountName: 'Sharma Stationers', accountNo: '30123456789', ifsc: 'SBIN0001234', paymentTerms: '30 days from the bill' });
+  const furniture = await vend({ name: 'Shree Office Furniture', category: 'Furniture', contactPerson: 'Kiran Patel', phone: '9825012345', city: 'Rajkot', gstin: '24ABCDE1234F1Z5', pan: 'ABCDE1234F', bankName: 'HDFC Bank', accountName: 'Shree Office Furniture', accountNo: '50100123456789', ifsc: 'HDFC0000321', paymentTerms: '15 days from delivery' });
+  const bill = async (vendorId, title, amount, date, dueDate, department, extra = {}) => { const e = await finance('POST', '/expenses', { date, department, title, amount, dueDate, vendorId, ...extra }); await admin('POST', `/approvals/expenses/${e._id}`, { approve: true }); return e; };
+  const sheets = await bill(stationer._id, 'Exam answer sheets', 6200, due(-45), due(-30), 'Examinations');
+  await finance('POST', `/expenses/${sheets._id}/pay`, { mode: 'bank_transfer', reference: 'UTR50021', paidOn: due(-40) });
+  const registers = await bill(stationer._id, 'Notebooks and registers', 18500, due(-25), due(-5), 'Office supplies');
+  await finance('POST', `/expenses/${registers._id}/pay`, { amount: 10000, mode: 'bank_transfer', reference: 'UTR50177', paidOn: due(-20) });
+  await bill(furniture._id, 'Staff room chairs (10)', 42000, due(-10), due(12), 'Administration', { nature: 'capital', work: 'Staff room furniture' });
+  // budgets for the year: running costs and one asset purchase, so the Budgets page shows spent against allocated
+  await finance('PUT', '/budgets', { kind: 'revenue', department: 'Examinations', allocated: 40000 });
+  await finance('PUT', '/budgets', { kind: 'revenue', department: 'Office supplies', allocated: 60000 });
+  await finance('PUT', '/budgets', { kind: 'capital', department: 'Administration', work: 'Staff room furniture', allocated: 100000 });
 
   // library: catalogue + a few loans (one overdue)
   const books = [['Wings of Fire', 'A. P. J. Abdul Kalam', 'Biography', 250, 3], ['Malgudi Days', 'R. K. Narayan', 'Fiction', 180, 2], ['The Story of My Experiments with Truth', 'M. K. Gandhi', 'Biography', 220, 2], ['A Brief History of Time', 'Stephen Hawking', 'Science', 399, 2], ['Panchatantra', 'Vishnu Sharma', 'Fiction', 150, 4], ['Oxford Dictionary', 'Oxford Press', 'Reference', 520, 1], ['Discovery of India', 'Jawaharlal Nehru', 'History', 310, 2], ['Gitanjali', 'Rabindranath Tagore', 'Poetry', 140, 2]];
@@ -243,7 +259,7 @@ export async function buildDemo(base) {
     await transport('PUT', '/attendance/register', { group: 'transport', date, submit: true, entries: k === 4 ? [{ personId: cnd._id, status: 'late', remark: 'Bus breakdown' }] : [] });
   }
 
-  // payroll is run by Finance (levels, salaries, the month, payments); the School Admin approves the month
+  // payroll is run by Finance (levels, salaries, the month, approval, payments); the School Admin only looks
   const prt = await finance('POST', '/payroll/levels', { name: 'PRT', description: 'Primary Teacher', basic: 28000, allowances: [{ label: 'HRA', kind: 'percent', value: 40 }, { label: 'Transport', kind: 'fixed', value: 2000 }], deductions: [{ label: 'Provident Fund', kind: 'percent', value: 12 }] });
   await finance('POST', '/payroll/levels', { name: 'TGT', description: 'Trained Graduate Teacher', basic: 38000, allowances: [{ label: 'HRA', kind: 'percent', value: 40 }, { label: 'Transport', kind: 'fixed', value: 2500 }], deductions: [{ label: 'Provident Fund', kind: 'percent', value: 12 }] });
   await finance('POST', '/payroll/salaries/bulk', { levelId: prt._id, personIds: Object.values(T).map((t) => t._id), effectiveFrom: '2026-04-01', reason: 'Initial salary setup' });
@@ -251,7 +267,7 @@ export async function buildDemo(base) {
   await finance('POST', '/payroll/salaries/bulk', { levelId: supportLevel._id, personIds: [...generalStaff.map((m) => m._id), drv._id, cnd._id], effectiveFrom: '2026-04-01', reason: 'Initial salary setup' });
   const prev = new Date(`${today.slice(0, 7)}-01T00:00:00Z`); prev.setUTCMonth(prev.getUTCMonth() - 1);
   const lastRun = await finance('POST', '/payroll/runs', { month: prev.toISOString().slice(0, 7) });
-  await admin('POST', `/payroll/runs/${lastRun._id}/approve`);
+  await finance('POST', `/payroll/runs/${lastRun._id}/approve`);
   await finance('POST', `/payroll/runs/${lastRun._id}/pay`, { mode: 'bank_transfer', reference: 'NEFT-DEMO-001' });
 
   return { rahul, students, teachers: teacherDefs, sections: sec };

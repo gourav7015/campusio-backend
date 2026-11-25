@@ -1,5 +1,6 @@
+import { paymentsOf, paidOf } from './expenses.service.js';
 import { Vendor, Expense, User } from '../../models/index.js';
-import { notFound, conflict, bad, escapeRegex, toCsv } from '../../core/utils.js';
+import { notFound, conflict, bad, escapeRegex, toCsv, round2, addDays } from '../../core/utils.js';
 import { nextSeq } from '../../services/context.js';
 import { notifyUsers } from '../../services/notify.js';
 
@@ -20,10 +21,10 @@ export async function listVendors(ctx, q) {
     Vendor.distinct('category', { tenantId: ctx.tenantId }),
   ]);
   const by = Object.fromEntries(counts.map((c) => [c._id, c.n]));
-  const spend = items.length ? await Expense.aggregate([{ $match: { tenantId: ctx.tenantId, vendorId: { $in: items.map((v) => v._id) }, status: 'approved' } }, { $group: { _id: '$vendorId', amount: { $sum: '$amount' }, n: { $sum: 1 } } }]) : [];
+  const spend = items.length ? await Expense.aggregate([{ $match: { tenantId: ctx.tenantId, vendorId: { $in: items.map((v) => v._id) }, status: 'approved' } }, { $group: { _id: '$vendorId', amount: { $sum: '$amount' }, paid: { $sum: { $cond: [{ $eq: ['$paymentStatus', 'paid'] }, '$amount', { $ifNull: ['$paidAmount', 0] }] } }, n: { $sum: 1 } } }]) : [];
   const S = new Map(spend.map((s) => [String(s._id), s]));
   return {
-    total, items: items.map((v) => ({ ...v, spent: S.get(String(v._id))?.amount || 0, expenses: S.get(String(v._id))?.n || 0 })),
+    total, items: items.map((v) => { const x = S.get(String(v._id)); return { ...v, spent: round2(x?.amount || 0), paid: round2(x?.paid || 0), owed: round2((x?.amount || 0) - (x?.paid || 0)), expenses: x?.n || 0 }; }),
     counts: { pending: by.pending || 0, approved: by.approved || 0, rejected: by.rejected || 0, inactive: by.inactive || 0, all: Object.values(by).reduce((a, b) => a + b, 0) }, categories: cats.filter(Boolean).sort(),
   };
 }
@@ -132,4 +133,60 @@ export async function exportVendors(ctx) {
   const col = (label, k) => ({ label, get: (r) => r[k] });
   return toCsv(rows, [col('Code', 'code'), col('Name', 'name'), col('Category', 'category'), col('Status', 'status'), col('Contact person', 'contactPerson'), col('Phone', 'phone'), col('Email', 'email'), col('Address', 'address'), col('City', 'city'), col('State', 'state'), col('Pincode', 'pincode'),
     col('GSTIN', 'gstin'), col('PAN', 'pan'), col('Bank', 'bankName'), col('Account name', 'accountName'), col('Account number', 'accountNo'), col('IFSC', 'ifsc'), col('UPI', 'upi'), col('Payment terms', 'paymentTerms'), col('Notes', 'notes')]);
+}
+
+
+// ───────────── what is owed to a vendor, what has been paid, and what is coming ─────────────
+const billView = (e, today) => {
+  const paid = paidOf(e); const outstanding = round2(e.amount - paid);
+  return { _id: e._id, date: e.date, title: e.title, billNo: e.billNo, amount: e.amount, dueDate: e.dueDate, status: e.status, paymentStatus: e.paymentStatus, paid, outstanding,
+    overdue: e.status === 'approved' && outstanding > 0 && !!e.dueDate && e.dueDate < today, attachments: (e.attachments || []).length };
+};
+const addTo = (acc, e, today) => {
+  if (e.status !== 'approved') return;
+  const b = billView(e, today);
+  acc.billed += b.amount; acc.paid += b.paid; acc.outstanding += b.outstanding;
+  if (b.outstanding > 0) { if (!b.dueDate) acc.undated += b.outstanding; else if (b.dueDate < today) acc.overdue += b.outstanding; else acc.upcoming += b.outstanding; }
+};
+const roundAll = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, round2(v)]));
+const blank = () => ({ billed: 0, paid: 0, outstanding: 0, overdue: 0, upcoming: 0, undated: 0 });
+
+/**
+ * One vendor's account: the bills approved for them, every payment made (each with its voucher number) and what is still to pay, split into overdue,
+ * upcoming (due today or later) and bills with no due date. `from`/`to` narrow the payments list and the paid-in-period figure.
+ */
+export async function vendorLedger(ctx, vendorId, { from, to } = {}) {
+  const vendor = await Vendor.findOne({ _id: vendorId, tenantId: ctx.tenantId }).select('code name category phone email status paymentTerms bankName accountNo upi').lean();
+  if (!vendor) throw notFound('Vendor not found');
+  const expenses = await Expense.find({ tenantId: ctx.tenantId, vendorId }).sort({ date: -1, createdAt: -1 }).lean();
+  const totals = blank(); expenses.forEach((e) => addTo(totals, e, ctx.today));
+  const inRange = (d) => (!from || d >= from) && (!to || d <= to);
+  const payments = expenses.flatMap((e) => paymentsOf(e).map((p) => ({ expenseId: e._id, paymentId: p._id ? String(p._id) : 'older', title: e.title, billNo: e.billNo, amount: p.amount, paidOn: p.paidOn, mode: p.mode, reference: p.reference, note: p.note, byName: p.byName, voucherNo: p.voucherNo })))
+    .filter((p) => inRange(p.paidOn || '')).sort((a, b) => String(b.paidOn).localeCompare(String(a.paidOn)));
+  const bills = expenses.map((e) => billView(e, ctx.today));
+  return { vendor, totals: roundAll(totals), paidInPeriod: round2(payments.reduce((n, p) => n + p.amount, 0)), paymentsInPeriod: payments.length, bills, payments, upcoming: bills.filter((b) => b.status === 'approved' && b.outstanding > 0).sort((a, b) => String(a.dueDate || '9999').localeCompare(String(b.dueDate || '9999'))) };
+}
+
+const periodKey = (d, by) => (by === 'year' ? d.slice(0, 4) : by === 'month' ? d.slice(0, 7) : d);
+/**
+ * Vendor payments over time, by day, month or year: what was paid in each period (by the date of payment) and what falls due in it (unpaid balances by due date).
+ * For one vendor or all of them. Without dates it covers the recent past and the near future (see the window below).
+ */
+export async function vendorPaymentsReport(ctx, { by = 'month', from, to, vendorId } = {}) {
+  // the window looks back over what was paid and forward over what falls due: 30 days either way for days, 12 months back and 6 ahead for months, 5 years back and next year for years
+  const y = Number(ctx.today.slice(0, 4)); const m = Number(ctx.today.slice(5, 7));
+  const monthStart = (back) => { const t = y * 12 + (m - 1) - back; return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}-01`; };
+  const start = from || (by === 'day' ? addDays(ctx.today, -29) : by === 'month' ? monthStart(11) : `${y - 4}-01-01`);
+  const end = to || (by === 'day' ? addDays(ctx.today, 30) : by === 'month' ? addDays(monthStart(-7), -1) : `${y + 1}-12-31`);
+  const expenses = await Expense.find({ tenantId: ctx.tenantId, status: 'approved', vendorId: vendorId ? vendorId : { $ne: null } }).lean();
+  const rows = new Map(); const row = (k) => { if (!rows.has(k)) rows.set(k, { period: k, paid: 0, payments: 0, due: 0, bills: 0 }); return rows.get(k); };
+  const totals = blank(); expenses.forEach((e) => addTo(totals, e, ctx.today));
+  let paidInRange = 0; let dueInRange = 0;
+  for (const e of expenses) {
+    for (const p of paymentsOf(e)) { if (p.paidOn && p.paidOn >= start && p.paidOn <= end) { const r = row(periodKey(p.paidOn, by)); r.paid += p.amount; r.payments += 1; paidInRange += p.amount; } }
+    const owed = round2(e.amount - paidOf(e));
+    if (owed > 0 && e.dueDate && e.dueDate >= start && e.dueDate <= end) { const r = row(periodKey(e.dueDate, by)); r.due += owed; r.bills += 1; dueInRange += owed; }
+  }
+  const items = [...rows.values()].map((r) => ({ ...r, paid: round2(r.paid), due: round2(r.due) })).sort((a, b) => a.period.localeCompare(b.period));
+  return { by, from: start, to: end, items, paidInPeriod: round2(paidInRange), dueInPeriod: round2(dueInRange), totals: roundAll(totals) };
 }

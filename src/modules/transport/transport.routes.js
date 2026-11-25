@@ -25,6 +25,12 @@ r.post('/buses', async (req, res) => {
   await audit(req, 'transport.bus_created', 'Bus', b._id, `Added bus ${b.busNo}`);
   res.status(201).json(b);
 });
+r.post('/buses/swap', async (req, res) => {
+  const b = parse(v.swapBody, req.body);
+  const out = await svc.swapCrew(req.ctx, b);
+  if (!b.preview) await audit(req, 'transport.crew_swapped', 'Bus', b.busId, `Swapped crew (${b.what}): ${out.changes.map((c) => `${c.busNo} ${c.seat}: ${c.from || 'none'} to ${c.to || 'none'}`).join('; ')}`);
+  res.json(out);
+});
 r.get('/buses/:id', async (req, res) => res.json(await svc.getBus(req.ctx, req.params.id)));
 r.patch('/buses/:id', async (req, res) => {
   const b = await svc.updateBus(req.ctx, req.params.id, parse(v.busPatch, req.body));

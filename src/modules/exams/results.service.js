@@ -1,5 +1,7 @@
 import PDFDocument from 'pdfkit';
-import { Examination, ExaminationSubject, ReportCard, Subject, StudentEnrolment, Student, Section, ClassModel } from '../../models/index.js';
+import { Examination, ExaminationSubject, ReportCard, Subject, StudentEnrolment, Student, Section, ClassModel, AcademicYear, School } from '../../models/index.js';
+import { loadLook } from '../../services/documents/look.js';
+import { drawReportCard } from '../../services/documents/reportcard.js';
 import { notFound, daysBetween, round1 } from '../../core/utils.js';
 import { submittedRecords, summarize, studentCounts, summarizeCounts } from '../../services/attendance.js';
 
@@ -75,32 +77,35 @@ export async function dashboardResult(ctx) {
   return { examId: latest.examId, exam: latest.snapshot.exam.name, percentage: latest.snapshot.percentage, grade: latest.snapshot.grade, resultStatus: latest.snapshot.resultStatus, subjects: latest.snapshot.subjects.map((s) => ({ subject: s.subject, percentage: s.percentage, grade: s.grade })) };
 }
 
-export function renderReportCardPdf(card, schoolName, res) {
-  const s = card.snapshot;
-  const doc = new PDFDocument({ size: 'A4', margin: 48 });
+/** Everything the printed report card says: the immutable snapshot, plus the class, roll number, rank and guardian as they are now. */
+async function reportCardDocument(card) {
+  const sn = card.snapshot;
+  const [cls, sec, year, enr, student, peers, school] = await Promise.all([
+    card.classId ? ClassModel.findById(card.classId).select('name').lean() : null, card.sectionId ? Section.findById(card.sectionId).select('name').lean() : null,
+    card.yearId ? AcademicYear.findById(card.yearId).select('name').lean() : null, card.enrolmentId ? StudentEnrolment.findById(card.enrolmentId).select('rollNo').lean() : null,
+    Student.findById(card.studentId).select('dob guardians').lean(),
+    ReportCard.find({ tenantId: card.tenantId, examId: card.examId, sectionId: card.sectionId, isCurrent: true }).select('snapshot.percentage').lean(),
+    School.findById(card.tenantId).select('settings.grading').lean(),
+  ]);
+  const g = school?.settings?.grading || {};
+  const att = sn.attendance || {};
+  return {
+    examName: sn.exam.name, yearName: year?.name, version: card.version, correctionReason: card.correctionReason,
+    name: sn.student.name, admissionNo: sn.student.admissionNo, classLine: [cls?.name, sec?.name].filter(Boolean).join(' · '), rollNo: enr?.rollNo != null ? String(enr.rollNo).padStart(2, '0') : null,
+    dob: student?.dob, guardian: student?.guardians?.[0]?.name, attendanceLine: att.percentage != null ? `${att.percentage}% · ${att.present} of ${att.workingDays} days` : null,
+    issuedOn: (card.publishedAt || new Date()).toISOString().slice(0, 10), generatedOn: new Date().toISOString().slice(0, 10),
+    subjects: sn.subjects || [], totalObtained: sn.totalObtained, totalMax: sn.totalMax, percentage: sn.percentage, grade: sn.grade, resultStatus: sn.resultStatus,
+    rank: peers.length ? 1 + peers.filter((p) => (p.snapshot?.percentage ?? 0) > (sn.percentage ?? 0)).length : null, outOf: peers.length,
+    teacherRemark: sn.teacherRemark, principalRemark: sn.principalRemark, scale: g.scale, passPercentage: g.passPercentage,
+  };
+}
+
+/** The report card as a PDF, in the school's own letterhead and colour (see services/documents/reportcard.js). */
+export async function renderReportCardPdf(card, res) {
+  const [look, data] = await Promise.all([loadLook(card.tenantId), reportCardDocument(card)]);
+  const doc = new PDFDocument({ size: 'A4', margin: 0, info: { Title: `Report card ${data.name} ${data.examName}` } });
   doc.pipe(res);
-  doc.fontSize(18).text(schoolName, { align: 'center' });
-  doc.fontSize(13).text(`Report Card — ${s.exam.name}`, { align: 'center' });
-  if (card.version > 1) doc.fontSize(9).fillColor('#666').text(`Revised version ${card.version}${card.correctionReason ? ` — ${card.correctionReason}` : ''}`, { align: 'center' }).fillColor('black');
-  doc.moveDown();
-  doc.fontSize(11).text(`Student: ${s.student.name}`).text(`Admission No: ${s.student.admissionNo}`).moveDown();
-  const cols = [48, 190, 440, 500];
-  const head = ['Subject', 'Marks by field', 'Total', 'Grade'];
-  doc.font('Helvetica-Bold');
-  const hy = doc.y;
-  head.forEach((h, i) => doc.text(h, cols[i], hy, { width: i === 1 ? 240 : 70 }));
-  doc.font('Helvetica').moveDown(0.3);
-  for (const r of s.subjects) {
-    const y = doc.y;
-    const fields = r.absent ? 'Absent' : r.exempt ? 'Exempt' : (r.components || []).map((c) => `${c.label} ${c.value ?? '-'}/${c.max}`).join('  ·  ');
-    const cells = [r.subject, fields, r.exempt ? 'EX' : `${r.obtained ?? '-'} / ${r.max}`, r.grade || '-'];
-    cells.forEach((c, i) => doc.text(String(c), cols[i], y, { width: i === 1 ? 240 : 70 }));
-    doc.moveDown(0.4);
-  }
-  doc.moveDown().font('Helvetica-Bold').text(`Total: ${s.totalObtained} / ${s.totalMax}   Percentage: ${s.percentage ?? '-'}%   Grade: ${s.grade ?? '-'}   Result: ${String(s.resultStatus).toUpperCase()}`, 48);
-  doc.font('Helvetica').moveDown().text(`Attendance: ${s.attendance.percentage ?? '-'}% (${s.attendance.present} present / ${s.attendance.workingDays} days)`);
-  if (s.teacherRemark) doc.moveDown().text(`Class teacher remarks: ${s.teacherRemark}`);
-  if (s.principalRemark) doc.text(`Principal remarks: ${s.principalRemark}`);
+  drawReportCard(doc, look, data);
   doc.end();
 }
 

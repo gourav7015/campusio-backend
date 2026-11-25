@@ -40,6 +40,8 @@ export const defaultSettings = () => ({
   // working hours for staff. A check-in after shiftStart + graceMinutes is late; less than halfDayHours is a half day.
   // location (optional): staff may check in from their own login only within radiusMeters of the school.
   staffAttendance: { shiftStart: '08:00', shiftEnd: '15:00', graceMinutes: 10, fullDayHours: 6, halfDayHours: 3, checkInOpensBeforeMinutes: 60, checkInClosesAtShiftEnd: true, location: null },
+  // payroll: the day of the month on which the month's payroll is prepared by itself (0 = switched off). Finance then checks it, adjusts it and approves it.
+  payroll: { generateDay: 25 },
   // statutory deductions (India). Off by default: a school switches on what applies to it.
   statutory: {
     pf: { enabled: false, employeeRate: 12, employerRate: 12, wageCeiling: 15000 },
@@ -642,6 +644,7 @@ export const Book = model('Book', (() => {
   const s = new Schema({
     tenantId: tenant, title: { type: String, required: true, trim: true }, author: { type: String, trim: true }, isbn: { type: String, trim: true }, category: { type: String, trim: true },
     publisher: String, edition: String, language: String, shelf: String, price: { type: Number, default: 0 }, description: String,
+    referenceOnly: { type: Boolean, default: false }, // read in the library only: never lent out
     status: { type: String, enum: ['active', 'archived'], default: 'active' },
   }, opts);
   s.index({ tenantId: 1, title: 1 }); s.index({ tenantId: 1, isbn: 1 });
@@ -741,6 +744,7 @@ export const StaffMember = model('StaffMember', (() => {
     status: { type: String, enum: ['active', 'inactive'], default: 'active' }, createdBy: ref('User'),
     deskRole: { type: String, enum: ['finance', 'library', 'transport'] }, // set for the school's own officers (finance, librarian, transport officer): they are employees too, kept in step with their desk login
     canMarkAttendance: { type: Boolean, default: false }, // may take the attendance of teachers and staff from the Staff portal
+    alsoBusRoles: { type: [{ type: String, enum: ['driver', 'conductor'] }], default: [] }, // a driver who can also conduct (or the other way round): seats beyond the one their designation carries
   }, opts);
   s.index({ tenantId: 1, staffId: 1 }, { unique: true });
   return s;
@@ -804,7 +808,10 @@ export const Expense = model('Expense', (() => {
     status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
     submittedBy: ref('User'), submittedByName: String, decidedBy: ref('User'), decidedByName: String, decidedAt: Date, decisionNote: String,
     // money goes out only after approval: Finance records the payment against an approved expense
-    paymentStatus: { type: String, enum: ['unpaid', 'paid'], default: 'unpaid' }, paidOn: String, paymentMode: String, paymentRef: String, paymentNote: String, paidByName: String, paidAt: Date,
+    // paid in one go or in parts: `payments` is append-only (a payment is never edited or deleted); the fields after it mirror the latest payment for older screens
+    dueDate: String, paidAmount: { type: Number, default: 0 },
+    payments: { type: [new Schema({ amount: { type: Number, required: true }, paidOn: String, mode: String, reference: String, note: String, byName: String, voucherNo: String, at: { type: Date, default: Date.now } })], default: [] },
+    paymentStatus: { type: String, enum: ['unpaid', 'part', 'paid'], default: 'unpaid' }, paidOn: String, paymentMode: String, paymentRef: String, paymentNote: String, paidByName: String, paidAt: Date,
   }, opts);
   s.index({ tenantId: 1, status: 1, date: -1 });
   return s;

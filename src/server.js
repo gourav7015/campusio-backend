@@ -11,6 +11,7 @@ import { runMigrations } from './core/migrations.js';
 import { alert } from './services/alerts.js';
 import { runRetention } from './services/retention.js';
 import { busDocumentReminders } from './modules/transport/transport.service.js';
+import { autoGeneratePayroll } from './modules/payroll/payroll.service.js';
 
 mongoose.set('strictQuery', true);
 
@@ -33,6 +34,8 @@ async function main() {
     schedule('payment-order-tidy', 5 * 60 * 1000, () => tidyOrders().then((n) => n && { tidied: n })),
     // vehicle documents about to expire: the transport officer is told at 30 days, 7 days and on expiry
     schedule('bus-document-reminders', 6 * 60 * 60 * 1000, () => busDocumentReminders().then((n) => n && { sent: n })),
+    // each school's payroll for the month prepares itself on the school's payroll day (checked every few hours)
+    schedule('auto-payroll', 3 * 60 * 60 * 1000, () => autoGeneratePayroll().then((n) => n && { prepared: n })),
     // old notifications, mail records and ended sessions are cleared out once a day (docs/DATA_RETENTION.md)
     schedule('retention', 24 * 60 * 60 * 1000, () => runRetention()),
   ];

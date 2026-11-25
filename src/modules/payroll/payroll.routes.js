@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { parse, notFound, forbidden } from '../../core/utils.js';
+import { parse, notFound, forbidden, conflict } from '../../core/utils.js';
 import { audit } from '../../services/audit.js';
 import * as v from './payroll.validation.js';
 import * as svc from './payroll.service.js';
@@ -13,19 +13,24 @@ const pdf = async (req, res, p) => {
 
 /**
  * Payroll: pay levels, salaries, payroll runs and payslips. The money is run by the Finance department (mounted for Finance), the same way fees and expenses are.
- * The School Admin sees everything and approves each month's payroll, and does nothing else here; the Super Admin acting on a school can do it all (support, data work).
- * The Finance role prepares and pays but cannot approve its own run.
+ * Each month's payroll prepares itself on the school's payroll day; Finance checks it, adjusts it, approves it and records the payments.
+ * The School Admin sees everything and changes nothing; the Super Admin acting on a school can do it all (support, data work).
  */
 export const adminRoutes = Router();
 const a = adminRoutes;
 a.use('/payroll', (req, _res, next) => {
-  const approving = req.method === 'POST' && /^\/runs\/[a-f0-9]{24}\/approve$/i.test(req.path);
-  if (req.user.role === 'finance' && approving) throw forbidden('The School Admin approves each month\'s payroll');
-  if (req.user.role === 'school_admin' && !approving && !['GET', 'HEAD'].includes(req.method)) throw forbidden('Payroll is run by Finance. The School Admin can view it and approve each month.');
+  // the School Admin only looks; Finance and (for support) the Super Admin do the work, approval included
+  if (req.user.role === 'school_admin' && !['GET', 'HEAD'].includes(req.method)) throw forbidden('Payroll is run by Finance. The School Admin can view it.');
   next();
 });
 const withName = (req) => { req.ctx.actorName = req.user.name; return req.ctx; };
 
+a.get('/payroll/settings', async (req, res) => res.json(svc.payrollSettings(req.ctx)));
+a.put('/payroll/settings', async (req, res) => {
+  const out = await svc.setPayrollSettings(req.ctx, parse(v.payrollSettingsBody, req.body));
+  await audit(req, 'payroll.settings', 'School', req.tenantId, out.generateDay ? `Payroll is prepared on day ${out.generateDay} of each month` : 'Automatic payroll switched off');
+  res.json(out);
+});
 a.get('/payroll/summary', async (req, res) => res.json(await svc.summary(req.ctx)));
 a.get('/payroll/levels', async (req, res) => res.json(await svc.listLevels(req.ctx)));
 a.post('/payroll/levels', async (req, res) => {
@@ -46,6 +51,12 @@ a.post('/payroll/salaries/bulk', async (req, res) => {
   await audit(req, 'payroll.salary_bulk', 'Person', null, `Applied a pay level to ${out.updated} person(s)`, { failed: out.failed.length });
   res.json(out);
 });
+a.post('/payroll/salaries/increment', async (req, res) => {
+  const b = parse(v.incrementBody, req.body);
+  const out = await svc.incrementSalaries(withName(req), b);
+  if (!b.preview) await audit(req, 'payroll.increment', 'Person', null, `Increased basic pay by ${b.mode === 'amount' ? `₹${b.amount}` : `${b.percent}%`} from ${b.effectiveFrom} for ${out.applied} person(s)`, { failed: out.failed.length });
+  res.json(out);
+});
 a.get('/payroll/salaries/:personId', async (req, res) => res.json(await svc.salaryHistory(req.ctx, req.params.personId)));
 a.post('/payroll/salaries/:personId', async (req, res) => {
   const out = await svc.setSalary(withName(req), req.params.personId, parse(v.salaryBody, req.body));
@@ -62,6 +73,12 @@ a.post('/payroll/runs', async (req, res) => {
 a.get('/payroll/runs/:id', async (req, res) => res.json(await svc.getRun(req.ctx, req.params.id)));
 a.post('/payroll/runs/:id/recalculate', async (req, res) => res.json(await svc.recalculate(req.ctx, req.params.id)));
 a.delete('/payroll/runs/:id', async (req, res) => { await svc.deleteRun(req.ctx, req.params.id); await audit(req, 'payroll.run_deleted', 'PayrollRun', req.params.id, 'Deleted a draft payroll'); res.json({ ok: true }); });
+a.post('/payroll/runs/:id/bonus', async (req, res) => {
+  const b = parse(v.bonusBody, req.body);
+  const out = await svc.bonusRun(req.ctx, req.params.id, b);
+  if (!b.preview) await audit(req, 'payroll.bonus', 'PayrollRun', req.params.id, `Added "${b.label}" to ${out.applied} payslip(s), ₹${out.total} in all`);
+  res.json(out);
+});
 a.post('/payroll/runs/:id/approve', async (req, res) => {
   const run = await svc.approve(req.ctx, req.params.id);
   await audit(req, 'payroll.run_approved', 'PayrollRun', run._id, `Approved payroll ${run.month}: net ${run.totals.net}`);
@@ -89,7 +106,11 @@ a.post('/payroll/payslips/:id/pay', async (req, res) => {
   await audit(req, 'payroll.part_paid', 'Payslip', p._id, `Paid ₹${p.payments[p.payments.length - 1].amount} of ${p.payslipNo} (${p.status})`);
   res.json(p);
 });
-a.get('/payroll/payslips/:id/pdf', async (req, res) => { const p = await svc.ownPayslip(req.ctx, req.params.id).catch(() => { throw notFound('Payslip not found'); }); await pdf(req, res, p); });
+a.get('/payroll/payslips/:id/pdf', async (req, res) => {
+  const p = await svc.ownPayslip(req.ctx, req.params.id).catch(() => { throw notFound('Payslip not found'); });
+  if (p.status === 'pending') throw conflict('A payslip is issued once the salary has been paid');
+  await pdf(req, res, p);
+});
 
 /** Teacher portal: read-only, own data only. */
 export const teacherRoutes = Router();

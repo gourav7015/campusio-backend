@@ -1,6 +1,7 @@
 import { rollStatus } from '../../services/context.js';
 import { Bus, BusDocument, BUS_DOC_TYPES, File, User, School, StudentTransport, Student, StudentEnrolment, Section, ClassModel, StaffMember, Designation } from '../../models/index.js';
 import { notFound, conflict, bad, addDays, daysBetween, escapeRegex } from '../../core/utils.js';
+import { busRolesOf } from './crew.js';
 import { removeFileBytes } from '../../services/files.js';
 import { notifyUsers } from '../../services/notify.js';
 import { billTransport, cancelTransportCharges } from '../finance/finance.service.js';
@@ -40,8 +41,12 @@ const withCrew = (b, crew, today) => ({
   alerts: [...expiryAlerts(b, today), ...(crew.get(String(b.driverId))?.licenseExpiry && crew.get(String(b.driverId)).licenseExpiry <= addDays(today, 30) ? [{ field: 'driver licence', date: crew.get(String(b.driverId)).licenseExpiry, expired: crew.get(String(b.driverId)).licenseExpiry < today }] : [])],
 });
 
-/** A driver must be an active staff member whose designation is a driver; same for the conductor; nobody crews two buses. */
+/**
+ * A driver must be an active staff member who can drive (their job title is Driver, or they are marked "can also drive"); same for the conductor.
+ * Nobody crews two buses, and nobody holds both seats of one bus.
+ */
 async function assertCrew(ctx, busId, body) {
+  if (body.driverId && body.conductorId && String(body.driverId) === String(body.conductorId)) throw bad('One person cannot be both the driver and the conductor of the same bus');
   for (const [field, role] of [['driverId', 'driver'], ['conductorId', 'conductor']]) {
     const id = body[field];
     if (!id) continue;
@@ -49,10 +54,52 @@ async function assertCrew(ctx, busId, body) {
     if (!s) throw notFound(`The ${role} was not found`);
     if (s.status !== 'active') throw bad(`${s.name} is not active`);
     const d = await Designation.findById(s.designationId).lean();
-    if (d?.busRole !== role) throw bad(`${s.name} is a ${d?.name || 'staff member'}, not a ${role}`);
-    const other = await Bus.findOne({ tenantId: ctx.tenantId, [field]: s._id, ...(busId ? { _id: { $ne: busId } } : {}) }).select('busNo').lean();
-    if (other) throw conflict(`${s.name} is already the ${role} of bus ${other.busNo}`);
+    if (!busRolesOf(d, s).includes(role)) throw bad(`${s.name} is a ${d?.name || 'staff member'}, not a ${role}`);
+    const other = await Bus.findOne({ tenantId: ctx.tenantId, $or: [{ driverId: s._id }, { conductorId: s._id }], ...(busId ? { _id: { $ne: busId } } : {}) }).select('busNo driverId').lean();
+    if (other) throw conflict(`${s.name} is already ${String(other.driverId) === String(s._id) ? 'the driver' : 'the conductor'} of bus ${other.busNo}`);
   }
+}
+
+/**
+ * Swap crew between two buses (the driver, the conductor, or both), or swap the driver and conductor of one bus with each other (`roles`).
+ * Every person must be able to fill the seat they move to (a driver who "can also conduct" may take a conductor's seat). With `preview` nothing is saved.
+ */
+export async function swapCrew(ctx, { busId, otherBusId, what, preview }) {
+  const a = await Bus.findOne({ _id: busId, tenantId: ctx.tenantId });
+  if (!a) throw notFound('Bus not found');
+  let b = null;
+  if (what !== 'roles') {
+    if (!otherBusId) throw bad('Choose the other bus');
+    if (String(otherBusId) === String(busId)) throw bad('Choose a different bus');
+    b = await Bus.findOne({ _id: otherBusId, tenantId: ctx.tenantId });
+    if (!b) throw notFound('The other bus was not found');
+  }
+  const next = { a: { driverId: a.driverId || null, conductorId: a.conductorId || null }, b: b ? { driverId: b.driverId || null, conductorId: b.conductorId || null } : null };
+  if (what === 'driver') [next.a.driverId, next.b.driverId] = [next.b.driverId, next.a.driverId];
+  else if (what === 'conductor') [next.a.conductorId, next.b.conductorId] = [next.b.conductorId, next.a.conductorId];
+  else if (what === 'both') { [next.a.driverId, next.b.driverId] = [next.b.driverId, next.a.driverId]; [next.a.conductorId, next.b.conductorId] = [next.b.conductorId, next.a.conductorId]; }
+  else if (what === 'roles') [next.a.driverId, next.a.conductorId] = [next.a.conductorId, next.a.driverId];
+  // everyone moved must be able to fill the seat they land in
+  const ids = [a.driverId, a.conductorId, b?.driverId, b?.conductorId].filter(Boolean);
+  const staff = new Map((await StaffMember.find({ tenantId: ctx.tenantId, _id: { $in: ids } }).lean()).map((s) => [String(s._id), s]));
+  const D = new Map((await Designation.find({ tenantId: ctx.tenantId, _id: { $in: [...staff.values()].map((s) => s.designationId) } }).lean()).map((d) => [String(d._id), d]));
+  const changes = [];
+  for (const [bus, tag] of [[a, 'a'], [b, 'b']]) {
+    if (!bus) continue;
+    for (const [field, role] of [['driverId', 'driver'], ['conductorId', 'conductor']]) {
+      const was = bus[field] ? String(bus[field]) : null; const now = next[tag][field] ? String(next[tag][field]) : null;
+      if (was === now) continue;
+      const person = now ? staff.get(now) : null;
+      if (person && !busRolesOf(D.get(String(person.designationId)), person).includes(role)) throw bad(`${person.name} cannot be the ${role} of bus ${bus.busNo}: they are not marked as a ${role}. Edit them in Drivers and staff first.`);
+      changes.push({ busId: bus._id, busNo: bus.busNo, seat: role, from: was ? staff.get(was)?.name : null, to: person?.name || null });
+    }
+  }
+  if (!changes.length) throw bad('Nothing would change: the crews are already the same');
+  if (!preview) {
+    await Bus.updateOne({ _id: a._id }, { $set: { driverId: next.a.driverId, conductorId: next.a.conductorId } });
+    if (b) await Bus.updateOne({ _id: b._id }, { $set: { driverId: next.b.driverId, conductorId: next.b.conductorId } });
+  }
+  return { preview: !!preview, what, changes };
 }
 
 export async function listBuses(ctx) {
@@ -185,7 +232,7 @@ export async function dashboard(ctx) {
     riders, seatsFree: Math.max(seats - riders, 0), occupancy: seats ? Math.round((riders / seats) * 100) : null,
     staff: { total: staff.length, byDesignation: designations.map((d) => ({ name: d.name, count: staff.filter((s) => String(s.designationId) === String(d._id)).length })) },
     needsCrew: active.filter((b) => !b.driverId || !b.conductorId).map((b) => ({ id: b._id, busNo: b.busNo, missing: [!b.driverId && 'driver', !b.conductorId && 'conductor'].filter(Boolean) })),
-    idleCrew: staff.filter((s) => D.get(String(s.designationId))?.busRole && !onBus.has(String(s._id))).map((s) => ({ id: s._id, name: s.name, staffId: s.staffId, designation: D.get(String(s.designationId)).name })),
+    idleCrew: staff.filter((s) => busRolesOf(D.get(String(s.designationId)), s).length && !onBus.has(String(s._id))).map((s) => ({ id: s._id, name: s.name, staffId: s.staffId, designation: D.get(String(s.designationId)).name })),
     alerts: [
       ...buses.flatMap((b) => withCrew(b, crew, ctx.today).alerts.map((a) => ({ bus: b.busNo, ...a }))),
     ],

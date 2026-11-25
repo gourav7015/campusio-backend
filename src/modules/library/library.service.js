@@ -10,6 +10,16 @@ const mk = (a) => new Map(a.map((x) => [String(x._id), x]));
 export const rulesOf = (settings) => settings.library;
 
 // ───────────── catalog ─────────────
+/** "LB1002", "lb 1002" and "1002" all mean LB01002: the number is what matters, the zero padding is easy to get wrong when typing. */
+export const accessionForms = (input) => {
+  const t = String(input || '').trim().toUpperCase().replace(/\s+/g, '');
+  const forms = [t];
+  const m = /^([A-Z]*)0*(\d+)$/.exec(t);
+  if (m) { const pad = m[2].padStart(5, '0'); forms.push(`${m[1] || 'LB'}${pad}`); }
+  return [...new Set(forms)];
+};
+export const findCopyByAccession = (tenantId, input) => BookCopy.findOne({ tenantId, accessionNo: { $in: accessionForms(input) } });
+
 async function newAccessionNos(tenantId, n) {
   const out = [];
   for (let i = 0; i < n; i++) out.push(`LB${String(await nextSeq(tenantId, 'accession')).padStart(5, '0')}`);
@@ -27,7 +37,7 @@ export async function createBook(ctx, { copies, ...body }) {
 export async function addCopies(ctx, bookId, count) {
   const book = await Book.findOne({ _id: bookId, tenantId: ctx.tenantId });
   if (!book) throw notFound('Book not found');
-  if (book.status !== 'active') throw conflict('This book is archived');
+  if (book.status !== 'active') throw conflict('This book was deleted');
   const nos = await newAccessionNos(ctx.tenantId, count);
   await BookCopy.insertMany(nos.map((accessionNo) => ({ tenantId: ctx.tenantId, bookId: book._id, accessionNo })));
   return nos;
@@ -36,7 +46,7 @@ export async function addCopies(ctx, bookId, count) {
 export async function updateBook(ctx, id, body) {
   const b = await Book.findOne({ _id: id, tenantId: ctx.tenantId });
   if (!b) throw notFound('Book not found');
-  if (body.status === 'archived' && (await LibraryIssue.exists({ tenantId: ctx.tenantId, bookId: b._id, status: 'issued' }))) throw conflict('Copies of this book are on loan. Archive it after they are returned.');
+  if (body.status === 'archived' && (await LibraryIssue.exists({ tenantId: ctx.tenantId, bookId: b._id, status: 'issued' }))) throw conflict('Copies of this book are on loan. Delete it after they are returned.');
   Object.assign(b, body);
   return b.save();
 }
@@ -61,6 +71,22 @@ export async function deleteBook(ctx, id) {
   return { mode: 'deleted', title: b.title, copies };
 }
 
+/**
+ * Remove one copy. A copy that was never lent is erased; one with lending history is withdrawn instead (the history, fines and
+ * fee charges keep pointing at it). A copy that is out on loan can't be removed.
+ */
+export async function deleteCopy(ctx, copyId) {
+  const c = await BookCopy.findOne({ _id: copyId, tenantId: ctx.tenantId });
+  if (!c) throw notFound('Copy not found');
+  if (c.status === 'issued') throw conflict('This copy is on loan. Return it first.');
+  if (await LibraryIssue.exists({ tenantId: ctx.tenantId, copyId: c._id })) {
+    if (c.status !== 'withdrawn') { c.status = 'withdrawn'; await c.save(); }
+    return { mode: 'withdrawn', accessionNo: c.accessionNo };
+  }
+  await BookCopy.deleteOne({ _id: c._id, tenantId: ctx.tenantId });
+  return { mode: 'deleted', accessionNo: c.accessionNo };
+}
+
 export async function setCopyStatus(ctx, copyId, { status, notes }) {
   const c = await BookCopy.findOne({ _id: copyId, tenantId: ctx.tenantId });
   if (!c) throw notFound('Copy not found');
@@ -72,13 +98,80 @@ export async function setCopyStatus(ctx, copyId, { status, notes }) {
 export async function listBooks(tenantId, q) {
   const f = { tenantId, status: 'active' };
   if (q.category) f.category = q.category;
+  if (q.shelf) f.shelf = q.shelf;
+  if (q.language) f.language = q.language;
+  if (q.author) f.author = q.author;
   if (q.q) { const rx = new RegExp(escapeRegex(q.q), 'i'); f.$or = [{ title: rx }, { author: rx }, { isbn: rx }, { category: rx }]; }
-  const copyAgg = await BookCopy.aggregate([{ $match: { tenantId } }, { $group: { _id: '$bookId', total: { $sum: { $cond: [{ $eq: ['$status', 'withdrawn'] }, 0, 1] } }, available: { $sum: { $cond: [{ $eq: ['$status', 'available'] }, 1, 0] } }, issued: { $sum: { $cond: [{ $eq: ['$status', 'issued'] }, 1, 0] } } } }]);
+  const [copyAgg, lent] = await Promise.all([
+    BookCopy.aggregate([{ $match: { tenantId } }, { $group: { _id: '$bookId', total: { $sum: { $cond: [{ $eq: ['$status', 'withdrawn'] }, 0, 1] } }, available: { $sum: { $cond: [{ $eq: ['$status', 'available'] }, 1, 0] } }, issued: { $sum: { $cond: [{ $eq: ['$status', 'issued'] }, 1, 0] } } } }]),
+    q.sort === 'popular' ? LibraryIssue.aggregate([{ $match: { tenantId } }, { $group: { _id: '$bookId', n: { $sum: 1 } } }]) : [],
+  ]);
   const C = new Map(copyAgg.map((c) => [String(c._id), c]));
-  let books = await Book.find(f).sort({ title: 1 }).lean();
-  books = books.map((b) => ({ ...b, total: C.get(String(b._id))?.total || 0, available: C.get(String(b._id))?.available || 0, issued: C.get(String(b._id))?.issued || 0 }));
-  if (q.availability === 'available') books = books.filter((b) => b.available > 0);
-  return { total: books.length, items: books.slice((q.page - 1) * q.limit, q.page * q.limit), categories: (await Book.distinct('category', { tenantId, status: 'active' })).filter(Boolean).sort() };
+  const L = new Map(lent.map((c) => [String(c._id), c.n]));
+  let books = await Book.find(f).sort(q.sort === 'newest' ? { createdAt: -1 } : { title: 1 }).lean();
+  books = books.map((b) => ({ ...b, total: C.get(String(b._id))?.total || 0, available: C.get(String(b._id))?.available || 0, issued: C.get(String(b._id))?.issued || 0, timesLent: L.get(String(b._id)) || 0 }));
+  if (q.availability === 'available') books = books.filter((b) => b.available > 0 && !b.referenceOnly);
+  if (q.availability === 'reference') books = books.filter((b) => b.referenceOnly);
+  if (q.availability === 'out') books = books.filter((b) => b.total > 0 && b.available === 0 && !b.referenceOnly);
+  if (q.sort === 'popular') books.sort((a, b) => b.timesLent - a.timesLent || a.title.localeCompare(b.title));
+  const distinct = async (field) => (await Book.distinct(field, { tenantId, status: 'active' })).filter(Boolean).sort();
+  const [categories, shelves, languages, authors] = await Promise.all([distinct('category'), distinct('shelf'), distinct('language'), distinct('author')]);
+  return { total: books.length, items: books.slice((q.page - 1) * q.limit, q.page * q.limit), categories, shelves, languages, authors };
+}
+
+/** Matches what was typed anywhere in the accession number, or the same number without the zero padding ("1002" finds LB01002). */
+const accessionMatch = (q) => {
+  const t = escapeRegex(q.toUpperCase().replace(/\s+/g, ''));
+  const n = q.replace(/\D/g, '').replace(/^0+/, '');
+  return new RegExp(n && /^[a-z]*\s*\d+$/i.test(q.trim()) ? `${t}|^[A-Z]*0*${n}$` : t, 'i');
+};
+
+/**
+ * Suggestions while someone types at the desk: copies matched by accession number ("1002" finds LB01002) or by title, author or ISBN.
+ * For issuing, copies that can be lent come first (the rest are shown with the reason); for returning, only copies on loan, with who has them.
+ */
+export async function suggestCopies(ctx, { q, mode, limit, category, shelf, language, author, show }) {
+  const tenantId = ctx.tenantId;
+  const fields = 'title author shelf category language referenceOnly status';
+  const bookFilter = { tenantId, status: 'active', ...(category && { category }), ...(shelf && { shelf }), ...(language && { language }), ...(author && { author }) };
+  let copies = []; const exact = new Set();
+  if (q) {
+    const rx = new RegExp(escapeRegex(q), 'i');
+    const [books, byNo] = await Promise.all([
+      Book.find({ tenantId, status: 'active', $or: [{ title: rx }, { author: rx }, { isbn: rx }] }).select('_id').limit(30).lean(),
+      BookCopy.find({ tenantId, accessionNo: accessionMatch(q) }).limit(30).lean(),
+    ]);
+    const byTitle = await BookCopy.find({ tenantId, bookId: { $in: books.map((b) => b._id) } }).sort({ accessionNo: 1 }).lean();
+    const seen = new Set();
+    byNo.forEach((c) => exact.add(String(c._id)));
+    for (const c of [...byNo, ...byTitle]) { if (!seen.has(String(c._id))) { seen.add(String(c._id)); copies.push(c); } }
+  } else if (mode === 'return') {
+    // nothing typed: everything that is out, the most overdue first
+    const out = await LibraryIssue.find({ tenantId, status: 'issued' }).sort({ dueDate: 1 }).limit(150).select('copyId').lean();
+    copies = await BookCopy.find({ tenantId, _id: { $in: out.map((o) => o.copyId) } }).lean();
+  } else {
+    // nothing typed, only filters: browse what matches
+    const books = await Book.find(bookFilter).select('_id').sort({ title: 1 }).limit(120).lean();
+    copies = await BookCopy.find({ tenantId, bookId: { $in: books.map((b) => b._id) } }).sort({ accessionNo: 1 }).limit(600).lean();
+  }
+  const B = mk(await Book.find({ tenantId, _id: { $in: copies.map((c) => c.bookId) } }).select(fields).lean());
+  const open = await LibraryIssue.find({ tenantId, status: 'issued', copyId: { $in: copies.map((c) => c._id) } }).lean();
+  const names = await borrowerNames(tenantId, open);
+  const O = new Map(open.map((o) => [String(o.copyId), o]));
+  let rows = copies.map((c) => {
+    const b = B.get(String(c.bookId)); const o = O.get(String(c._id));
+    return { copyId: c._id, bookId: c.bookId, accessionNo: c.accessionNo, status: c.status, title: b?.title, author: b?.author, shelf: b?.shelf, category: b?.category, language: b?.language, referenceOnly: !!b?.referenceOnly, byNumber: exact.has(String(c._id)), loan: o && { borrower: names.get(String(o.borrowerId)), dueDate: o.dueDate, overdue: o.dueDate < ctx.today } };
+  });
+  rows = rows.filter((r, i) => B.get(String(copies[i].bookId))?.status === 'active'); // deleted books are gone from the desk
+  rows = rows.filter((r) => (!category || r.category === category) && (!shelf || r.shelf === shelf) && (!language || r.language === language) && (!author || r.author === author));
+  if (mode === 'return') rows = rows.filter((r) => r.status === 'issued' && (show !== 'overdue' || r.loan?.overdue));
+  else if (show === 'available') rows = rows.filter((r) => r.status === 'available' && !r.referenceOnly);
+  const rank = (r) => (r.byNumber ? 0 : 1) * 10 + (mode === 'return' ? 0 : r.status === 'available' ? 0 : r.status === 'issued' ? 1 : 2);
+  rows.sort((a, b) => rank(a) - rank(b) || (q ? 0 : String(a.title).localeCompare(String(b.title))) || (mode === 'return' && !q ? String(a.loan?.dueDate).localeCompare(String(b.loan?.dueDate)) : 0) || a.accessionNo.localeCompare(b.accessionNo));
+  // a title with many copies would fill the list: show a few copies of each book (one when just browsing)
+  const cap = q ? 3 : mode === 'return' ? 99 : 1; const perBook = new Map();
+  rows = rows.filter((r) => { if (r.byNumber) return true; const n = (perBook.get(String(r.title)) || 0) + 1; perBook.set(String(r.title), n); return n <= cap; });
+  return rows.slice(0, limit);
 }
 
 export async function getBook(ctx, id) {
@@ -102,27 +195,37 @@ async function borrowerNames(tenantId, issues) {
 }
 
 // ───────────── borrowers ─────────────
-export async function searchBorrowers(ctx, { type, q }) {
-  const rx = new RegExp(escapeRegex(q), 'i');
+export async function searchBorrowers(ctx, { type, q, classId, sectionId, show }) {
+  const rx = q ? new RegExp(escapeRegex(q), 'i') : null;
   let people = [];
   if (type === 'student') {
-    const students = await Student.find({ tenantId: ctx.tenantId, status: 'active', $or: [{ name: rx }, { admissionNo: rx }] }).select('name admissionNo').limit(15).lean();
+    const f = { tenantId: ctx.tenantId, status: 'active' };
+    if (rx) f.$or = [{ name: rx }, { admissionNo: rx }];
+    if (classId || sectionId) {
+      const enrols = await StudentEnrolment.find({ tenantId: ctx.tenantId, status: 'active', ...(sectionId ? { sectionId } : { classId }) }).select('studentId').lean();
+      f._id = { $in: enrols.map((e) => e.studentId) };
+    }
+    const students = await Student.find(f).select('name admissionNo').sort({ name: 1 }).limit(show === 'all' ? 15 : 60).lean();
     const enr = await StudentEnrolment.find({ tenantId: ctx.tenantId, studentId: { $in: students.map((s) => s._id) }, status: 'active' }).lean();
     const [secs, classes] = await Promise.all([Section.find({ tenantId: ctx.tenantId, _id: { $in: enr.map((e) => e.sectionId) } }).lean(), ClassModel.find({ tenantId: ctx.tenantId }).lean()]);
     const S = mk(secs); const C = mk(classes); const E = new Map(enr.map((e) => [String(e.studentId), e]));
     people = students.map((s) => ({ id: s._id, type, name: s.name, code: s.admissionNo, detail: E.get(String(s._id)) ? `${C.get(String(E.get(String(s._id)).classId))?.name} ${S.get(String(E.get(String(s._id)).sectionId))?.name}` : '' }));
   } else {
-    const teachers = await Teacher.find({ tenantId: ctx.tenantId, status: 'active', $or: [{ name: rx }, { employeeId: rx }] }).select('name employeeId designation').limit(15).lean();
+    const teachers = await Teacher.find({ tenantId: ctx.tenantId, status: 'active', ...(rx ? { $or: [{ name: rx }, { employeeId: rx }] } : {}) }).select('name employeeId designation').sort({ name: 1 }).limit(show === 'all' ? 15 : 60).lean();
     people = teachers.map((t) => ({ id: t._id, type, name: t.name, code: t.employeeId, detail: t.designation || 'Teacher' }));
   }
   const loans = await LibraryIssue.find({ tenantId: ctx.tenantId, status: 'issued', borrowerType: type, borrowerId: { $in: people.map((p) => p.id) } }).lean();
   const unpaidFines = type === 'student' ? await StudentCharge.aggregate([{ $match: { tenantId: ctx.tenantId, kind: 'library_fine', status: 'open', studentId: { $in: people.map((p) => p.id) } } }, { $group: { _id: '$studentId', n: { $sum: { $subtract: [{ $subtract: ['$amount', '$concession'] }, '$paidAmount'] } } } }]) : [];
   const F = new Map(unpaidFines.map((f) => [String(f._id), f.n]));
   const rules = rulesOf(ctx.settings);
-  return people.map((p) => {
+  const rows = people.map((p) => {
     const mine = loans.filter((l) => String(l.borrowerId) === String(p.id));
-    return { ...p, openLoans: mine.length, overdue: mine.filter((l) => l.dueDate < ctx.today).length, unpaidFine: round2(F.get(String(p.id)) || 0), limit: rules.maxBooks[type] };
+    const o = { ...p, openLoans: mine.length, overdue: mine.filter((l) => l.dueDate < ctx.today).length, unpaidFine: round2(F.get(String(p.id)) || 0), limit: rules.maxBooks[type] };
+    o.canBorrow = o.openLoans < o.limit && !o.unpaidFine && !(rules.blockIfOverdue && o.overdue);
+    return o;
   });
+  const keep = { all: () => true, canBorrow: (r) => r.canBorrow, hasBooks: (r) => r.openLoans > 0, overdue: (r) => r.overdue > 0, fine: (r) => r.unpaidFine > 0 }[show || 'all'];
+  return rows.filter(keep).slice(0, 20);
 }
 
 // ───────────── circulation ─────────────
@@ -135,9 +238,10 @@ async function borrowerOf(ctx, type, id) {
 
 export async function issueBook(ctx, body) {
   const rules = rulesOf(ctx.settings);
-  const copy = body.copyId ? await BookCopy.findOne({ _id: body.copyId, tenantId: ctx.tenantId }) : await BookCopy.findOne({ tenantId: ctx.tenantId, accessionNo: new RegExp(`^${escapeRegex(body.accessionNo)}$`, 'i') });
+  const copy = body.copyId ? await BookCopy.findOne({ _id: body.copyId, tenantId: ctx.tenantId }) : await findCopyByAccession(ctx.tenantId, body.accessionNo);
   if (!copy) throw notFound('No copy with that accession number');
   const book = await Book.findOne({ _id: copy.bookId, tenantId: ctx.tenantId });
+  if (book?.referenceOnly) throw conflict(`"${book.title}" is for use in the library only. It can't be borrowed.`);
   if (copy.status !== 'available') throw conflict(`This copy is ${copy.status === 'issued' ? 'already on loan' : copy.status}`);
   const borrower = await borrowerOf(ctx, body.borrowerType, body.borrowerId);
   const open = await LibraryIssue.find({ tenantId: ctx.tenantId, borrowerType: body.borrowerType, borrowerId: borrower._id, status: 'issued' }).lean();
@@ -164,7 +268,7 @@ export async function returnBook(ctx, body) {
   let issue;
   if (body.issueId) issue = await LibraryIssue.findOne({ _id: body.issueId, tenantId: ctx.tenantId, status: 'issued' });
   else {
-    const copy = await BookCopy.findOne({ tenantId: ctx.tenantId, accessionNo: new RegExp(`^${escapeRegex(body.accessionNo)}$`, 'i') });
+    const copy = await findCopyByAccession(ctx.tenantId, body.accessionNo);
     if (!copy) throw notFound('No copy with that accession number');
     issue = await LibraryIssue.findOne({ tenantId: ctx.tenantId, copyId: copy._id, status: 'issued' });
   }
@@ -192,7 +296,8 @@ export async function returnBook(ctx, body) {
   if (issue.borrowerUserId) {
     await notifyUsers(ctx.tenantId, [issue.borrowerUserId], { category: 'library', title: 'Book returned', body: `${book?.title}${charge && issue.borrowerType === 'student' ? ` — fine ₹${total} added to your fees` : ''}`, link: { type: 'library', id: String(issue._id) }, dedupeKey: `libr:${issue._id}` });
   }
-  return { issue, book, fine: { amount: total, lateDays, lateFine, damage, lost, waived: issue.fineWaived, charged: charge && issue.borrowerType === 'student' } };
+  const who = (await borrowerNames(ctx.tenantId, [issue])).get(String(issue.borrowerId));
+  return { issue, book, borrower: { name: who }, fine: { amount: total, lateDays, lateFine, damage, lost, waived: issue.fineWaived, charged: charge && issue.borrowerType === 'student' } };
 }
 
 export async function renewIssue(ctx, id) {
@@ -228,6 +333,12 @@ export async function listLoans(ctx, q) {
   if (q.status === 'overdue') { f.status = 'issued'; f.dueDate = { $lt: ctx.today }; } else if (q.status !== 'all') f.status = q.status;
   if (q.borrowerType) f.borrowerType = q.borrowerType;
   if (q.borrowerId) f.borrowerId = q.borrowerId;
+  if (q.dueFrom || q.dueTo) f.dueDate = { ...(f.dueDate || {}), ...(q.dueFrom ? { $gte: q.dueFrom } : {}), ...(q.dueTo ? { $lte: q.dueTo } : {}) };
+  if (q.category) { const ids = await Book.distinct('_id', { tenantId: ctx.tenantId, category: q.category }); f.bookId = { $in: ids }; }
+  if (q.classId || q.sectionId) {
+    const enrols = await StudentEnrolment.find({ tenantId: ctx.tenantId, status: 'active', ...(q.sectionId ? { sectionId: q.sectionId } : { classId: q.classId }) }).select('studentId').lean();
+    f.borrowerType = 'student'; f.borrowerId = { $in: enrols.map((e) => e.studentId) };
+  }
   let rows = await LibraryIssue.find(f).sort({ dueDate: 1, createdAt: -1 }).limit(1000).lean();
   const [books, names, copies] = await Promise.all([Book.find({ tenantId: ctx.tenantId, _id: { $in: rows.map((r) => r.bookId) } }).select('title author').lean(), borrowerNames(ctx.tenantId, rows), BookCopy.find({ tenantId: ctx.tenantId, _id: { $in: rows.map((r) => r.copyId) } }).select('accessionNo').lean()]);
   const B = mk(books); const C = mk(copies);
@@ -336,4 +447,24 @@ export async function classBorrowers(ctx, { classId, sectionId, filter = 'all' }
   else if (filter === 'never') rows = rows.filter((r) => !r.borrowed);
   else if (filter === 'holding') rows = rows.filter((r) => r.holding.length);
   return { classId, className: cls.name, sectionId: sectionId || null, sections: sections.map((s) => ({ id: s._id, name: s.name })), summary, students: rows };
+}
+
+/** Every class and section at a glance: how many students, who has borrowed this year, who holds a book now, who is late. */
+export async function classOverview(ctx) {
+  const [classes, sections, enrols] = await Promise.all([
+    ClassModel.find({ tenantId: ctx.tenantId, status: 'active' }).sort({ level: 1 }).select('name').lean(),
+    Section.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, status: 'active' }).sort({ name: 1 }).select('name classId').lean(),
+    StudentEnrolment.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, status: rollStatus(ctx.year) }).select('studentId sectionId').lean(),
+  ]);
+  const issues = await LibraryIssue.find({ tenantId: ctx.tenantId, borrowerType: 'student', borrowerId: { $in: enrols.map((e) => e.studentId) }, issuedOn: { $gte: ctx.year.startDate } }).select('borrowerId status dueDate').lean();
+  const by = new Map();
+  for (const i of issues) { const k = String(i.borrowerId); if (!by.has(k)) by.set(k, []); by.get(k).push(i); }
+  const C = mk(classes);
+  const rows = sections.filter((x) => C.has(String(x.classId))).map((sec) => {
+    const mine = enrols.filter((e) => String(e.sectionId) === String(sec._id));
+    const stat = mine.map((e) => { const l = by.get(String(e.studentId)) || []; const h = l.filter((i) => i.status === 'issued'); return { borrowed: l.length > 0, holding: h.length > 0, overdue: h.some((i) => i.dueDate < ctx.today) }; });
+    return { classId: sec.classId, className: C.get(String(sec.classId)).name, sectionId: sec._id, sectionName: sec.name, students: mine.length, borrowedAny: stat.filter((x) => x.borrowed).length, neverBorrowed: stat.filter((x) => !x.borrowed).length, holdingNow: stat.filter((x) => x.holding).length, overdue: stat.filter((x) => x.overdue).length };
+  });
+  const sum = (k) => rows.reduce((n, r) => n + r[k], 0);
+  return { totals: { students: sum('students'), borrowedAny: sum('borrowedAny'), neverBorrowed: sum('neverBorrowed'), holdingNow: sum('holdingNow'), overdue: sum('overdue') }, rows };
 }

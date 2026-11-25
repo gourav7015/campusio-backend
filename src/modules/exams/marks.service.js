@@ -17,7 +17,7 @@ async function loadTarget(ctx, examSubjectId, sectionId) {
   if (!section) throw notFound('Section not found');
   if (String(section.classId) !== String(es.classId) || String(section.yearId) !== String(exam.yearId)) throw bad('This section does not sit that exam');
   if (exam.sectionId && String(exam.sectionId) !== String(section._id)) throw bad('This test belongs to a different section');
-  if (ctx.role === 'teacher' && !ctx.scope.canTeach(section._id, es.subjectId)) throw forbidden('You are not assigned to this subject in this section');
+  if (ctx.role === 'teacher' && !ctx.scope.canMark(section._id, es.subjectId)) throw forbidden('You are not assigned to this subject in this section');
   return { es, exam, section };
 }
 
@@ -26,10 +26,14 @@ async function loadTarget(ctx, examSubjectId, sectionId) {
  * exam subjects for the teacher's own subject/section assignments, including tests they created.
  */
 export async function teacherExamList(ctx) {
+  // the subject teacher's own pairs, plus (for a class teacher) every subject of their own class: they have full access to that class
+  const ctSecs = ctx.scope.classTeacherSectionIds.length ? await Section.find({ tenantId: ctx.tenantId, _id: { $in: ctx.scope.classTeacherSectionIds } }).select('classId').lean() : [];
   const pairs = ctx.scope.assignments.map((a) => ({ sectionId: String(a.sectionId), subjectId: String(a.subjectId), classId: String(a.classId) }));
-  if (!pairs.length) return [];
+  const classIds = [...new Set([...pairs.map((p) => p.classId), ...ctSecs.map((s) => String(s.classId))])];
+  if (!classIds.length) return [];
   const exams = await Examination.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, status: { $ne: 'archived' } }).lean();
-  const ess = await ExaminationSubject.find({ tenantId: ctx.tenantId, examId: { $in: exams.map((e) => e._id) }, classId: { $in: [...new Set(pairs.map((p) => p.classId))] } }).lean();
+  const ess = await ExaminationSubject.find({ tenantId: ctx.tenantId, examId: { $in: exams.map((e) => e._id) }, classId: { $in: classIds } }).lean();
+  for (const es of ess) for (const s of ctSecs) if (String(s.classId) === String(es.classId) && !pairs.some((p) => p.sectionId === String(s._id) && p.subjectId === String(es.subjectId))) pairs.push({ sectionId: String(s._id), subjectId: String(es.subjectId), classId: String(es.classId) });
   const sheets = await MarksSheet.find({ tenantId: ctx.tenantId, examSubjectId: { $in: ess.map((e) => e._id) } }).lean();
   const [subjects, sections, classes] = await Promise.all([
     Subject.find({ tenantId: ctx.tenantId, _id: { $in: pairs.map((p) => p.subjectId) } }).lean(), Section.find({ tenantId: ctx.tenantId, _id: { $in: pairs.map((p) => p.sectionId) } }).lean(),
@@ -49,7 +53,7 @@ export async function teacherExamList(ctx) {
         examId: exam._id, exam: exam.name, type: exam.type, examSubjectId: es._id, sectionId: p.sectionId, subject: S.get(p.subjectId)?.name, subjectId: p.subjectId,
         className: C.get(p.classId)?.name, section: SEC.get(p.sectionId)?.name, date: es.date, max: maxOf(es), components: es.components, passMarks: es.passMarks,
         deadline, status, returnReason: sheet?.returnReason, overdue: !!deadline && deadline < ctx.today && EDITABLE.includes(sheet?.status),
-        createdByMe: !!exam.createdBy && String(exam.createdBy) === String(ctx.actorId), scoped: !!exam.sectionId, canDelete: !!exam.createdBy && String(exam.createdBy) === String(ctx.actorId) && !sheet,
+        viaClassTeacher: !ctx.scope.canTeach(p.sectionId, p.subjectId), createdByMe: !!exam.createdBy && String(exam.createdBy) === String(ctx.actorId), scoped: !!exam.sectionId, canDelete: !!exam.createdBy && String(exam.createdBy) === String(ctx.actorId) && !sheet,
       });
     }
   }
@@ -58,7 +62,7 @@ export async function teacherExamList(ctx) {
 
 // ── teacher-created tests (class test, surprise test, unit test …) ──
 export async function createTeacherExam(ctx, body, byName) {
-  if (!ctx.scope.canTeach(body.sectionId, body.subjectId)) throw forbidden('You can add tests only for subjects you teach in your own sections');
+  if (!ctx.scope.canMark(body.sectionId, body.subjectId)) throw forbidden('You can add tests only for subjects you teach, or for any subject of the class you are the class teacher of');
   const section = await Section.findOne({ _id: body.sectionId, tenantId: ctx.tenantId });
   if (!section) throw notFound('Section not found');
   const components = normaliseComponents(body.components);

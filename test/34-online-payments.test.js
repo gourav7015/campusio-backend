@@ -18,6 +18,15 @@ describe('Online fee payment with the test gateway (no Razorpay account needed)'
     await api().post('/api/finance/assign').set(fin.h).send({ structureId: structure._id, all: true });
     A = W.studentLogins[0].h; B = W.studentLogins[1].h;
   });
+
+  it('online payment is OFF for a school until the Platform Admin switches it on: no pay button, no Online payments page, and a payment cannot be started', async () => {
+    expect((await api().get(S('/fees')).set(A)).body.online).toMatchObject({ enabled: false, provider: null });
+    expect((await api().post(S('/fees/pay')).set(A).send({})).status).toBe(409);
+    expect((await api().get('/api/auth/me').set(fin.h)).body.user.onlinePayments).toBe(false); // Finance's menu hides the page
+    expect((await api().put(`/api/platform/schools/${W.id}/flags`).set(W.h).send({ onlinePayments: true })).status).toBe(403); // only the Platform Admin
+    expect((await api().put(`/api/platform/schools/${W.id}/flags`).set(root.h).send({ onlinePayments: true })).status).toBe(200);
+    expect((await api().get('/api/auth/me').set(fin.h)).body.user.onlinePayments).toBe(true);
+  });
   afterAll(teardown);
 
   /** Play the bank: start a payment and return what the browser would get back after paying. */

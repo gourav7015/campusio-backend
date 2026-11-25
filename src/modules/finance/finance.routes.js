@@ -67,6 +67,12 @@ r.post('/charges', async (req, res) => {
   await audit(req, 'fees.charge_created', 'StudentCharge', c._id, `Charge "${c.label}" ${c.amount}`);
   res.status(201).json(c);
 });
+r.post('/charges/bulk', async (req, res) => {
+  const b = parse(v.bulkChargeBody, req.body);
+  const out = await svc.createChargesBulk(req.ctx, b);
+  if (!b.preview) await audit(req, 'fees.charges_bulk', 'StudentCharge', null, `Charge "${b.label}" of ${b.amount} added for ${out.applied} student(s)`);
+  res.status(b.preview ? 200 : 201).json(out);
+});
 r.post('/charges/:id/concession', async (req, res) => {
   const body = parse(v.concessionBody, req.body);
   const c = await svc.addConcession(req.ctx, req.params.id, body, req.user.name);

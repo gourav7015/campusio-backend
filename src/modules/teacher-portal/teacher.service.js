@@ -3,7 +3,8 @@ import { rollStatus } from '../../services/context.js';
 import { monitorsOf } from '../class-life/class-life.service.js';
 import {
   Student, StudentEnrolment, Section, ClassModel, Subject, SubjectOffering, Examination, Homework, StudyMaterial, MarksSheet, ExaminationSubject, ReportCard, User, AuditLog, TeachingAssignment, StudentRemark, AcademicYear, ClassTeacherAssignment, AttendanceSession,
-} from '../../models/index.js';
+  Marks } from '../../models/index.js';
+import { studentMarks } from '../insight/insight.service.js';
 import { notFound, forbidden, addDays, isoDay, escapeRegex } from '../../core/utils.js';
 import { teacherDay, teacherWeek } from '../../services/timetable.js';
 import { summarize, submittedRecords } from '../../services/attendance.js';
@@ -92,12 +93,36 @@ export async function classStudents(ctx, sectionId) {
   });
 }
 
+/**
+ * Everything the class teacher needs to know about a student of their own class: the personal and family details, the bus, how the student is doing in every subject
+ * (with the rank in the class and the strong and weak subjects), and the marks that have been entered or approved but not published yet.
+ * Fees and personal documents are never part of it.
+ */
+async function fullFile(ctx, student, enr) {
+  const m = await studentMarks(ctx, student._id);
+  const rows = await Marks.find({ tenantId: ctx.tenantId, studentId: student._id, sectionId: enr.sectionId }).lean();
+  const sheets = new Map((await MarksSheet.find({ tenantId: ctx.tenantId, _id: { $in: rows.map((r) => r.sheetId) } }).select('status').lean()).map((x) => [String(x._id), x.status]));
+  const waiting = rows.filter((r) => sheets.get(String(r.sheetId)) && sheets.get(String(r.sheetId)) !== 'published');
+  const ess = new Map((await ExaminationSubject.find({ tenantId: ctx.tenantId, _id: { $in: waiting.map((r) => r.examSubjectId) } }).select('subjectId components').lean()).map((x) => [String(x._id), x]));
+  const exams = new Map((await Examination.find({ tenantId: ctx.tenantId, _id: { $in: waiting.map((r) => r.examId) } }).select('name type').lean()).map((x) => [String(x._id), x]));
+  const subjects = new Map((await Subject.find({ tenantId: ctx.tenantId, _id: { $in: [...ess.values()].map((x) => x.subjectId) } }).select('name').lean()).map((x) => [String(x._id), x.name]));
+  const pending = waiting.map((r) => {
+    const es = ess.get(String(r.examSubjectId));
+    return { exam: exams.get(String(r.examId))?.name, subject: subjects.get(String(es?.subjectId)), status: sheets.get(String(r.sheetId)), obtained: r.absent ? null : r.total ?? null, max: (es?.components || []).reduce((n, c) => n + (c.max || 0), 0), absent: !!r.absent, exempt: !!r.exempt };
+  }).sort((a, b) => `${a.exam}${a.subject}`.localeCompare(`${b.exam}${b.subject}`));
+  return {
+    personal: { dob: student.dob, admissionDate: student.admissionDate, bloodGroup: student.bloodGroup, emergencyContact: student.emergencyContact || null },
+    guardians: (student.guardians || []).map((g) => ({ name: g.name, relationship: g.relationship, phone: g.phone, email: g.email })),
+    bus: m.profile.bus, summary: m.summary, exams: m.exams, subjectAverages: m.subjectAverages, pending,
+  };
+}
+
 /** Teachers see academic data only, never fees, documents or unrelated administrative details. */
 export async function studentDetail(ctx, studentId) {
   const enrols = await StudentEnrolment.find({ tenantId: ctx.tenantId, studentId, status: rollStatus(ctx.year), yearId: ctx.year._id });
   const enr = enrols.find((e) => ctx.scope.hasSection(e.sectionId));
   if (!enr) throw notFound('Student not found in your classes');
-  const [student, section, cls] = await Promise.all([Student.findOne({ _id: studentId, tenantId: ctx.tenantId }).select('name admissionNo gender dob house guardians phone email address photoFileId'), Section.findById(enr.sectionId), ClassModel.findById(enr.classId)]);
+  const [student, section, cls] = await Promise.all([Student.findOne({ _id: studentId, tenantId: ctx.tenantId }).select('name admissionNo gender dob house guardians phone email address photoFileId admissionDate bloodGroup emergencyContact'), Section.findById(enr.sectionId), ClassModel.findById(enr.classId)]);
   const recs = await submittedRecords(ctx.tenantId, { studentId, yearId: ctx.year._id });
   const isCT = ctx.scope.classTeacherSectionIds.includes(String(enr.sectionId));
   const mySubjects = new Set(ctx.scope.assignments.filter((a) => String(a.sectionId) === String(enr.sectionId)).map((a) => String(a.subjectId)));
@@ -110,7 +135,9 @@ export async function studentDetail(ctx, studentId) {
   const SM = mk(secs); const CM = mk(cls2); const YM = mk(years);
   const remarks = await StudentRemark.find({ tenantId: ctx.tenantId, studentId }).sort({ createdAt: -1 }).limit(30).populate('teacherId', 'name').lean();
   const monitors = await monitorsOf(ctx.tenantId, enr.sectionId);
+  const full = isCT ? await fullFile(ctx, student, enr) : null;
   return {
+    full,
     profile: { id: student._id, name: student.name, admissionNo: student.admissionNo, rollNo: enr.rollNo, className: cls?.name, section: section?.name, gender: student.gender, house: student.house, guardian: student.guardians?.find((g) => g.isPrimary)?.name || student.guardians?.[0]?.name },
     attendance: summarize(recs, ctx.settings),
     marks: cards.map((c) => ({

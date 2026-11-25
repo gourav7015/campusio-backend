@@ -151,7 +151,7 @@ describe('Staff portal, staff leave, check-in times, bank file and statutory ded
     const run = (await api().post(FA('/payroll/runs')).set(F.h).send({ month: MONTH })).body;
     W.run = run;
     expect((await api().get(FA(`/payroll/runs/${run._id}/bank-file`)).set(F.h)).status).toBe(409); // approve first
-    await api().post(A(`/payroll/runs/${run._id}/approve`)).set(W.h);
+    await api().post(FA(`/payroll/runs/${run._id}/approve`)).set(F.h);
     const f = (await api().get(FA(`/payroll/runs/${run._id}/bank-file`)).set(F.h)).body;
     expect(f).toMatchObject({ month: MONTH, count: 1, total: 13000 });
     expect(f.ready[0]).toMatchObject({ name: 'Kamla Devi', accountNo: '123456789012', ifsc: 'HDFC0001234', amount: 13000, narration: 'Salary 2026-10' });

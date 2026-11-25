@@ -139,7 +139,40 @@ describe('Finance portal: fee structures, billing, payments, receipts, reversals
     expect(list.some((p) => p.kind === 'reversal')).toBe(true);
     expect((await api().get(F('/payments?q=Aarav')).set(fin.h)).body.length).toBeGreaterThanOrEqual(3);
     expect((await api().get(F('/payments?mode=upi')).set(fin.h)).body.every((p) => p.mode === 'upi')).toBe(true);
+    // by class: the receipts of the students of one section (or class) only, and it combines with the search
+    const inA = (await api().get(F(`/payments?sectionId=${W.sec8A._id}`)).set(fin.h)).body;
+    const inB = (await api().get(F(`/payments?sectionId=${W.sec8B._id}`)).set(fin.h)).body;
+    expect(inA.some((p) => /Aarav/.test(p.student))).toBe(true);
+    expect(inB.some((p) => /Aarav/.test(p.student))).toBe(false);
+    expect((await api().get(F(`/payments?sectionId=${W.sec8A._id}&q=Aarav`)).set(fin.h)).body.every((p) => /Aarav/.test(p.student))).toBe(true);
+    expect((await api().get(F(`/payments?classId=${W.sec8A.classId}`)).set(fin.h)).body.length).toBeGreaterThanOrEqual(inA.length);
+    expect((await api().get(F('/payments?sectionId=not-an-id')).set(fin.h)).status).toBe(400);
     expect((await api().get('/api/student/notifications?category=fees').set(W.studentLogins[0].h)).body.items.some((n) => n.title === 'Payment reversed')).toBe(true);
+  });
+
+  it('an extra charge can go to a whole section: previewed first, never billed twice, and other sections are untouched', async () => {
+    const secA = (await api().get(`/api/school/students?sectionId=${W.sec8A._id}&limit=200`).set(W.h)).body.total;
+    const body = { sectionId: String(W.sec8A._id), label: 'Special coaching', amount: 800, dueDate: addDays(TODAY, 10) };
+    const pre = await api().post(F('/charges/bulk')).set(fin.h).send({ ...body, preview: true });
+    expect(pre.status).toBe(200);
+    expect(pre.body).toMatchObject({ preview: true, applied: 0, count: secA, total: secA * 800 });
+    expect((await api().get(F(`/students/${sid}/account`)).set(fin.h)).body.charges.some((c) => c.label === 'Special coaching')).toBe(false); // a preview saves nothing
+    const done = await api().post(F('/charges/bulk')).set(fin.h).send(body);
+    expect(done.status).toBe(201);
+    expect(done.body).toMatchObject({ applied: secA, count: secA });
+    const acct = (await api().get(F(`/students/${done.body.rows[0].studentId}/account`)).set(fin.h)).body;
+    expect(acct.charges.find((c) => c.label === 'Special coaching')).toMatchObject({ amount: 800 });
+    // asking again bills nobody twice
+    const again = await api().post(F('/charges/bulk')).set(fin.h).send(body);
+    expect(again.body).toMatchObject({ applied: 0, count: 0 });
+    expect(again.body.skipped).toHaveLength(secA);
+    // another section has none of it
+    const b = await api().post(F('/charges/bulk')).set(fin.h).send({ ...body, sectionId: String(W.sec8B._id), preview: true });
+    expect(b.body.rows.every((r) => r.section === 'B')).toBe(true);
+    // refusals: nothing chosen, a zero amount, the School Admin (view only)
+    expect((await api().post(F('/charges/bulk')).set(fin.h).send({ label: 'Nothing chosen', amount: 100 })).status).toBe(400);
+    expect((await api().post(F('/charges/bulk')).set(fin.h).send({ ...body, amount: 0 })).status).toBe(400);
+    expect((await api().post('/api/school/finance/charges/bulk').set(W.h).send(body)).status).toBe(403);
   });
 
   it('two simultaneous receipts cannot overpay a charge', async () => {

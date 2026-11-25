@@ -13,7 +13,7 @@ const id = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id');
 const date = z.string().refine(isDateStr, 'Use YYYY-MM-DD');
 const expenseBody = z.object({
   date, department: z.string().trim().min(2).max(60), work: z.string().trim().max(80).optional(), title: z.string().trim().min(3).max(120),
-  vendor: z.string().trim().max(80).optional(), vendorId: id.nullable().optional(), nature: z.enum(['revenue', 'capital']).default('revenue'), billNo: z.string().trim().max(40).optional(), amount: z.number().positive().max(100_000_000), notes: z.string().max(500).optional(),
+  vendor: z.string().trim().max(80).optional(), vendorId: id.nullable().optional(), nature: z.enum(['revenue', 'capital']).default('revenue'), billNo: z.string().trim().max(40).optional(), amount: z.number().positive().max(100_000_000), dueDate: date.optional(), notes: z.string().max(500).optional(),
 });
 const listQuery = z.object({ status: z.enum(['all', 'pending', 'approved', 'rejected']).default('all'), department: z.string().optional(), from: date.optional(), to: date.optional(), yearId: id.optional(), nature: z.enum(['revenue', 'capital']).optional(), vendorId: id.optional(), payment: z.enum(['unpaid', 'paid']).optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(200).default(50) });
 const budgetBody = z.object({ yearId: id.optional(), kind: z.enum(['revenue', 'capital']).default('revenue'), department: z.string().trim().min(2).max(60), work: z.string().trim().max(80).optional(), allocated: z.number().min(0).max(1_000_000_000), notes: z.string().max(300).optional() });
@@ -22,6 +22,13 @@ const onlyFinance = (req) => { if (req.user.role !== 'finance') throw forbidden(
 /** Mounted inside the Finance routes: the Finance portal changes things, the School Admin's window only reads (the window refuses writes). */
 export const expenseRoutes = Router();
 const r = expenseRoutes;
+const receiptQuery = z.object({ q: z.string().max(80).optional(), vendorId: id.optional(), department: z.string().max(60).optional(), nature: z.enum(['revenue', 'capital']).optional(), mode: z.enum(MODES).optional(), from: date.optional(), to: date.optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(200).default(25) });
+r.get('/expense-receipts', async (req, res) => res.json(await svc.listExpensePayments(req.ctx, parse(receiptQuery, req.query))));
+r.get('/export/expense-receipts.csv', async (req, res) => { res.setHeader('Content-Type', 'text/csv; charset=utf-8'); res.setHeader('Content-Disposition', 'attachment; filename="spending-receipts.csv"'); res.send(await svc.exportExpensePayments(req.ctx, parse(receiptQuery, req.query))); });
+r.get('/expenses/:id/payments/:pid/voucher.pdf', async (req, res) => {
+  res.setHeader('Content-Type', 'application/pdf'); res.setHeader('Content-Disposition', `attachment; filename="payment-voucher-${req.params.pid}.pdf"`);
+  await svc.renderVoucher(req.ctx, id.parse(req.params.id), z.string().regex(/^([a-f0-9]{24}|older)$/i).parse(req.params.pid), res);
+});
 r.get('/expenses', async (req, res) => res.json(await svc.listExpenses(req.ctx, parse(listQuery, req.query))));
 r.post('/expenses', async (req, res) => {
   const e = await svc.createExpense(req.ctx, parse(expenseBody, req.body), req.user);
@@ -48,10 +55,10 @@ r.delete('/expenses/:id/attachments/:fileId', async (req, res) => {
   await audit(req, 'expense.file_removed', 'Expense', e._id, `Removed a file from "${e.title}"`);
   res.json(e);
 });
-const payBody = z.object({ mode: z.enum(MODES), reference: z.string().trim().max(60).optional(), paidOn: date.optional(), note: z.string().max(200).optional() });
+const payBody = z.object({ amount: z.number().positive().max(100_000_000).optional(), mode: z.enum(MODES), reference: z.string().trim().max(60).optional(), paidOn: date.optional(), note: z.string().max(200).optional() });
 r.post('/expenses/:id/pay', async (req, res) => {
   const e = await svc.payExpense(req.ctx, req.params.id, parse(payBody, req.body), req.user);
-  await audit(req, 'expense.paid', 'Expense', e._id, `Paid "${e.title}" ₹${e.amount} by ${e.paymentMode}`);
+  await audit(req, 'expense.paid', 'Expense', e._id, `Paid ₹${e.payments.at(-1).amount} of "${e.title}" (₹${e.amount}) by ${e.paymentMode}, voucher ${e.payments.at(-1).voucherNo}`);
   res.json(e);
 });
 
@@ -68,6 +75,10 @@ const vendorBody = z.object({
 const vendorList = z.object({ status: z.enum(['all', 'pending', 'approved', 'rejected', 'inactive']).default('all'), category: z.string().optional(), q: z.string().max(80).optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(200).default(25) });
 const MAX_IMPORT = 2000;
 r.get('/vendors', async (req, res) => res.json(await vendors.listVendors(req.ctx, parse(vendorList, req.query))));
+const ledgerQuery = z.object({ from: date.optional(), to: date.optional() });
+const reportQuery = z.object({ by: z.enum(['day', 'month', 'year']).default('month'), from: date.optional(), to: date.optional(), vendorId: id.optional() });
+r.get('/vendors/:id/ledger', async (req, res) => res.json(await vendors.vendorLedger(req.ctx, id.parse(req.params.id), parse(ledgerQuery, req.query))));
+r.get('/reports/vendor-payments', async (req, res) => res.json(await vendors.vendorPaymentsReport(req.ctx, parse(reportQuery, req.query))));
 r.get('/vendors/approved', async (req, res) => res.json(await vendors.approvedVendors(req.ctx)));
 r.get('/vendors/export.csv', async (req, res) => { res.setHeader('Content-Type', 'text/csv; charset=utf-8'); res.setHeader('Content-Disposition', 'attachment; filename="vendors.csv"'); res.send(await vendors.exportVendors(req.ctx)); });
 r.post('/vendors/import', async (req, res) => {

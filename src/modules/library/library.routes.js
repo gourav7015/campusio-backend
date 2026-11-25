@@ -18,6 +18,7 @@ r.get('/lookups', async (req, res) => {
   ]);
   res.json({ classes, sections });
 });
+r.get('/class-overview', async (req, res) => res.json(await svc.classOverview(req.ctx)));
 r.get('/class-borrowers', async (req, res) => res.json(await svc.classBorrowers(req.ctx, parse(z.object({
   classId: z.string().regex(/^[a-f0-9]{24}$/i).optional(), sectionId: z.string().regex(/^[a-f0-9]{24}$/i).optional(), filter: z.enum(['all', 'borrowed', 'never', 'holding']).default('all'),
 }).refine((q) => q.classId || q.sectionId, { message: 'Choose a class' }), req.query))));
@@ -32,7 +33,7 @@ r.get('/books/:id', async (req, res) => res.json(await svc.getBook(req.ctx, req.
 r.patch('/books/:id', async (req, res) => res.json(await svc.updateBook(req.ctx, req.params.id, parse(v.bookPatch, req.body))));
 r.delete('/books/:id', async (req, res) => {
   const out = await svc.deleteBook(req.ctx, req.params.id);
-  await audit(req, 'library.book_deleted', 'Book', req.params.id, `${out.mode === 'deleted' ? 'Deleted' : 'Archived (it has lending history)'} "${out.title}" (${out.copies} copies)`, { mode: out.mode });
+  await audit(req, 'library.book_deleted', 'Book', req.params.id, `${out.mode === 'deleted' ? 'Deleted' : 'Deleted (lending history kept for the records)'} "${out.title}" (${out.copies} copies)`, { mode: out.mode });
   res.json(out);
 });
 r.post('/books/:id/copies', async (req, res) => {
@@ -40,12 +41,18 @@ r.post('/books/:id/copies', async (req, res) => {
   await audit(req, 'library.copies_added', 'Book', req.params.id, `Added ${nos.length} copies`);
   res.status(201).json({ accessionNos: nos });
 });
+r.delete('/copies/:id', async (req, res) => {
+  const out = await svc.deleteCopy(req.ctx, req.params.id);
+  await audit(req, 'library.copy_deleted', 'BookCopy', req.params.id, out.mode === 'deleted' ? `Deleted copy ${out.accessionNo}` : `Withdrew copy ${out.accessionNo} (it has lending history)`, { mode: out.mode });
+  res.json(out);
+});
 r.patch('/copies/:id', async (req, res) => {
   const c = await svc.setCopyStatus(req.ctx, req.params.id, parse(v.copyStatusBody, req.body));
   await audit(req, 'library.copy_status', 'BookCopy', c._id, `${c.accessionNo} marked ${c.status}`);
   res.json(c);
 });
 
+r.get('/copies/suggest', async (req, res) => res.json(await svc.suggestCopies(req.ctx, parse(v.suggestQuery, req.query))));
 r.get('/borrowers', async (req, res) => res.json(await svc.searchBorrowers(req.ctx, parse(v.borrowerQuery, req.query))));
 r.post('/issue', async (req, res) => {
   const out = await svc.issueBook(req.ctx, parse(v.issueBody, req.body));

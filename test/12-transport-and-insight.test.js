@@ -194,6 +194,12 @@ describe('Transport and the School Admin class/student views', () => {
     expect((await api().get('/api/school/library/class-borrowers').set(W.h)).status).toBe(400);
     expect((await api().get(`/api/library/class-borrowers?sectionId=${W.sec8A._id}`).set(W.teacher1.h)).status).toBe(403);
     expect((await api().get('/api/library/lookups').set(lib.h)).body.classes.map((c) => c.name)).toContain('Class 8');
+    // the overview of every class and section, for when no class has been chosen yet
+    const ov = (await api().get('/api/library/class-overview').set(lib.h)).body;
+    expect(ov.rows.find((r) => r.sectionId === String(W.sec8A._id))).toMatchObject({ className: 'Class 8', students: 3, borrowedAny: 1, neverBorrowed: 2, holdingNow: 1, overdue: 0 });
+    expect(ov.totals.students).toBe(ov.rows.reduce((n, r) => n + r.students, 0));
+    expect((await api().get('/api/school/library/class-overview').set(W.h)).status).toBe(200);
+    expect((await api().get('/api/library/class-overview').set(W.teacher1.h)).status).toBe(403);
   });
 
   it('a teacher\'s whole picture: classes taught, class teacher of, results, attendance from leave, salary, homework', async () => {

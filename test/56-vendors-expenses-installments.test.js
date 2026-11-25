@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { setup, teardown, reset, api, makeSuperAdmin, seedWorld, login } from './helpers.js';
-import { todayStr } from '../src/core/utils.js';
+import { todayStr, addDays } from '../src/core/utils.js';
 import { User, Student, StudentCharge, Vendor, Budget, EmailOutbox } from '../src/models/index.js';
 import { setMailTransport, flushEmails } from '../src/services/email.js';
 import { runMigrations } from '../src/core/migrations.js';
@@ -16,6 +16,7 @@ describe('Finance: vendors with approval, expense files and payment only after a
   const vendor = (over = {}) => ({ name: 'Edu Supplies', category: 'Stationery', contactPerson: 'Ravi', phone: '9876543210', gstin: '24ABCDE1234F1Z5', pan: 'ABCDE1234F', bankName: 'SBI', accountName: 'Edu Supplies', accountNo: '123456789012', ifsc: 'SBIN0001234', ...over });
   beforeAll(async () => {
     await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'vnd');
+    await api().put(`/api/platform/schools/${W.id}/flags`).set(root.h).send({ onlinePayments: true }); // a later test pays a fee online with the test gateway
     const s = await api().post('/api/school/staff').set(W.h).send({ name: 'Fiona Finance', email: 'fiona@vnd.test', role: 'finance', phone: '9833333333', dob: '1984-04-04' });
     fin = await login(s.body.loginId, s.body.temporaryPassword, 'finance');
   });
@@ -99,6 +100,72 @@ describe('Finance: vendors with approval, expense files and payment only after a
     await api().post(A(`/approvals/expenses/${r._id}`)).set(W.h).send({ approve: false, note: 'No' });
     expect((await pay(r._id)).status).toBe(409);
     expect((await api().delete(F(`/expenses/${r._id}`)).set(fin.h)).status).toBe(200);
+  });
+
+  it('a vendor can be paid in parts, each payment gets a voucher, and the vendor account and period report show paid, overdue and upcoming money', async () => {
+    const v = (await api().post(F('/vendors')).set(fin.h).send(vendor({ name: 'Chalk and Co', gstin: '27ABCDE1234F1Z5', pan: 'ABCDE1234G' }))).body;
+    await api().post(A(`/approvals/vendors/${v._id}`)).set(W.h).send({ approve: true });
+    const bill = async (title, amount, dueDate) => { const e = (await api().post(F('/expenses')).set(fin.h).send({ date: TODAY, department: 'Supplies', title, amount, dueDate, vendorId: v._id })).body; await api().post(A(`/approvals/expenses/${e._id}`)).set(W.h).send({ approve: true }); return e; };
+    const a = await bill('Classroom chalk', 10000, addDays(TODAY, 10));
+    const b = await bill('Dusters', 4000, addDays(TODAY, -5));
+    const c = await bill('Boards', 2000, addDays(TODAY, -5));
+    const pay = (id, body) => api().post(F(`/expenses/${id}/pay`)).set(fin.h).send({ mode: 'bank_transfer', ...body });
+    // part payment: the bill stays open for the rest, each payment has its own voucher
+    const p1 = await pay(a._id, { amount: 3000, reference: 'UTR-1' });
+    expect(p1.status).toBe(200);
+    expect(p1.body).toMatchObject({ paymentStatus: 'part', paidAmount: 3000 });
+    expect(p1.body.payments[0]).toMatchObject({ amount: 3000, reference: 'UTR-1' });
+    expect(p1.body.payments[0].voucherNo).toMatch(/^PV\d{4}\d{5}$/);
+    expect((await pay(a._id, { amount: 8000 })).status).toBe(400); // only 7,000 is still owed
+    expect((await pay(a._id, { amount: 0 })).status).toBe(400);
+    expect((await api().get(F('/expenses?payment=unpaid')).set(fin.h)).body.items.map((x) => x.title)).toContain('Classroom chalk'); // part-paid is still owing
+    const p2 = await pay(a._id, { amount: 2000 });
+    expect(p2.body.payments.map((x) => x.voucherNo)).toHaveLength(2);
+    expect(new Set(p2.body.payments.map((x) => x.voucherNo)).size).toBe(2);
+    expect((await pay(b._id, {})).body).toMatchObject({ paymentStatus: 'paid', paidAmount: 4000 }); // no amount = the whole bill
+    // the vendor account
+    const led = (await api().get(F(`/vendors/${v._id}/ledger`)).set(fin.h)).body;
+    expect(led.vendor.name).toBe('Chalk and Co');
+    expect(led.totals).toEqual({ billed: 16000, paid: 9000, outstanding: 7000, overdue: 2000, upcoming: 5000, undated: 0 });
+    expect(led.payments).toHaveLength(3);
+    expect(led.upcoming.map((x) => x.title)).toEqual(['Boards', 'Classroom chalk']); // soonest due first
+    expect(led.bills.find((x) => x._id === c._id)).toMatchObject({ overdue: true, outstanding: 2000 });
+    expect((await api().get(F(`/vendors/${v._id}/ledger?from=${addDays(TODAY, 1)}`)).set(fin.h)).body.payments).toHaveLength(0); // narrowed by date
+    // the report by day, month and year; money that falls due in the range
+    const by = (q) => api().get(F(`/reports/vendor-payments?${q}`)).set(fin.h).then((r) => r.body);
+    const all = await by('by=day'); expect(all.paidInPeriod).toBeGreaterThanOrEqual(9000); // every vendor together
+    const day = await by(`by=day&vendorId=${v._id}`);
+    expect(day.paidInPeriod).toBe(9000);
+    expect(day.items.find((x) => x.period === TODAY)).toMatchObject({ paid: 9000, payments: 3 });
+    const month = await by(`by=month&vendorId=${v._id}&to=${addDays(TODAY, 60)}`);
+    expect(month.items.find((x) => x.period === TODAY.slice(0, 7))).toMatchObject({ paid: 9000 });
+    expect(month.dueInPeriod).toBe(7000);
+    expect((await by(`by=year&vendorId=${v._id}`)).items.find((x) => x.period === TODAY.slice(0, 4)).paid).toBe(9000);
+    expect((await api().get(F('/reports/vendor-payments?by=week')).set(fin.h)).status).toBe(400);
+    // the receipts of spending: every payment, narrowed by vendor, mode, text and date, with a CSV and a payment voucher PDF
+    const rc = (q) => api().get(F(`/expense-receipts?${q}`)).set(fin.h).then((r) => r.body);
+    const mine = await rc(`vendorId=${v._id}`);
+    expect(mine).toMatchObject({ total: 3, totals: { amount: 9000, count: 3, revenue: 9000, capital: 0 } });
+    expect(mine.items.every((x) => /^PV\d{9}$/.test(x.voucherNo) && x.vendor === 'Chalk and Co')).toBe(true);
+    expect((await rc(`vendorId=${v._id}&mode=cash`)).total).toBe(0);
+    expect((await rc(`vendorId=${v._id}&q=${p1.body.payments[0].voucherNo}`)).total).toBe(1);
+    expect((await rc(`vendorId=${v._id}&q=UTR-1`)).total).toBe(1);
+    expect((await rc(`vendorId=${v._id}&from=${addDays(TODAY, 1)}`)).total).toBe(0);
+    expect((await rc(`vendorId=${v._id}&nature=capital`)).total).toBe(0);
+    expect((await rc(`vendorId=${v._id}&department=Supplies&limit=2`)).items).toHaveLength(2);
+    expect((await api().get(F('/expense-receipts?mode=barter')).set(fin.h)).status).toBe(400);
+    const csvOut = await api().get(F(`/export/expense-receipts.csv?vendorId=${v._id}`)).set(fin.h);
+    expect(csvOut.text).toContain(p1.body.payments[0].voucherNo);
+    const pdf1 = await api().get(F(`/expenses/${a._id}/payments/${p1.body.payments[0]._id}/voucher.pdf`)).set(fin.h).buffer(true).parse(bin);
+    expect(pdf1.status).toBe(200); expect(pdf1.headers['content-type']).toMatch(/pdf/); expect(pdf1.body.subarray(0, 4).toString()).toBe('%PDF');
+    expect((await api().get(F(`/expenses/${a._id}/payments/older/voucher.pdf`)).set(fin.h)).status).toBe(404); // this bill has real payments, none is "older"
+    expect((await api().get(F(`/expenses/${a._id}/payments/${'0'.repeat(24)}/voucher.pdf`)).set(fin.h)).status).toBe(404);
+    expect((await api().get(A(`/finance/expense-receipts?vendorId=${v._id}`)).set(W.h)).status).toBe(200); // the School Admin may look
+    expect((await api().get(F('/expense-receipts')).set(W.teacher1.h)).status).toBe(403);
+    // the School Admin may look but not pay
+    expect((await api().get(A(`/finance/vendors/${v._id}/ledger`)).set(W.h)).status).toBe(200);
+    expect((await api().post(A(`/finance/expenses/${c._id}/pay`)).set(W.h).send({ mode: 'cash' })).status).toBe(403);
+    expect((await api().get(F(`/vendors/${v._id}/ledger`)).set(W.teacher1.h)).status).toBe(403);
   });
 
   it('budgets are revenue or capital; spending counts against its own kind', async () => {

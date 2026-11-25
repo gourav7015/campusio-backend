@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { parse } from '../../core/utils.js';
 import { audit } from '../../services/audit.js';
-import { loadSchool } from '../../services/context.js';
 import * as v from './exams.validation.js';
 import * as svc from './exams.service.js';
 import * as dsh from './datesheet.service.js';
@@ -75,10 +74,9 @@ adminRoutes.get('/report-cards/:id', async (req, res) => res.json(await svc.repo
 adminRoutes.get('/report-cards/:id/pdf', async (req, res) => {
   const c = await ReportCard.findOne({ _id: req.params.id, tenantId: req.tenantId });
   if (!c) throw notFound('Report card not found');
-  const school = await loadSchool(req.tenantId);
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="report-card-${c.snapshot.student.admissionNo}-v${c.version}.pdf"`);
-  results.renderReportCardPdf(c, school.name, res);
+  await results.renderReportCardPdf(c, res);
 });
 // admin may also take marks entry for any section (permission table: "Enter assigned marks – School Admin: Yes")
 adminRoutes.get('/marks/sheet', async (req, res) => res.json(await marks.getSheet(req.ctx, parse(v.sheetQuery, req.query))));
@@ -120,7 +118,7 @@ studentRoutes.get('/results/:examId/pdf', async (req, res) => {
   if (!card) throw notFound('Result not published');
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="report-card-${card.snapshot.exam.name.replace(/\W+/g, '-')}.pdf"`);
-  results.renderReportCardPdf(card, req.ctx.school.name, res);
+  await results.renderReportCardPdf(card, res);
 });
 studentRoutes.get('/class-results', async (req, res) => res.json(await results.classExams(req.ctx)));
 studentRoutes.get('/class-results/:examId', async (req, res) => res.json(await results.classExamDetail(req.ctx, req.params.examId)));

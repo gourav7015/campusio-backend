@@ -1,3 +1,4 @@
+import { flagOn } from '../../services/flags.js';
 import mongoose from 'mongoose';
 import { PaymentOrder, StudentCharge, Student } from '../../models/index.js';
 import { gateway } from '../../services/gateway/index.js';
@@ -20,9 +21,12 @@ const HOUR = 60 * 60 * 1000;
 const paise = (rupees) => Math.round(rupees * 100);
 
 /** What the student's fee page needs to know about online payment. */
+/** Online payment is available for a school only when its feature switch is on (it is off unless the Platform Admin turns it on), the school has not turned it off, and a gateway is configured. */
+export const onlineEnabled = (settings) => !!gateway() && flagOn(settings, 'onlinePayments') && settings?.finance?.onlinePayments !== false;
+
 export function onlineInfo(ctx) {
   const gw = gateway();
-  const on = !!gw && ctx.settings?.finance?.onlinePayments !== false;
+  const on = onlineEnabled(ctx.settings);
   return { enabled: on, provider: on ? gw.name : null, testMode: on ? !!gw.publicInfo().testMode : false, maxAmount: config.payments.maxAmount };
 }
 

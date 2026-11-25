@@ -11,7 +11,7 @@ export function selfRoutes(type) {
   r.get('/library/books', async (req, res) => {
     const out = await svc.listBooks(req.tenantId, parse(v.booksQuery, req.query));
     // catalogue view: availability only, no copy-level or borrower details
-    res.json({ ...out, items: out.items.map((b) => ({ _id: b._id, title: b.title, author: b.author, category: b.category, language: b.language, shelf: b.shelf, available: b.available, total: b.total })) });
+    res.json({ ...out, items: out.items.map((b) => ({ _id: b._id, title: b.title, author: b.author, category: b.category, language: b.language, shelf: b.shelf, available: b.available, total: b.total, referenceOnly: !!b.referenceOnly })) });
   });
   return r;
 }

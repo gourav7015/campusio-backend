@@ -129,12 +129,13 @@ describe('Staff attendance registers feed payroll, and payroll covers non-teachi
   it('staff payslips go through the same approval, PDF and payment steps; nobody else can read them', async () => {
     const { payslips } = (await api().get(P(`/runs/${W.run._id}`)).set(F.h)).body;
     const k = payslips.find((p) => p.personName === 'Kamla Devi');
-    const pdf = await api().get(P(`/payslips/${k._id}/pdf`)).set(F.h);
-    expect(pdf.status).toBe(200); expect(pdf.headers['content-type']).toContain('application/pdf');
-    expect((await api().post(PA(`/runs/${W.run._id}/approve`)).set(W.h)).body.status).toBe('approved'); // staff have no login: nothing to notify, nothing breaks
+    expect((await api().get(P(`/payslips/${k._id}/pdf`)).set(F.h)).status).toBe(409); // not paid yet: no payslip to issue
+    expect((await api().post(P(`/runs/${W.run._id}/approve`)).set(F.h)).body.status).toBe('approved'); // staff have no login: nothing to notify, nothing breaks
     expect((await api().get(`/api/teacher/payslips/${k._id}/pdf`).set(W.teacher1.h)).status).toBe(404); // a teacher cannot read a sweeper's payslip
     const paid = await api().post(P(`/runs/${W.run._id}/pay`)).set(F.h).send({ mode: 'cash', reference: 'Cash payroll' });
     expect(paid.body).toMatchObject({ status: 'paid', totals: { paid: 49500 } });
+    const pdf = await api().get(P(`/payslips/${k._id}/pdf`)).set(F.h); // paid: the payslip can be issued
+    expect(pdf.status).toBe(200); expect(pdf.headers['content-type']).toContain('application/pdf');
     const csv = await api().get(P(`/runs/${W.run._id}/export.csv`)).set(F.h);
     expect(csv.text).toContain('Kamla Devi'); expect(csv.text).toContain('Ramesh Bhai');
     // the teacher still sees only their own payslip

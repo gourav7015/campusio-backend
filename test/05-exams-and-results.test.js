@@ -52,10 +52,15 @@ describe('examinations with configurable mark fields → approval → publish �
 
   it('teacher enters marks field by field; validation is strict and per field', async () => {
     const mine = (await api().get('/api/teacher/exams').set(W.teacher1.h)).body;
-    expect(mine.map((m) => m.subject)).toEqual(['Mathematics']);
-    expect(mine[0]).toMatchObject({ status: 'not_started', max: 100, createdByMe: false });
-    expect(mine[0].components.map((c) => c.label)).toEqual(['Written', 'Practical']);
-    expect((await api().get(`/api/teacher/marks/sheet?${sheetQ(esEng)}`).set(W.teacher1.h)).status).toBe(403); // not his subject
+    // teacher1 teaches Maths and is the class teacher of 8-A, so he has full access to that class: every subject of it is his to mark
+    expect(mine.map((m) => m.subject).sort()).toEqual(['English', 'Mathematics']);
+    const maths = mine.find((m) => m.subject === 'Mathematics'); const english = mine.find((m) => m.subject === 'English');
+    expect(maths).toMatchObject({ status: 'not_started', max: 100, createdByMe: false, viaClassTeacher: false });
+    expect(english).toMatchObject({ viaClassTeacher: true });
+    expect(maths.components.map((c) => c.label)).toEqual(['Written', 'Practical']);
+    expect((await api().get(`/api/teacher/marks/sheet?${sheetQ(esEng)}`).set(W.teacher1.h)).status).toBe(200); // the class teacher may open any subject of his class
+    expect((await api().get(`/api/teacher/exams`).set(W.teacher2.h)).body.map((m) => m.subject)).toEqual(['English']); // a subject teacher only his own
+    expect((await api().get(`/api/teacher/marks/sheet?${sheetQ(esMaths)}`).set(W.teacher2.h)).status).toBe(403); // not her subject, not her class
     const sheet = (await api().get(`/api/teacher/marks/sheet?${sheetQ(esMaths)}`).set(W.teacher1.h)).body;
     expect(sheet.students).toHaveLength(3);
     const [a, b, c] = sheet.students;

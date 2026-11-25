@@ -1,3 +1,4 @@
+import { busRolesOf } from '../transport/crew.js';
 import { Designation, StaffMember, Bus, Teacher } from '../../models/index.js';
 import { notFound, conflict, bad, forbidden, escapeRegex } from '../../core/utils.js';
 import { nextSeq, settingsOf, loadSchool } from '../../services/context.js';
@@ -153,7 +154,7 @@ export async function listStaff(ctx, scope, q) {
   const [total, rows] = await Promise.all([StaffMember.countDocuments(f), StaffMember.find(f).sort({ name: 1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean()]);
   const bus = await busOf(ctx, rows.map((r) => r._id));
   return {
-    total, items: rows.map((s) => { const d = D.get(String(s.designationId)); return { ...s, designation: d?.name, group: d?.group, busRole: d?.busRole, bus: bus.get(String(s._id)) || null, hasLogin: !!s.userId }; }),
+    total, items: rows.map((s) => { const d = D.get(String(s.designationId)); return { ...s, designation: d?.name, group: d?.group, busRole: d?.busRole, busRoles: busRolesOf(d, s), bus: bus.get(String(s._id)) || null, hasLogin: !!s.userId }; }),
   };
 }
 
@@ -165,11 +166,18 @@ async function loadDesignation(ctx, scope, id) {
   return d;
 }
 
+/** Extra bus seats ("can also conduct") only make sense for transport staff, and never repeat the seat the job title already carries. */
+function cleanAlso(d, list) {
+  const also = [...new Set(list || [])].filter((r) => r !== d?.busRole);
+  if (also.length && d?.group !== 'transport') throw bad('Only transport staff can be a driver or conductor');
+  return also;
+}
+
 export async function createStaff(ctx, scope, body) {
   const d = await loadDesignation(ctx, scope, body.designationId);
   const seq = await nextSeq(ctx.tenantId, 'staff');
-  const s = await StaffMember.create({ ...body, tenantId: ctx.tenantId, staffId: `S${String(seq).padStart(4, '0')}`, createdBy: ctx.actorId });
-  return { ...s.toObject(), designation: d.name, group: d.group, busRole: d.busRole };
+  const s = await StaffMember.create({ ...body, alsoBusRoles: cleanAlso(d, body.alsoBusRoles), tenantId: ctx.tenantId, staffId: `S${String(seq).padStart(4, '0')}`, createdBy: ctx.actorId });
+  return { ...s.toObject(), designation: d.name, group: d.group, busRole: d.busRole, busRoles: busRolesOf(d, s) };
 }
 
 async function ownStaff(ctx, scope, id) {
@@ -183,19 +191,28 @@ async function ownStaff(ctx, scope, id) {
 export async function getStaff(ctx, scope, id) {
   const { s, d } = await ownStaff(ctx, scope, id);
   const bus = await busOf(ctx, [s._id]);
-  return { ...s.toObject(), designation: d?.name, group: d?.group, busRole: d?.busRole, bus: bus.get(String(s._id)) || null };
+  return { ...s.toObject(), designation: d?.name, group: d?.group, busRole: d?.busRole, busRoles: busRolesOf(d, s), bus: bus.get(String(s._id)) || null };
 }
 
 export async function updateStaff(ctx, scope, id, patch) {
   const { s, d } = await ownStaff(ctx, scope, id);
   if (patch.designationId && String(patch.designationId) !== String(s.designationId)) {
     const nd = await loadDesignation(ctx, scope, patch.designationId);
-    if (d?.busRole && nd.busRole !== d.busRole && (await busOf(ctx, [s._id])).has(String(s._id))) throw conflict(`${s.name} is on a bus as ${d.busRole}. Reassign the bus first.`);
+  }
+  // the seats this person can fill after the change: a seat they hold on a bus must stay among them
+  const nd2 = patch.designationId && String(patch.designationId) !== String(s.designationId) ? await Designation.findById(patch.designationId).lean() : d;
+  const nextAlso = patch.alsoBusRoles !== undefined ? cleanAlso(nd2, patch.alsoBusRoles) : cleanAlso(nd2, (s.alsoBusRoles || []).filter((r) => r !== nd2?.busRole));
+  if (patch.alsoBusRoles !== undefined || patch.designationId) {
+    patch.alsoBusRoles = nextAlso;
+    const held = (await busOf(ctx, [s._id])).get(String(s._id));
+    if (held && !busRolesOf(nd2, { alsoBusRoles: nextAlso }).includes(held.as)) throw conflict(`${s.name} is on bus ${held.busNo} as ${held.as}. Reassign the bus first.`);
   }
   if (patch.canMarkAttendance && (scope === 'transport' || d?.group === 'transport')) throw bad('Transport crew cannot take attendance');
   if (patch.canMarkAttendance === false && s.userId) throw conflict(`${s.name} has a sign-in for the office desk. Remove it before switching the desk off.`);
   Object.assign(s, patch);
-  return s.save();
+  const saved = await s.save();
+  const dNow = patch.designationId ? await Designation.findById(saved.designationId).lean() : d;
+  return { ...saved.toObject(), busRole: dNow?.busRole, busRoles: busRolesOf(dNow, saved) };
 }
 
 export async function setStaffStatus(ctx, scope, id, status) {

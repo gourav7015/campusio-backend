@@ -17,7 +17,7 @@ describe('every payslip keeps its own figures; a later salary revision is explai
   const setPay = (basic, effectiveFrom) => api().post(P(`/salaries/${t1}`)).set(F.h).send({ basic, effectiveFrom, reason: 'test' });
   const runMonth = async (month) => {
     const run = (await api().post(P('/runs')).set(F.h).send({ month })).body;
-    expect((await api().post(PA(`/runs/${run._id}/approve`)).set(W.h).send({})).status).toBe(200);
+    expect((await api().post(P(`/runs/${run._id}/approve`)).set(F.h).send({})).status).toBe(200);
     return run;
   };
 
@@ -68,7 +68,7 @@ describe('salary paid in parts', () => {
     const run = (await api().post(P('/runs')).set(F.h).send({ month: M1 })).body;
     const slip = (await api().get(P(`/runs/${run._id}`)).set(F.h)).body.payslips[0];
     expect((await api().post(P(`/payslips/${slip._id}/pay`)).set(F.h).send({ amount: 100 })).status).toBe(409); // approve first
-    await api().post(PA(`/runs/${run._id}/approve`)).set(W.h).send({});
+    await api().post(P(`/runs/${run._id}/approve`)).set(F.h).send({});
     const half = Math.round(slip.net / 2 * 100) / 100;
     const a = await api().post(P(`/payslips/${slip._id}/pay`)).set(F.h).send({ amount: half, mode: 'cash', note: 'First half' });
     expect(a.body).toMatchObject({ status: 'partial', paidAmount: half });
@@ -87,7 +87,7 @@ describe('salary paid in parts', () => {
     const m0 = monthsAgo(0);
     await api().post(P(`/salaries/${t1}`)).set(F.h).send({ basic: 31000, effectiveFrom: `${m0}-01` });
     const run = (await api().post(P('/runs')).set(F.h).send({ month: m0 })).body;
-    await api().post(PA(`/runs/${run._id}/approve`)).set(W.h).send({});
+    await api().post(P(`/runs/${run._id}/approve`)).set(F.h).send({});
     const slip = (await api().get(P(`/runs/${run._id}`)).set(F.h)).body.payslips[0];
     await api().post(P(`/payslips/${slip._id}/pay`)).set(F.h).send({ amount: 1000 });
     const out = await api().post(P(`/runs/${run._id}/pay`)).set(F.h).send({ mode: 'bank_transfer' });

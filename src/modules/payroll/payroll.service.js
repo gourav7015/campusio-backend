@@ -2,9 +2,11 @@ import PDFDocument from 'pdfkit';
 import { loadLook } from '../../services/documents/look.js';
 import { drawPayslip } from '../../services/documents/payslip.js';
 import { niceDate } from '../../services/documents/common.js';
-import { StaffLeave, PayLevel, SalaryRevision, PayrollRun, Payslip, Teacher, LeaveApplication, CalendarEvent, School, StaffMember, Designation, StaffAttendanceSession, StaffAttendanceRecord } from '../../models/index.js';
+import { User, StaffLeave, PayLevel, SalaryRevision, PayrollRun, Payslip, Teacher, LeaveApplication, CalendarEvent, School, StaffMember, Designation, StaffAttendanceSession, StaffAttendanceRecord } from '../../models/index.js';
 import { bad, conflict, notFound, forbidden, eachDate, escapeRegex, round2, toCsv, monthOf } from '../../core/utils.js';
 import { notifyUsers } from '../../services/notify.js';
+import { schoolToday } from '../../services/context.js';
+import { logger } from '../../core/logger.js';
 import { structureOf, computePayslip, monthBounds, workingDates } from './payroll.calc.js';
 
 // ───────────── pay levels ─────────────
@@ -118,6 +120,40 @@ export async function setSalaryBulk(ctx, body) {
   return { updated: done, failed };
 }
 
+/**
+ * An increment (or reduction) of basic pay, as a percentage or a fixed amount, for a group or for exactly the people given, from a date. Allowances given as a
+ * percentage of basic follow by themselves; fixed allowances and deductions stay as they are. Each person gets a new salary revision (the old one stays in their history).
+ * With `preview` nothing is saved: it returns what each person's pay would become.
+ */
+export async function incrementSalaries(ctx, { scope, personIds, mode = 'percent', percent, amount, roundTo = 1, effectiveFrom, reason, preview }) {
+  const everyone = await allPeople(ctx, scope === 'all' ? 'all' : scope);
+  const chosen = personIds ? new Set(personIds.map(String)) : null;
+  const people = chosen ? everyone.filter((p) => chosen.has(String(p.id))) : everyone;
+  const revs = await latestRevisions(ctx.tenantId, effectiveFrom);
+  const rows = []; const skipped = []; const failed = [];
+  if (chosen) for (const id of chosen) if (!people.some((p) => String(p.id) === id)) skipped.push({ personId: id, name: 'Someone on the list', reason: 'Not found, or no longer active' });
+  for (const p of people) {
+    const cur = revs.get(String(p.id));
+    if (!cur) { skipped.push({ personId: p.id, name: p.name, reason: 'No salary set yet' }); continue; }
+    const raw = mode === 'amount' ? cur.basic + amount : cur.basic * (1 + percent / 100);
+    const basic = Math.max(1, roundTo > 1 ? Math.round(raw / roundTo) * roundTo : Math.round(raw));
+    if (basic === cur.basic) { skipped.push({ personId: p.id, name: p.name, reason: 'No change after rounding' }); continue; }
+    const next = { ...cur, basic };
+    const row = { personId: p.id, name: p.name, code: p.code, personType: p.type, oldBasic: cur.basic, newBasic: basic, oldNet: structureOf(cur).net, newNet: structureOf(next).net };
+    if (!preview) {
+      try {
+        await assertNotPaidFor(ctx, p.id, effectiveFrom);
+        const doc = { tenantId: ctx.tenantId, personType: p.type, personId: p.id, effectiveFrom, levelId: cur.levelId, levelName: cur.levelName, basic, allowances: cur.allowances, deductions: cur.deductions, reason: reason || (mode === 'amount' ? `Increment of ₹${amount}` : `Increment of ${percent}%`), by: ctx.actorId, byName: ctx.actorName };
+        const dup = await SalaryRevision.findOne({ tenantId: ctx.tenantId, personId: p.id, effectiveFrom });
+        await (dup ? Object.assign(dup, doc) : new SalaryRevision(doc)).save();
+      } catch (e) { failed.push({ personId: p.id, name: p.name, error: e.message }); continue; }
+    }
+    rows.push(row);
+  }
+  const sum = (k) => round2(rows.reduce((n, r) => n + r[k], 0));
+  return { preview: !!preview, mode, percent, amount, effectiveFrom, people: rows.length, applied: preview ? 0 : rows.length, rows, skipped, failed, oldMonthlyNet: sum('oldNet'), newMonthlyNet: sum('newNet') };
+}
+
 export async function salaryHistory(ctx, personId) {
   const person = await loadPerson(ctx, personId);
   const rows = await SalaryRevision.find({ tenantId: ctx.tenantId, personId: person.doc._id }).sort({ effectiveFrom: -1, createdAt: -1 }).lean();
@@ -223,6 +259,46 @@ const ownRun = async (ctx, id) => {
 };
 const draftOnly = (run) => { if (run.status !== 'draft') throw conflict(`This payroll is ${run.status} and can no longer be changed`); };
 
+// ───────────── automatic monthly payroll ─────────────
+/** The school's payroll settings: the day of the month on which the payroll prepares itself (0 = off). */
+export const payrollSettings = (ctx) => ({ generateDay: ctx.settings.payroll?.generateDay ?? 25 });
+
+export async function setPayrollSettings(ctx, { generateDay }) {
+  const school = await School.findById(ctx.tenantId);
+  school.settings = { ...(school.settings || {}), payroll: { ...(school.settings?.payroll || {}), generateDay } };
+  school.markModified('settings');
+  await school.save();
+  return { generateDay };
+}
+
+/**
+ * Once a day (the job runs every few hours): in each school whose payroll day has come, the current month's payroll is prepared by itself, as a draft,
+ * and Finance is told. Finance then checks the amounts, adjusts them and approves. A month that already has a payroll is never touched, and a school where
+ * nobody has a salary yet is skipped without an error.
+ */
+export async function autoGeneratePayroll() {
+  let made = 0;
+  for (const sc of await School.find({ status: 'active' }).select('_id').lean()) {
+    try {
+      const { settings, today } = await schoolToday(sc._id);
+      const day = settings.payroll?.generateDay ?? 25;
+      const month = today.slice(0, 7);
+      if (!day || Number(today.slice(8, 10)) < day) continue;
+      if (await PayrollRun.exists({ tenantId: sc._id, month })) continue;
+      const ctx = { tenantId: sc._id, settings, today, actorName: 'Automatic' };
+      let run;
+      try { run = await createRun(ctx, { month }); } catch (e) { if (e?.status === 400) continue; throw e; } // nobody has a salary yet: nothing to prepare
+      made += 1;
+      const fin = await User.find({ tenantId: sc._id, role: 'finance', status: 'active' }).select('_id').lean();
+      await notifyUsers(sc._id, fin.map((u) => u._id), {
+        category: 'payroll', title: `Payroll for ${month} is ready to check`, body: `${run.totals.count} payslips, net ₹${run.totals.net}. Adjust anything that needs it, then approve.`,
+        link: { type: 'payroll' }, dedupeKey: `payroll-ready:${month}`,
+      });
+    } catch (e) { logger.warn('automatic payroll failed for a school', { tenant: String(sc._id), error: e.message }); }
+  }
+  return made;
+}
+
 export async function recalculate(ctx, id) {
   const run = await ownRun(ctx, id); draftOnly(run);
   await generate(ctx, run);
@@ -258,6 +334,34 @@ export async function adjust(ctx, payslipId, { adjustments }) {
   await p.save();
   await refreshTotals(run);
   return p;
+}
+
+/**
+ * A one-time bonus on this month's payroll for a whole group: a fixed amount, or a percentage of each person's basic (100% is one month's basic).
+ * It is added to each payslip like any adjustment, so it can still be edited or removed per person while the payroll is a draft. Adding the same
+ * name again replaces it, so doing it twice never pays it twice.
+ */
+export async function bonusRun(ctx, id, { label, mode, value, scope, reason, preview }) {
+  const run = await ownRun(ctx, id); draftOnly(run);
+  const { end } = monthBounds(run.month);
+  const revs = await latestRevisions(ctx.tenantId, end);
+  const slips = await Payslip.find({ tenantId: ctx.tenantId, runId: run._id });
+  const rows = []; const skipped = [];
+  for (const p of slips) {
+    if ((scope === 'teachers' && p.personType !== 'teacher') || (scope === 'staff' && p.personType !== 'staff')) continue;
+    const rev = revs.get(String(p.personId));
+    if (!rev) { skipped.push({ name: p.personName, reason: 'No salary on record' }); continue; }
+    const amount = mode === 'fixed' ? round2(value) : round2((rev.basic * value) / 100);
+    if (!(amount > 0)) { skipped.push({ name: p.personName, reason: 'The bonus works out to nothing' }); continue; }
+    const kept = (p.adjustments || []).filter((a) => !(a.type === 'earning' && String(a.label).toLowerCase() === label.toLowerCase()));
+    if (kept.length >= 10) { skipped.push({ name: p.personName, reason: 'Already has 10 adjustments' }); continue; }
+    const adjustments = [...kept.map((a) => (a.toObject ? a.toObject() : a)), { label, type: 'earning', amount, ...(reason ? { reason } : {}) }];
+    const calc = computePayslip({ revision: rev, workingDays: p.workingDays, unpaidDays: p.unpaidDays, adjustments, policy: ctx.settings.statutory });
+    rows.push({ payslipId: p._id, name: p.personName, code: p.employeeId, amount, newNet: calc.net });
+    if (!preview) { Object.assign(p, calc, { adjustments }); await p.save(); }
+  }
+  if (!preview) await refreshTotals(run);
+  return { preview: !!preview, label, applied: preview ? 0 : rows.length, rows, skipped, total: round2(rows.reduce((n, r) => n + r.amount, 0)) };
 }
 
 export async function approve(ctx, id) {

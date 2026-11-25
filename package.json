@@ -11,6 +11,7 @@
     "test": "vitest run",
     "lint": "eslint src test",
     "dump": "node src/bulk-seed.js",
+    "sample:finance": "node src/sample-finance.js",
     "sample:school-info": "node src/sample-school-info.js",
     "backup": "node src/scripts/backup-cli.js backup",
     "backup:verify": "node src/scripts/backup-cli.js verify",

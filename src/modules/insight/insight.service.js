@@ -156,6 +156,7 @@ export async function classAnalysis(ctx, { classId, sectionId }) {
     Examination.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, classIds: cls._id }).select('name status startDate').lean(),
   ]);
   const S = mk(students); const SEC = mk(sections);
+  const monitors = new Set(); for (const sid of sectionIds) for (const m of await monitorsOf(ctx.tenantId, sid)) monitors.add(String(m)); // the class monitors, so the list can be narrowed to them
   const cardsByExam = by(cards, 'examId'); const cardsByStudent = by(cards, 'studentId');
   const pass = ctx.settings.grading.passPercentage;
 
@@ -177,7 +178,7 @@ export async function classAnalysis(ctx, { classId, sectionId }) {
   const rows = enrols.map((en) => {
     const k = String(en.studentId); const scores = {}; const pcts = [];
     for (const c of cardsByStudent.get(k) || []) { scores[String(c.examId)] = { percentage: c.snapshot.percentage, grade: c.snapshot.grade, result: c.snapshot.resultStatus }; if (c.snapshot.percentage != null) pcts.push(c.snapshot.percentage); }
-    return { studentId: en.studentId, rollNo: en.rollNo, name: S.get(k)?.name, admissionNo: S.get(k)?.admissionNo, section: SEC.get(String(en.sectionId))?.name, scores, average: mean(pcts), examsTaken: pcts.length };
+    return { studentId: en.studentId, rollNo: en.rollNo, name: S.get(k)?.name, admissionNo: S.get(k)?.admissionNo, section: SEC.get(String(en.sectionId))?.name, monitor: monitors.has(k), scores, average: mean(pcts), examsTaken: pcts.length };
   });
   rankBy(rows, 'average');
   const avgs = rows.map((r) => r.average).filter((x) => x != null);

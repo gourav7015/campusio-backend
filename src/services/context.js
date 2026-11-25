@@ -13,6 +13,7 @@ export function settingsOf(school) {
     staffLeaveBalances: { ...d.staffLeaveBalances, ...(s.staffLeaveBalances || {}) },
     leaveRules: { teaching: { ...d.leaveRules.teaching, ...(s.leaveRules?.teaching || {}) }, nonTeaching: { ...d.leaveRules.nonTeaching, ...(s.leaveRules?.nonTeaching || {}) } },
     staffAttendance: { ...d.staffAttendance, ...(s.staffAttendance || {}) },
+    payroll: { ...d.payroll, ...(s.payroll || {}) },
     statutory: { pf: { ...d.statutory.pf, ...(s.statutory?.pf || {}) }, esi: { ...d.statutory.esi, ...(s.statutory?.esi || {}) }, pt: { ...d.statutory.pt, ...(s.statutory?.pt || {}) } },
   };
 }
@@ -70,6 +71,8 @@ export async function teacherScope(tenantId, teacherId, yearId, today) {
     classTeacherSectionIds: activeCT.map((a) => String(a.sectionId)),
     sectionIds,
     canTeach: (sectionId, subjectId) => active.some((a) => String(a.sectionId) === String(sectionId) && (!subjectId || String(a.subjectId) === String(subjectId))),
+    // marks and class tests: the subject teacher of that section, and the class teacher of the section for EVERY subject of their class
+    canMark: (sectionId, subjectId) => active.some((a) => String(a.sectionId) === String(sectionId) && (!subjectId || String(a.subjectId) === String(subjectId))) || activeCT.some((a) => String(a.sectionId) === String(sectionId)),
     hasSection: (sectionId) => sectionIds.includes(String(sectionId)),
   };
 }

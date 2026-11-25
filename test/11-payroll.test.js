@@ -82,7 +82,7 @@ describe('Payroll: pay levels, salaries, monthly runs, payslips', () => {
     expect((await api().get('/api/teacher/payslips').set(W.teacher1.h)).body).toHaveLength(0);
     expect((await api().get(`/api/teacher/payslips/${slip1._id}/pdf`).set(W.teacher1.h)).status).toBe(403);
     expect((await api().post(AA(`/runs/${run._id}/approve`)).set(W.teacher1.h)).status).toBe(403);
-    expect((await api().post(AA(`/runs/${run._id}/approve`)).set(W.h)).body.status).toBe('approved');
+    expect((await api().post(A(`/runs/${run._id}/approve`)).set(F.h)).body.status).toBe('approved');
     // approved payroll is locked
     expect((await api().patch(A(`/payslips/${slip1._id}/adjustments`)).set(F.h).send({ adjustments: [] })).status).toBe(409);
     expect((await api().post(A(`/runs/${run._id}/recalculate`)).set(F.h)).status).toBe(409);
@@ -96,7 +96,7 @@ describe('Payroll: pay levels, salaries, monthly runs, payslips', () => {
     const pdf = await api().get(`/api/teacher/payslips/${slip1._id}/pdf`).set(W.teacher1.h);
     expect(pdf.status).toBe(200); expect(pdf.headers['content-type']).toContain('application/pdf');
     expect((await api().get(`/api/teacher/payslips/${slip1._id}/pdf`).set(W.teacher2.h)).status).toBe(404); // someone else's
-    expect((await api().get(`/api/school/payroll/payslips/${slip1._id}/pdf`).set(W.h)).status).toBe(200);
+    expect((await api().get(`/api/school/payroll/payslips/${slip1._id}/pdf`).set(W.h)).status).toBe(409); // a payslip is issued once the salary is paid, not before
   });
 
   it('payment is recorded per payslip, once, and the run closes when everyone is paid', async () => {

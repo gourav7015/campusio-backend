@@ -34,6 +34,7 @@ import insightRoutes from './insight/insight.routes.js';
 import financeRoutes from './finance/finance.routes.js';
 import financeStudent from './finance/finance.student.routes.js';
 import libraryRoutes from './library/library.routes.js';
+import { classOfficeGuard } from './class-office/class-office.guard.js';
 import { selfRoutes } from './library/library.self.routes.js';
 import teacherPortal from './teacher-portal/teacher.routes.js';
 import studentPortal from './student-portal/student.routes.js';
@@ -89,6 +90,8 @@ export function mountModules(app, authenticate) {
   app.use('/api/library', authenticate, requireRole('library'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, libraryRoutes]));
   app.use('/api/transport', authenticate, requireRole('transport'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, transportRouter]));
   app.use('/api/staff', authenticate, requireRole('staff'), rejectActing, requireTenant, staffContext, deskGate, stack([at('/attendance-desk', attendanceRoutes(DESK_GROUPS)), at('/leave', leaveDeskRoutes('general')), at('/queries', ticketHandler('school')), at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, staffPortal]));
+  // a class teacher sees his own class the way the school office does: the office's read endpoints, behind a guard that limits them to his own sections
+  app.use('/api/teacher/office', authenticate, requireRole('teacher'), rejectActing, requireTenant, teacherContext, classOfficeGuard, stack([studentsRoutes, insightRoutes, at('/finance', financeRoutes), at('/library', libraryRoutes)]));
   app.use('/api/teacher', authenticate, requireRole('teacher'), rejectActing, requireTenant, teacherContext, stack(teacherRouters));
   app.use('/api/student', authenticate, requireRole('student'), rejectActing, requireTenant, studentContext, stack(studentRouters));
   // The school's academic years (names and dates only), so any signed-in person can look back at a past session.

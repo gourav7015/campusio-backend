@@ -16,3 +16,8 @@ export const busBody = z.object({
 });
 export const busPatch = busBody.partial();
 export const assignBody = z.object({ busId: id, studentIds: z.array(id).min(1).max(200), stop: z.string().trim().max(60).optional() });
+
+/** Swap crew between two buses, or the driver and conductor of one bus with each other. */
+export const swapBody = z.object({
+  busId: id, otherBusId: id.optional(), what: z.enum(['driver', 'conductor', 'both', 'roles']), preview: z.boolean().default(false),
+});

@@ -27,6 +27,11 @@ export const assignBody = z.object({
 }).refine((b) => b.studentIds?.length || b.sectionId || b.all, { message: 'Choose students, a section, or everyone the structure applies to' });
 
 export const chargeBody = z.object({ studentId: id, label: z.string().trim().min(3).max(80), amount: money, dueDate: date.optional() });
+/** One extra charge for many students: everyone in a section or a class, or exactly the students given. `preview` only shows who would get it. */
+export const bulkChargeBody = z.object({
+  sectionId: id.optional(), classId: id.optional(), studentIds: z.array(id).min(1).max(1000).optional(),
+  label: z.string().trim().min(3).max(80), amount: money, dueDate: date.optional(), preview: z.boolean().default(false),
+}).refine((b) => b.sectionId || b.classId || b.studentIds?.length, { message: 'Choose a section, a class or some students', path: ['sectionId'] });
 export const concessionBody = z.object({ amount: money, reason: z.string().trim().min(3).max(200) });
 /** A concession given at the counter, on the dues this receipt pays (the ticked ones, or everything outstanding). */
 export const discountBody = z.object({ type: z.enum(['amount', 'percent']), value: z.number().positive(), reason: z.string().trim().min(3).max(200) })
@@ -40,5 +45,5 @@ export const duesQuery = z.object({
   q: z.string().optional(), sectionId: id.optional(), classId: id.optional(), status: z.enum(['all', 'overdue', 'pending', 'clear']).default('all'),
   page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(200).default(50),
 });
-export const rangeQuery = z.object({ from: date.optional(), to: date.optional(), mode: z.enum([...MODES, 'online']).optional(), q: z.string().optional(), limit: z.coerce.number().int().min(1).max(500).default(200) });
+export const rangeQuery = z.object({ from: date.optional(), to: date.optional(), mode: z.enum([...MODES, 'online']).optional(), q: z.string().optional(), sectionId: id.optional(), classId: id.optional(), limit: z.coerce.number().int().min(1).max(500).default(200) });
 export const remindBody = z.object({ studentIds: z.array(id).max(1000).optional(), onlyOverdue: z.boolean().default(true) });
