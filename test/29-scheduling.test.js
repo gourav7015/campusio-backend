@@ -71,12 +71,18 @@ describe('Scheduling: period swaps, attendance on a closed day, period-wise atte
     expect((await api().put('/api/teacher/period-attendance/register').set(T1).send({ entryId: today1._id, date: TODAY, entries: [{ studentId: a, status: 'absent' }] })).body).toMatchObject({ absent: 1, total: 3 });
     expect((await api().put('/api/teacher/period-attendance/register').set(T1).send({ entryId: today1._id, date: addDays(TODAY, 1), entries: [] })).status).toBe(400); // weekday mismatch / future
     expect((await api().get('/api/teacher/period-attendance').set(T1)).body.periods.find((p) => p.entryId === today1._id).marked).toBe(true);
+    // the class teacher sees the whole day of their class period by period: who takes each lesson, whether it is marked and who was away
+    const cp = (await api().get(`/api/teacher/class-periods?sectionId=${W.sec8A._id}&date=${TODAY}`).set(T1)).body;
+    expect(cp.enabled).toBe(true);
+    expect(cp.periods.find((p) => p.entryId === today1._id)).toMatchObject({ subject: 'Mathematics', teacher: 'Mr Sharma', mine: true, marked: true, absent: 1, total: 3 });
+    expect((await api().get(`/api/teacher/class-periods?sectionId=${W.sec8A._id}&date=${TODAY}`).set(T2)).status).toBe(403); // only the class teacher of that section
     // the student sees their own period-by-period status; the admin sees counts
     const mine = (await api().get('/api/student/period-attendance').set(W.studentLogins[0].h)).body;
     expect(mine.periods).toEqual([expect.objectContaining({ status: 'absent', subject: 'Mathematics' })]);
     expect((await api().get('/api/student/period-attendance').set(W.studentLogins[1].h)).body.periods[0].status).toBe('present');
     expect((await api().get(`/api/school/period-attendance?sectionId=${W.sec8A._id}`).set(W.h)).body.periods[0]).toMatchObject({ absent: 1, total: 3, teacher: 'Mr Sharma' });
     await api().put('/api/school/settings').set(W.h).send({ attendance: { periodWise: false } });
+    expect((await api().get(`/api/teacher/class-periods?sectionId=${W.sec8A._id}&date=${TODAY}`).set(T1)).body).toMatchObject({ enabled: false, periods: [] }); // nothing to show when the school does not take attendance by period
   });
 
   it('attendance on a day the school is closed needs the School Admin\'s approval, then the register opens', async () => {

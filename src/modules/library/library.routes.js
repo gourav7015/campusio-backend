@@ -43,7 +43,7 @@ r.post('/books/:id/copies', async (req, res) => {
 });
 r.delete('/copies/:id', async (req, res) => {
   const out = await svc.deleteCopy(req.ctx, req.params.id);
-  await audit(req, 'library.copy_deleted', 'BookCopy', req.params.id, out.mode === 'deleted' ? `Deleted copy ${out.accessionNo}` : `Withdrew copy ${out.accessionNo} (it has lending history)`, { mode: out.mode });
+  await audit(req, 'library.copy_deleted', 'BookCopy', req.params.id, out.mode === 'deleted' ? `Deleted copy ${out.accessionNo}` : `Deleted copy ${out.accessionNo} (its lending history is kept)`, { mode: out.mode });
   res.json(out);
 });
 r.patch('/copies/:id', async (req, res) => {

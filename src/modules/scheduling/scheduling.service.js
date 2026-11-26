@@ -229,6 +229,42 @@ export async function adminPeriodOverview(ctx, { sectionId, date }) {
   return { enabled: !!ctx.settings.attendance?.periodWise, date, periods: sessions.map((s) => ({ period: P.get(String(s.periodId))?.name, order: P.get(String(s.periodId))?.order, teacher: T.get(String(s.teacherId))?.name, subject: S.get(String(s.subjectId))?.name, absent: s.records.filter((r) => r.status === 'absent').length, late: s.records.filter((r) => r.status === 'late').length, total: s.records.length })).sort((a, b) => a.order - b.order) };
 }
 
+/**
+ * The class teacher's view of one day of their own class, period by period: every lesson on the timetable, who takes it (or covers it),
+ * whether its attendance has been marked and how many were away. It is how a class teacher in a period-wise school sees the day, instead of one whole-day register.
+ */
+export async function classPeriodDay(ctx, { sectionId, date }) {
+  if (!ctx.scope.classTeacherSectionIds.includes(String(sectionId))) throw forbidden('Only the class teacher can see the periods of a class this way');
+  const enabled = !!ctx.settings.attendance?.periodWise;
+  if (!enabled) return { enabled, date, periods: [] };
+  const [entries, periods, sessions] = await Promise.all([
+    TimetableEntry.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, sectionId, day: isoDay(date) }).lean(),
+    TimetablePeriod.find({ tenantId: ctx.tenantId }).lean(),
+    PeriodAttendanceSession.find({ tenantId: ctx.tenantId, sectionId, date }).lean(),
+  ]);
+  const [asgs, subs] = await Promise.all([
+    TeachingAssignment.find({ tenantId: ctx.tenantId, _id: { $in: entries.map((e) => e.assignmentId).filter(Boolean) } }).select('teacherId subjectId').lean(),
+    Substitution.find({ tenantId: ctx.tenantId, date, entryId: { $in: entries.map((e) => e._id) } }).lean(),
+  ]);
+  const A = mk(asgs); const P = mk(periods); const S = new Map(sessions.map((s) => [String(s.periodId), s])); const C = new Map(subs.map((s) => [String(s.entryId), s]));
+  const [teachers, subjects] = await Promise.all([
+    Teacher.find({ tenantId: ctx.tenantId, _id: { $in: [...asgs.map((a) => a.teacherId), ...subs.map((s) => s.substituteTeacherId)].filter(Boolean) } }).select('name').lean(),
+    Subject.find({ tenantId: ctx.tenantId, _id: { $in: asgs.map((a) => a.subjectId).filter(Boolean) } }).select('name').lean(),
+  ]);
+  const T = mk(teachers); const J = mk(subjects);
+  const rows = entries.map((e) => {
+    const p = P.get(String(e.periodId)); if (!p || p.type === 'break') return null;
+    const a = A.get(String(e.assignmentId)); const cover = C.get(String(e._id)); const s = S.get(String(e.periodId));
+    const teacherId = cover?.substituteTeacherId || a?.teacherId;
+    return {
+      entryId: e._id, period: p.name, order: p.order, time: `${p.startTime}–${p.endTime}`, subject: J.get(String(a?.subjectId))?.name || '', teacher: T.get(String(teacherId))?.name || '',
+      covering: !!cover, mine: !!teacherId && String(teacherId) === String(ctx.teacher._id), marked: !!s,
+      absent: s ? s.records.filter((r) => r.status === 'absent').length : 0, late: s ? s.records.filter((r) => r.status === 'late').length : 0, total: s ? s.records.length : 0,
+    };
+  }).filter(Boolean).sort((x, y) => x.order - y.order);
+  return { enabled, date, periods: rows };
+}
+
 // ───────────── the School Admin edits leave ─────────────
 export async function editTeacherLeave(ctx, id, patch, user) {
   const l = await LeaveApplication.findOne({ _id: id, tenantId: ctx.tenantId });

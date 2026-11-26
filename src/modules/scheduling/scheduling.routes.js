@@ -44,6 +44,7 @@ t.get('/period-attendance', async (req, res) => {
   const rows = await teacherDay({ tenantId: req.tenantId, yearId: req.ctx.year._id, teacherId: req.ctx.teacher._id, date: d, today: req.ctx.today, tz: req.ctx.settings.timezone });
   res.json({ date: d, periods: await svc.teacherPeriodDay(req.ctx, d, rows) });
 });
+t.get('/class-periods', async (req, res) => { const q = parse(z.object({ sectionId: id, date: date.optional() }), req.query); res.json(await svc.classPeriodDay(req.ctx, { sectionId: q.sectionId, date: q.date || req.ctx.today })); });
 t.get('/period-attendance/register', async (req, res) => res.json(await svc.periodRegister(req.ctx, parse(z.object({ entryId: id, date }), req.query))));
 t.put('/period-attendance/register', async (req, res) => {
   const b = parse(z.object({ entryId: id, date, entries: z.array(z.object({ studentId: id, status: z.enum(['present', 'absent', 'late', 'half_day', 'leave', 'excused']) })).max(300) }), req.body);
