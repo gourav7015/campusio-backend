@@ -1,3 +1,5 @@
+import { warmStats } from '../src/services/warm.js';
+import { config } from '../src/core/config.js';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { setup, teardown, reset, api, makeSuperAdmin, seedWorld, login } from './helpers.js';
 
@@ -189,6 +191,27 @@ describe('promotion, bulk import, dashboards, profile and sessions', () => {
 
     it('health endpoints and security headers', async () => {
       expect((await api().get('/health')).body.status).toBe('ok');
+      // private: without the secret it looks like an address that does not exist
+      expect((await api().get('/health/warm')).status).toBe(404);
+      expect((await api().get('/health/warm?key=wrong-secret-value')).status).toBe(404);
+      const builtIn = config.warmKey;
+      expect(builtIn).toMatch(/^[a-f0-9]{48}$/); // a built-in key is used when none is configured
+      expect((await api().get(`/health/warm?key=${builtIn}`)).status).toBe(200);
+      config.warmKey = '';
+      expect((await api().get('/health/warm?key=')).status).toBe(404); // switched off
+      config.warmKey = 'test-warm-key-0123456789';
+      expect((await api().get('/health/warm?key=test-warm-key-0123456788')).status).toBe(404);
+      const warm = await api().get('/health/warm?key=test-warm-key-0123456789');
+      expect((await api().get('/health/warm').set('x-warm-key', 'test-warm-key-0123456789')).status).toBe(200);
+      expect(warm.status).toBe(200);
+      expect(warm.body).toMatchObject({ status: 'ok', dbMs: expect.any(Number) });
+      expect(Object.keys(warm.body).sort()).toEqual(['dbMs', 'status']); // nothing about any school or person
+      // anyone can open it: 30 quick hits cost the database at most one more round trip
+      const before = warmStats.runs;
+      const hits = await Promise.all(Array.from({ length: 30 }, () => api().get('/health/warm?key=test-warm-key-0123456789')));
+      expect(hits.every((h) => h.status === 200)).toBe(true);
+      expect(warmStats.runs - before).toBeLessThanOrEqual(1);
+      config.warmKey = builtIn;
       expect((await api().get('/ready')).status).toBe(200);
       const r = await api().get('/health');
       expect(r.headers['x-powered-by']).toBeUndefined();

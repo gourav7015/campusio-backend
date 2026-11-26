@@ -50,3 +50,12 @@ Both repos run their tests on every push (`.github/workflows/ci.yml`). Version n
 
 ## Load test
 `npm run loadtest -- --url http://localhost:4010 --users 30 --seconds 20` on a demo or staging copy (never a live school). It reads only.
+
+## Keeping the server awake (the slow first request)
+
+Render's free web service goes to sleep after about 15 minutes without a request; the next person waits 30 to 60 seconds while it starts. Sleeping also stops the server's own scheduled work (payroll preparation, reminders, closing unpaid payment orders), because those run inside the server.
+
+- `GET /health/warm?key=<WARM_KEY>` wakes the server and makes one real round trip to the database (a ping and a tiny read). It needs a key: without it, or with a wrong one, it answers 404 like any address that does not exist. A built-in key is used (`src/core/config.js`; the code is public, so this only keeps casual visitors and crawlers away from a harmless address). For a truly private key set `WARM_KEY` in Render (`openssl rand -hex 24`); `WARM_KEY=off` switches the address off. The key can also be sent as an `x-warm-key` header. It answers `{ status: "ok", dbMs }` and nothing about any school or person, and it is left out of the access log. Anyone can open it, so however often it is hit the database is asked at most once every 10 seconds (answers in between repeat the last result).
+- A sleeping server cannot wake itself, so call that address from outside every 5 minutes (free options: UptimeRobot HTTP monitor, cron-job.org, a Cloudflare Worker with a cron trigger). Use `https://<api address>/health/warm?key=<WARM_KEY>`.
+- While the server is awake it also pings its own database every 4 minutes to keep the connection pool open.
+- The reliable fix is a paid Render instance that never sleeps; then the outside pinger is not needed.

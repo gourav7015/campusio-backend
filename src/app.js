@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+import { warmShared } from './services/warm.js';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -29,6 +31,14 @@ export function createApp() {
   app.get('/health', (_req, res) => {
     const m = process.memoryUsage();
     res.json({ status: 'ok', version: config.version, warnings: [...(config.isProd && config.dataKeyIsDerived ? ['DATA_KEY is not set: two-factor secrets are protected with a key derived from JWT_SECRET'] : [])], uptime: Math.round(process.uptime()), memoryMb: { rss: Math.round(m.rss / 1048576), heapUsed: Math.round(m.heapUsed / 1048576) } });
+  });
+  // for the outside monitor that keeps a sleeping host awake: wakes the server AND touches the database. Private: it needs the secret
+  // WARM_KEY (as ?key= or the x-warm-key header). Without the key, or with a wrong one, it looks like any address that does not exist.
+  app.get('/health/warm', async (req, res) => {
+    const given = String(req.get('x-warm-key') || req.query.key || '');
+    const a = Buffer.from(given); const b = Buffer.from(config.warmKey);
+    if (!config.warmKey || a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(404).json({ error: 'Route not found', code: 'NOT_FOUND' });
+    try { res.json({ status: 'ok', dbMs: await warmShared() }); } catch { res.status(503).json({ status: 'database_unreachable' }); }
   });
   app.get('/ready', (_req, res) => {
     const ok = mongoose.connection.readyState === 1;

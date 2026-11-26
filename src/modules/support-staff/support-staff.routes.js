@@ -1,3 +1,4 @@
+import { mailLoginDetails } from '../../services/credentials-mail.js';
 import { Router } from 'express';
 import { parse } from '../../core/utils.js';
 import { audit } from '../../services/audit.js';
@@ -22,8 +23,9 @@ export function staffRoutes(scope) {
   });
   r.post('/:id/login', async (req, res) => {
     const out = await svc.createLogin(req.ctx, scope, req.params.id);
-    await audit(req, 'staff_member.login_created', 'StaffMember', req.params.id, `Created a Staff portal login (${out.loginId})`);
-    res.status(201).json(out);
+    const mail = await mailLoginDetails({ tenantId: req.tenantId, loginId: out.loginId, temporaryPassword: out.temporaryPassword });
+    await audit(req, 'staff_member.login_created', 'StaffMember', req.params.id, `Created a Staff portal login (${out.loginId})${mail.emailedTo ? `; emailed to ${mail.emailedTo}` : ''}`);
+    res.status(201).json({ ...out, ...mail });
   });
   r.post('/:id/remove-login', async (req, res) => {
     const out = await svc.removeLogin(req.ctx, scope, req.params.id);
@@ -32,8 +34,9 @@ export function staffRoutes(scope) {
   });
   r.post('/:id/reset-password', async (req, res) => {
     const out = await svc.resetLogin(req.ctx, scope, req.params.id, req.body);
-    await audit(req, 'staff_member.password_reset', 'StaffMember', req.params.id, 'Reset a staff login password');
-    res.json(out);
+    const mail = await mailLoginDetails({ tenantId: req.tenantId, loginId: out.loginId, temporaryPassword: out.temporaryPassword, why: 'reset' });
+    await audit(req, 'staff_member.password_reset', 'StaffMember', req.params.id, `Reset a staff login password${mail.emailedTo ? `; emailed to ${mail.emailedTo}` : ''}`);
+    res.json({ ...out, ...mail });
   });
   for (const [path, status] of [['deactivate', 'inactive'], ['reactivate', 'active']]) {
     r.post(`/:id/${path}`, async (req, res) => {

@@ -11,6 +11,7 @@ import { runMigrations } from './core/migrations.js';
 import { alert } from './services/alerts.js';
 import { runRetention } from './services/retention.js';
 import { busDocumentReminders } from './modules/transport/transport.service.js';
+import { warmDatabase } from './services/warm.js';
 import { autoGeneratePayroll } from './modules/payroll/payroll.service.js';
 
 mongoose.set('strictQuery', true);
@@ -23,6 +24,9 @@ async function main() {
   const app = createApp();
   const server = app.listen(config.port, () => logger.info('api listening', { port: config.port, env: config.env, version: config.version }));
   server.requestTimeout = 120000; server.headersTimeout = 65000; server.keepAliveTimeout = 61000; // slower than a load balancer's idle limit, so connections are not cut mid-request
+
+  // keep the database connection warm while the server is awake (a host that sleeps is woken from outside, see docs/OPERATIONS.md)
+  const warm = setInterval(() => warmDatabase().catch((e) => logger.warn('database warm-up failed', { error: e.message })), 4 * 60 * 1000); warm.unref();
 
   // Scheduled work takes a lease first, so with several servers each job still runs once.
   // families that have not acknowledged a teacher's remark are reminded once a day (checked every few hours)

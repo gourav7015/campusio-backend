@@ -4,6 +4,7 @@ import { User, Session, StaffMember, Designation, SalaryRevision, Payslip, Staff
 import { parse, notFound, conflict, bad, generatePassword } from '../../core/utils.js';
 import { createUserAccount, hashPassword, chosenPassword, schoolCode } from '../../services/users.js';
 import { audit } from '../../services/audit.js';
+import { mailLoginDetails } from '../../services/credentials-mail.js';
 import { ensureDeskStaff, createStaff, createLogin, DESK_NAMES, STAND_IN_NAMES } from '../support-staff/support-staff.service.js';
 
 /** School Admin (or Super Admin acting) creates the Finance and Library staff logins. */
@@ -67,12 +68,12 @@ r.post('/staff', async (req, res) => {
       e.canMarkAttendance = true; await e.save();
       const cred = await createLogin(ctx, 'general', e._id);
       await audit(req, 'staff.created', 'StaffMember', e._id, `Opened the office desk login ${cred.loginId} for ${e.name}`);
-      return res.status(201).json({ id: e._id, name: e.name, role: 'staff', loginId: cred.loginId, temporaryPassword: cred.temporaryPassword });
+      return res.status(201).json({ id: e._id, name: e.name, role: 'staff', loginId: cred.loginId, temporaryPassword: cred.temporaryPassword, ...(await mailLoginDetails({ tenantId: req.tenantId, loginId: cred.loginId, temporaryPassword: cred.temporaryPassword })) });
     }
     const m = await createStaff(ctx, 'general', { name: b.name, designationId: b.designationId, ...(b.phone ? { phone: b.phone } : {}), ...(b.email ? { email: b.email } : {}), ...(b.dob ? { dob: b.dob } : {}), canMarkAttendance: true }); // a Staff portal login is the office desk: it is made only for someone who is given it
     const cred = await createLogin(ctx, 'general', m._id);
     await audit(req, 'staff.created', 'StaffMember', m._id, `Added staff member ${m.name} with a Staff portal login`);
-    return res.status(201).json({ id: m._id, name: m.name, role: 'staff', loginId: cred.loginId, temporaryPassword: cred.temporaryPassword });
+    return res.status(201).json({ id: m._id, name: m.name, role: 'staff', loginId: cred.loginId, temporaryPassword: cred.temporaryPassword, ...(await mailLoginDetails({ tenantId: req.tenantId, loginId: cred.loginId, temporaryPassword: cred.temporaryPassword })) });
   }
   // the role is held by a person already on the staff list: they keep their record and gain the desk login
   let holder = null;
@@ -88,7 +89,7 @@ r.post('/staff', async (req, res) => {
   await ensureDeskStaff(req.tenantId, req.user._id); // an officer is an employee too
   if (b.phone && !holder) await StaffMember.updateOne({ tenantId: req.tenantId, userId: user._id }, { phone: b.phone });
   await audit(req, 'staff.created', 'User', user._id, `${holder ? `Gave ${user.name} (already on the staff) the ${b.role} desk` : `Created ${b.role} staff ${user.name}`}`);
-  res.status(201).json({ id: user._id, name: user.name, role: user.role, loginId: user.loginId, temporaryPassword });
+  res.status(201).json({ id: user._id, name: user.name, role: user.role, loginId: user.loginId, temporaryPassword, ...(await mailLoginDetails({ tenantId: req.tenantId, loginId: user.loginId, temporaryPassword })) });
 });
 
 /**
@@ -142,7 +143,8 @@ r.post('/staff/:id/reset-password', async (req, res) => {
   u.passwordHash = await hashPassword(temporaryPassword); u.mustChangePassword = true; u.failedLogins = 0; u.lockedUntil = undefined;
   await u.save();
   await Session.updateMany({ userId: u._id, revokedAt: null }, { revokedAt: new Date() });
-  await audit(req, 'user.password_reset', 'User', u._id, `Reset password for ${u.name}`);
-  res.json({ loginId: u.loginId, temporaryPassword });
+  const mail = await mailLoginDetails({ tenantId: req.tenantId, loginId: u.loginId, temporaryPassword, why: 'reset' });
+  await audit(req, 'user.password_reset', 'User', u._id, `Reset password for ${u.name}${mail.emailedTo ? `; the new login details were emailed to ${mail.emailedTo}` : ''}`);
+  res.json({ loginId: u.loginId, temporaryPassword, ...mail });
 });
 export default r;

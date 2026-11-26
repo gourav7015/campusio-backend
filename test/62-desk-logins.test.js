@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { setup, teardown, reset, api, login, makeSuperAdmin, seedWorld } from './helpers.js';
-import { StaffMember } from '../src/models/index.js';
+import { StaffMember, EmailOutbox } from '../src/models/index.js';
+import { setMailTransport, flushEmails } from '../src/services/email.js';
 
 describe('Desk logins: every desk is listed, an employee is assigned to it, and a reset asks for the password first', () => {
   let root; let W; let des; let stand; let office; let clerk; let sweeper; let tr; let driver;
@@ -19,7 +20,7 @@ describe('Desk logins: every desk is listed, an employee is assigned to it, and 
     const tdes = (await api().get('/api/transport/designations').set(trh)).body;
     driver = (await api().post('/api/transport/staff').set(trh).send({ name: 'Raju Driver', designationId: tdes.find((d) => d.name === 'Driver')._id, phone: '9000000003' })).body;
   });
-  afterAll(teardown);
+  afterAll(() => { setMailTransport(null); return teardown(); });
 
   it('the office desk login appears in the list (it used to be missing), with its employee', async () => {
     expect(office.status).toBe(201);
@@ -102,5 +103,35 @@ describe('Desk logins: every desk is listed, an employee is assigned to it, and 
     const st = await api().post(A(`/students/${s}/reset-password`)).set(W.h).send({ password: 'Typed-Student-Pass-5' });
     expect(st.body.temporaryPassword).toBe('Typed-Student-Pass-5');
     expect((await api().post(A(`/students/${s}/reset-password`)).set(W.h).send({ password: 'x' })).status).toBe(400);
+  });
+
+  it('when a desk or staff login is made or its password is reset, the person who holds it is emailed the login id and temporary password', async () => {
+    const sent = []; setMailTransport(async (m) => { sent.push(m); return { id: 'x' }; });
+    const rows = await list();
+    const o = rows.find((r) => r.role === 'staff'); // whoever holds the office desk by now
+    await StaffMember.updateOne({ userId: o._id }, { email: 'desk.holder@dsk.test' });
+    const reset = await api().post(A(`/staff/${o._id}/reset-password`)).set(W.h).send({});
+    expect(reset.status).toBe(200);
+    expect(reset.body.emailedTo).toMatch(/@dsk\.test$/); expect(reset.body.emailedTo).not.toBe('desk.holder@dsk.test'); // masked, for the admin to see where it went
+    await flushEmails();
+    const mail = sent.find((m) => m.to === 'desk.holder@dsk.test');
+    expect(mail.subject).toMatch(/password/i);
+    expect(mail.text).toContain(`Login id: ${reset.body.loginId}`);
+    expect(mail.text).toContain(`Temporary password: ${reset.body.temporaryPassword}`);
+    expect(mail.text).toMatch(/choose your own/);
+    // an officer desk whose holder has no email on record: nothing is sent, and the admin is told
+    const fin = (await list()).find((r) => r.role === 'finance');
+    await StaffMember.updateOne({ userId: fin._id }, { $unset: { email: 1 } });
+    const noMail = await api().post(A(`/staff/${fin._id}/reset-password`)).set(W.h).send({});
+    expect(noMail.body.emailNote).toBe('no_address'); expect(noMail.body.emailedTo).toBeUndefined();
+    await flushEmails();
+    expect(sent.filter((m) => m.to !== 'desk.holder@dsk.test')).toHaveLength(0); // nothing went anywhere else
+    // email not set up on the server: the admin is told that instead
+    setMailTransport(null);
+    const off = await api().post(A(`/staff/${o._id}/reset-password`)).set(W.h).send({});
+    expect(off.body.emailNote).toBe('mail_off');
+    expect(await EmailOutbox.countDocuments({ to: 'desk.holder@dsk.test' })).toBe(1);
+    // a School Admin only
+    expect((await api().post(A(`/staff/${o._id}/reset-password`)).set(W.teacher1.h).send({})).status).toBe(403);
   });
 });

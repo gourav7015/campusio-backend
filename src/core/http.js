@@ -12,6 +12,7 @@ export function requestId(req, res, next) {
 }
 
 export function accessLog(req, res, next) {
+  if (req.originalUrl.startsWith('/health/warm')) return next(); // pinged every few minutes: not worth a log line each
   const start = process.hrtime.bigint();
   res.on('finish', () => {
     logger.info('http', {

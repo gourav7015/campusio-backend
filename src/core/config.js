@@ -49,6 +49,9 @@ export const config = {
   memoSeconds: Number(process.env.MEMO_SECONDS ?? (process.env.NODE_ENV === 'test' ? 0 : 20)),
   /** Where to post a short message when the server starts, fails repeatedly or is slow: a Slack, Discord or any "incoming webhook" address. */
   alertWebhook: process.env.ALERT_WEBHOOK_URL || '',
+  // The key the keep-awake monitor sends to /health/warm. It only keeps casual visitors and crawlers off a harmless address (a database ping, capped to one per 10 s);
+  // the code is public, so it is not a secret. Set WARM_KEY in Render to use a private one instead; set WARM_KEY=off to switch the address off.
+  warmKey: process.env.WARM_KEY === 'off' ? '' : process.env.WARM_KEY || 'b07becca87be92634058ec31bf7da2da02206e7cdd25e08c',
   /** Run pending database migrations when the server starts. */
   migrateOnStart: process.env.MIGRATE_ON_START !== 'false',
   env: process.env.NODE_ENV || 'development',
