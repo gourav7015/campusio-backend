@@ -285,7 +285,7 @@ export async function studentOverview(ctx, studentId) {
   const periodWise = modeOn(ctx.settings.attendance, ctx.today);
   let periods = null; let earlier = null;
   if (periodWise) {
-    periods = await subjectStats({ tenantId: ctx.tenantId, yearId: ctx.year._id, studentId, settings: ctx.settings });
+    periods = await subjectStats({ tenantId: ctx.tenantId, yearId: ctx.year._id, studentId, settings: ctx.settings, sectionId: enr?.sectionId });
     const reg = await submittedRecords(ctx.tenantId, { studentId, yearId: ctx.year._id }, { registerOnly: true });
     if (reg.length) {
       const by = new Map(); for (const r of reg) { const m = r.date.slice(0, 7); if (!by.has(m)) by.set(m, []); by.get(m).push(r); }
@@ -407,12 +407,12 @@ export async function sectionPeriodAttendance(ctx, sectionId, range = 'year') {
  * The same check of the whole class when attendance is taken once a day: every student's days, who needs a word (low attendance, or absent several
  * days in a row), the class month by month, and where today's register stands.
  */
-export async function sectionDayAttendance(ctx, sectionId, range = 'year') {
+export async function sectionDayAttendance(ctx, sectionId, range = 'year', { registerOnly = false } = {}) {
   const roster = await rosterOf(ctx, sectionId);
   const { from, to } = rangeOf(ctx, range);
   const target = ctx.settings.attendance?.dayRule?.presentPct ?? 75;
   const ids = roster.map((r) => r.studentId);
-  const recs = ids.length ? await submittedRecords(ctx.tenantId, { studentId: { $in: ids }, yearId: ctx.year._id, date: { $gte: from, $lte: to } }) : [];
+  const recs = ids.length ? await submittedRecords(ctx.tenantId, { studentId: { $in: ids }, yearId: ctx.year._id, date: { $gte: from, $lte: to } }, { registerOnly }) : [];
   const by = new Map(); for (const r of recs) { const k = String(r.studentId); if (!by.has(k)) by.set(k, []); by.get(k).push(r); }
   const students = roster.map((st) => {
     const mine = (by.get(String(st.studentId)) || []).sort((a, b) => a.date.localeCompare(b.date));
@@ -429,7 +429,7 @@ export async function sectionDayAttendance(ctx, sectionId, range = 'year') {
   const needs = students.filter((s) => s.state === 'low' || s.streak >= 3).sort((a, b) => b.streak - a.streak || (a.percentage ?? 101) - (b.percentage ?? 101)).slice(0, 8)
     .map((s) => ({ studentId: s.studentId, name: s.name, percentage: s.percentage, why: [s.streak >= 3 ? `absent ${s.streak} days in a row` : null, s.state === 'low' ? `below ${target}%` : null].filter(Boolean).join(', ') }));
   return {
-    periodWise: modeOn(ctx.settings.attendance, ctx.today), range, from, to, target,
+    periodWise: modeOn(ctx.settings.attendance, ctx.today), range, from, to, target, until: recs.reduce((m, r) => (r.date > m ? r.date : m), ''),
     totals: { students: roster.length, percentage: all.percentage, below: students.filter((s) => s.state === 'low').length, streak3: students.filter((s) => s.streak >= 3).length, presentToday: todayRecs.filter((r) => r.status === 'present' || r.status === 'late').length, markedToday: todayRecs.length, registerToday: sessions[0]?.status || 'not_marked' },
     byMonth: [...months.entries()].sort().map(([month, v]) => ({ month, percentage: summarize(v, ctx.settings).percentage })),
     needs, students,

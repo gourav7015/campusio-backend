@@ -317,7 +317,7 @@ export async function studentPeriods(ctx, date) {
 
 /** Attendance by subject for the signed-in student: only periods that were taken period by period. */
 export async function studentSubjects(ctx) {
-  return subjectStats({ tenantId: ctx.tenantId, yearId: ctx.year?._id, studentId: ctx.student._id, settings: ctx.settings });
+  return subjectStats({ tenantId: ctx.tenantId, yearId: ctx.year?._id, studentId: ctx.student._id, settings: ctx.settings, sectionId: ctx.enrolment?.sectionId });
 }
 /** Every period of one subject, newest first, for the signed-in student. */
 export async function studentSubjectPeriods(ctx, subjectId) {
@@ -359,6 +359,7 @@ export async function sectionDay(ctx, { sectionId, date }) {
     const teacherId = cover?.substituteTeacherId || a?.teacherId;
     return {
       entryId: e._id, periodId: p._id, period: p.name, order: p.order, time: `${p.startTime}–${p.endTime}`, subject: J.get(String(a?.subjectId))?.name || '', teacher: T.get(String(teacherId))?.name || '',
+      submittedAt: s?.status === 'submitted' ? s.submittedAt || null : null,
       covering: !!cover, mine: ctx.role === 'teacher' && !!teacherId && String(teacherId) === String(ctx.teacher._id), state: s ? s.status : 'none',
       marked: s?.status === 'submitted', absent: s?.status === 'submitted' ? s.records.filter((r) => r.status === 'absent').length : 0, late: s?.status === 'submitted' ? s.records.filter((r) => r.status === 'late').length : 0, total: s?.status === 'submitted' ? s.records.length : 0,
     };

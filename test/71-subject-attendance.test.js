@@ -37,6 +37,8 @@ describe('Period by period attendance is shown by subject, and earlier once-a-da
     const e = d.subjects.find((s) => s.subject === 'English');
     expect(e).toMatchObject({ periods: 1, attended: 0, state: 'low', needed: 3 });
     expect(d.weekly.at(-1)).toMatchObject({ periods: 3 });
+    expect(d.planned.map((x) => [x.subject, x.teacher, x.weekly])).toEqual([['English', 'Mrs Gupta', 1], ['Mathematics', 'Mr Sharma', 2]]); // the class's own subjects, before and after any mark
+
     // Chirag: late, present, present: all counted as present
     const c = (await api().get('/api/student/period-attendance/subjects').set(W.studentLogins[2].h)).body;
     expect(c.totals).toMatchObject({ periods: 3, attended: 3, percentage: 100, below: 0 });
@@ -83,6 +85,11 @@ describe('Period by period attendance is shown by subject, and earlier once-a-da
     expect((await api().get(`/api/teacher/office/sections/${W.sec8A._id}/day-attendance`).set(T1)).status).toBe(200);
     expect((await api().get(`/api/teacher/office/sections/${W.sec8A._id}/day-attendance`).set(T2)).status).toBe(403);
     expect((await api().get(`/api/school/sections/${W.sec8A._id}/period-attendance?range=month`).set(W.h)).body.range).toBe('month');
+    const regOnly = (await api().get(`/api/school/sections/${W.sec8A._id}/day-attendance?source=register`).set(W.h)).body;
+    expect(regOnly.students[0]).toMatchObject({ workingDays: 1, absent: 1, streak: 1, lastAbsent: YESTERDAY }); // the day worked out from the periods is left out
+    expect((await api().get(`/api/school/sections/${W.sec8A._id}/period-attendance`).set(W.h)).body.planned).toHaveLength(2);
+    const grid = (await api().get(`/api/school/period-attendance?sectionId=${W.sec8A._id}&date=${TODAY}`).set(W.h)).body;
+    expect(grid.periods.filter((p) => p.state === 'submitted').every((p) => p.submittedAt)).toBe(true);
     // the whole class at once: every student, in lessons
     const cls = (await api().get(`/api/school/sections/${W.sec8A._id}/period-attendance`).set(W.h)).body;
     expect(cls.periodWise).toBe(true); expect(cls.target).toBe(75);

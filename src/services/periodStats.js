@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { PeriodAttendanceSession, Subject, TimetablePeriod, Teacher } from '../models/index.js';
+import { PeriodAttendanceSession, Subject, TimetablePeriod, Teacher, TimetableEntry, TeachingAssignment } from '../models/index.js';
 import { dayRuleOf } from './attendanceMode.js';
 import { addDays, isoDay } from '../core/utils.js';
 
@@ -30,10 +30,36 @@ function advice(attended, periods, target) {
   return { state: 'low', needed: Math.max(Math.ceil((t * periods - attended) / (1 - t) - 1e-9), 1) };
 }
 
-export async function subjectStats({ tenantId, yearId, studentId, settings }) {
+/**
+ * The subjects a class has on its timetable, with who teaches each and how many lessons a week: shown before any lesson has been marked,
+ * so the page is never empty, and for subjects that have no mark yet.
+ */
+export async function plannedSubjects({ tenantId, yearId, sectionId }) {
+  if (!yearId || !sectionId) return [];
+  const entries = await TimetableEntry.find({ tenantId, yearId, sectionId }).select('assignmentId periodId').lean();
+  if (!entries.length) return [];
+  const asg = new Map((await TeachingAssignment.find({ tenantId, _id: { $in: [...new Set(entries.map((e) => e.assignmentId).filter(Boolean).map(String))] } }).select('subjectId teacherId').lean()).map((a) => [String(a._id), a]));
+  const [subj, teach, periods] = await Promise.all([
+    Subject.find({ tenantId, _id: { $in: [...new Set([...asg.values()].map((a) => a.subjectId).filter(Boolean).map(String))] } }).select('name').lean(),
+    Teacher.find({ tenantId, _id: { $in: [...new Set([...asg.values()].map((a) => a.teacherId).filter(Boolean).map(String))] } }).select('name').lean(),
+    TimetablePeriod.find({ tenantId, _id: { $in: [...new Set(entries.map((e) => String(e.periodId)))] } }).select('type').lean(),
+  ]);
+  const sn = new Map(subj.map((s) => [String(s._id), s.name])); const tn = new Map(teach.map((t) => [String(t._id), t.name]));
+  const isBreak = new Set(periods.filter((p) => p.type === 'break').map((p) => String(p._id)));
+  const out = new Map();
+  for (const e of entries) {
+    const a = asg.get(String(e.assignmentId)); if (!a || isBreak.has(String(e.periodId))) continue;
+    const k = key(a.subjectId); const o = out.get(k) || { subjectId: k, subject: sn.get(k) || 'Other', teacher: tn.get(String(a.teacherId)) || '', weekly: 0 };
+    o.weekly++; out.set(k, o);
+  }
+  return [...out.values()].sort((x, y) => x.subject.localeCompare(y.subject));
+}
+
+export async function subjectStats({ tenantId, yearId, studentId, settings, sectionId }) {
   const target = dayRuleOf(settings.attendance).presentPct;
   const lateCounts = settings.attendance?.lateCountsAsPresent !== false;
-  const empty = { since: null, target, lateCountsAsPresent: lateCounts, totals: { periods: 0, attended: 0, absent: 0, late: 0, halfDay: 0, leave: 0, percentage: null }, subjects: [], weekly: [] };
+  const planned = await plannedSubjects({ tenantId, yearId, sectionId });
+  const empty = { since: null, target, lateCountsAsPresent: lateCounts, planned, totals: { periods: 0, attended: 0, absent: 0, late: 0, halfDay: 0, leave: 0, percentage: null }, subjects: [], weekly: [] };
   if (!yearId) return empty;
   const sessions = await sessionsOf(tenantId, yearId, studentId);
   if (!sessions.length) return empty;
@@ -67,7 +93,7 @@ export async function subjectStats({ tenantId, yearId, studentId, settings }) {
   const subjects = [...by.values()].filter((o) => o.periods || o.leave).map((o) => ({ ...o, percentage: pct(o.attended, o.periods), ...advice(o.attended, o.periods, target) }))
     .sort((a, b) => (a.percentage ?? 101) - (b.percentage ?? 101) || a.subject.localeCompare(b.subject)); // the ones that need attention come first
   return {
-    since, target, lateCountsAsPresent: lateCounts,
+    since, target, lateCountsAsPresent: lateCounts, planned,
     totals: { ...totals, percentage: pct(totals.attended, totals.periods), below: subjects.filter((s) => s.state === 'low').length },
     subjects,
     weekly: [...weeks.values()].sort((a, b) => a.week.localeCompare(b.week)).slice(-10).map((w) => ({ week: w.week, periods: w.periods, percentage: pct(w.attended, w.periods) })),
@@ -94,6 +120,7 @@ export async function subjectPeriods({ tenantId, yearId, studentId, subjectId, l
  * `roster` = [{ studentId, name, rollNo, admissionNo }].
  */
 export async function sectionSummary({ tenantId, yearId, sectionId, roster, settings, from, to }) {
+  const planned = await plannedSubjects({ tenantId, yearId, sectionId });
   const target = dayRuleOf(settings.attendance).presentPct;
   const lateCounts = settings.attendance?.lateCountsAsPresent !== false;
   const oid = (x) => new mongoose.Types.ObjectId(String(x));
@@ -128,7 +155,7 @@ export async function sectionSummary({ tenantId, yearId, sectionId, roster, sett
   const counted = students.filter((s) => s.percentage != null);
   const tot = counted.reduce((a, s) => ({ periods: a.periods + s.periods, attended: a.attended + s.attended }), { periods: 0, attended: 0 });
   return {
-    target,
+    target, planned,
     totals: { students: roster.length, marked: counted.length, percentage: pct(tot.attended, tot.periods), below: counted.filter((s) => s.state === 'low').length },
     subjects: [...bySubject.values()].map((b) => ({ ...b, teacher: teacherOf.get(b.subjectId) || '', percentage: pct(b.attended, b.periods) })).sort((a, b) => (a.percentage ?? 101) - (b.percentage ?? 101)),
     students,
