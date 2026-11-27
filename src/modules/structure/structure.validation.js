@@ -46,8 +46,11 @@ export const settingsBody = z.object({
     scale: z.array(z.object({ min: z.number().min(0).max(100), grade: z.string().min(1).max(4) })).min(2)
       .refine((s) => s.some((x) => x.min === 0), 'Scale must include a band starting at 0'),
   }),
+  // The way attendance is taken (once a day or period by period) is NOT part of this form: it changes only through PUT /attendance-mode, from a date.
   attendance: z.object({
-    lateCountsAsPresent: z.boolean(), periodWise: z.boolean(),
+    lateCountsAsPresent: z.boolean(),
+    dayRule: z.object({ presentPct: z.number().int().min(1).max(100), halfPct: z.number().int().min(1).max(99) })
+      .refine((r) => r.halfPct < r.presentPct, 'Half day must need fewer periods than a full day'),
   }).partial(),
   passwordFormat: z.string().max(80).refine((f) => f === '' || PASSWORD_FORMAT_RE.test(f), 'Use tokens such as {NAME4}{DDMMYYYY}, plus letters, digits or @ # _ -').refine((f) => f === '' || /\{(NAME4|NAME3|name4|DDMMYYYY|DDMM|YYYY|YY|PHONE4)\}/.test(f), 'Include at least one token, or leave it empty for random passwords'),
   admissionFormat: z.string().refine((f) => /\{SEQ:\d\}/.test(f), 'Must contain {SEQ:n}, e.g. ADM{YYYY}{SEQ:4}'),

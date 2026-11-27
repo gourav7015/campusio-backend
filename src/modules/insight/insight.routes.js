@@ -9,6 +9,7 @@ const id = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id');
 const analysisQuery = z.object({ classId: id.optional(), sectionId: id.optional() }).refine((q) => q.classId || q.sectionId, { message: 'Choose a class' });
 
 r.get('/sections/:id/insight', async (req, res) => res.json(await svc.sectionInsight(req.ctx, req.params.id)));
+r.get('/sections/:id/period-attendance', async (req, res) => res.json(await svc.sectionPeriodAttendance(req.ctx, req.params.id)));
 r.get('/sections/:id/students', async (req, res) => res.json(await svc.sectionStudents(req.ctx, req.params.id)));
 r.get('/sections/:id/homework', async (req, res) => {
   const { date, weekStart } = parse(z.object({ date: z.string().refine(isDateStr).optional(), weekStart: z.string().refine(isDateStr).optional() }), req.query);
@@ -19,4 +20,5 @@ r.get('/analysis/students/:id', async (req, res) => res.json(await svc.studentMa
 r.get('/analysis/exams', async (req, res) => res.json(await svc.classAnalysis(req.ctx, parse(analysisQuery, req.query))));
 r.get('/teachers/:id/overview', async (req, res) => res.json(await svc.teacherOverview(req.ctx, req.params.id)));
 r.get('/students/:id/overview', async (req, res) => res.json(await svc.studentOverview(req.ctx, req.params.id)));
+r.get('/students/:id/attendance-subject/:subjectId', async (req, res) => res.json(await svc.studentSubjectPeriods(req.ctx, req.params.id, parse(z.object({ subjectId: z.union([id, z.literal('other')]) }), req.params).subjectId)));
 export default r;

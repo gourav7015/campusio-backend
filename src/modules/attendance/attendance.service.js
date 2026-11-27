@@ -7,6 +7,12 @@ import { summarize, submittedRecords, sessionTotals, sessionCounts, zeroCounts, 
 import { AttendanceException } from '../../models/index.js';
 import { notifyUsers } from '../../services/notify.js';
 import { monitorsOf } from '../class-life/class-life.service.js';
+import { modeOn } from '../../services/attendanceMode.js';
+
+/** On a date the school takes attendance period by period there is no daily register: each period's teacher marks their own. */
+export function assertDailyAllowed(ctx, date) {
+  if (modeOn(ctx.settings.attendance, date)) throw conflict('Your school takes attendance period by period on that date. Each period\'s teacher marks their own period, and the day is worked out from them.');
+}
 
 /**
  * Only a section's CLASS TEACHER takes (and edits, before submitting) its daily register.
@@ -35,7 +41,7 @@ export async function isHoliday(tenantId, section, date) {
 /** A Sunday exam or talent test: the School Admin may approve attendance on a day the school does not normally work. */
 const dayAllowed = (tenantId, sectionId, date) => AttendanceException.exists({ tenantId, sectionId, date, status: 'approved' });
 
-async function assertMarkableDate(ctx, section, date) {
+export async function assertMarkableDate(ctx, section, date) {
   if (date > ctx.today) throw bad('Attendance cannot be marked for a future date');
   const allowed = await dayAllowed(ctx.tenantId, section._id, date);
   if (!allowed && !ctx.settings.workingDays.includes(isoDay(date))) throw bad('That date is not a working day. If the school is open for a test or exam, ask the School Admin to allow attendance for that day.');
@@ -71,7 +77,8 @@ export async function getRegister(ctx, { sectionId, date }) {
   const monitors = await monitorsOf(ctx.tenantId, sectionId);
   const allowedDay = await dayAllowed(ctx.tenantId, sectionId, date);
   let blocked = null;
-  if (date > ctx.today) blocked = 'future';
+  if (modeOn(ctx.settings.attendance, date)) blocked = 'period_wise';
+  else if (date > ctx.today) blocked = 'future';
   else if (!allowedDay && !ctx.settings.workingDays.includes(isoDay(date))) blocked = 'non_working_day';
   else if (holiday && !allowedDay) blocked = `holiday:${holiday.title}`;
   const students = list.map(({ enrolment, student }) => {
@@ -115,6 +122,7 @@ async function editSubmitted(ctx, session, date, entries, remarks, byName) {
 }
 
 export async function saveRegister(ctx, { sectionId, date, entries, remarks }, { submit, byName }) {
+  assertDailyAllowed(ctx, date);
   assertCanMark(ctx, sectionId);
   const section = await loadSection(ctx.tenantId, sectionId);
   await assertMarkableDate(ctx, section, date);
@@ -167,6 +175,7 @@ export async function correctRecord(ctx, { sectionId, date, studentId, status, h
   if (ctx.role === 'teacher') throw forbidden('Submitted attendance is locked. Ask the school admin to correct it (use "Request correction").');
   const session = await AttendanceSession.findOne({ tenantId: ctx.tenantId, sectionId, date });
   if (!session) throw notFound('No attendance register for that date');
+  if (session.source === 'periods') throw conflict('That day was taken period by period. Correct the period instead.');
   if (session.status !== 'submitted') throw conflict('The register is still a draft; edit it directly');
   const rec = await AttendanceRecord.findOne({ sessionId: session._id, studentId });
   if (!rec) throw notFound('Student is not on that register');
@@ -225,8 +234,8 @@ export async function trend(ctx, sectionIds, days = 7) {
 }
 
 // ── student-facing ──
-export async function studentSummary(ctx) {
-  const recs = await submittedRecords(ctx.tenantId, { studentId: ctx.student._id, yearId: ctx.year?._id });
+export async function studentSummary(ctx, { registerOnly = false } = {}) {
+  const recs = await submittedRecords(ctx.tenantId, { studentId: ctx.student._id, yearId: ctx.year?._id }, { registerOnly });
   return { ...summarize(recs, ctx.settings), yearName: ctx.year?.name };
 }
 
@@ -246,17 +255,17 @@ export async function studentCalendar(ctx, month) {
   return { month: m, days };
 }
 
-export async function studentMonthly(ctx) {
-  const recs = await submittedRecords(ctx.tenantId, { studentId: ctx.student._id, yearId: ctx.year?._id });
+export async function studentMonthly(ctx, { registerOnly = false } = {}) {
+  const recs = await submittedRecords(ctx.tenantId, { studentId: ctx.student._id, yearId: ctx.year?._id }, { registerOnly });
   const by = new Map();
   recs.forEach((r) => { const k = r.date.slice(0, 7); if (!by.has(k)) by.set(k, []); by.get(k).push(r); });
   return [...by.keys()].sort().map((month) => ({ month, ...summarize(by.get(month), ctx.settings) }));
 }
 
-export async function studentHistory(ctx, { from, to }) {
+export async function studentHistory(ctx, { from, to }, { registerOnly = false } = {}) {
   const f = { studentId: ctx.student._id, yearId: ctx.year?._id };
   if (from || to) f.date = { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) };
-  const recs = await submittedRecords(ctx.tenantId, f);
+  const recs = await submittedRecords(ctx.tenantId, f, { registerOnly });
   return recs.sort((a, b) => b.date.localeCompare(a.date)).map((r) => ({ date: r.date, day: isoDay(r.date), status: r.status, remarks: r.remarks, corrected: (r.history?.length || 0) > 0 }));
 }
 
@@ -295,6 +304,7 @@ export async function requestCorrection(ctx, user, { sectionId, date, note }) {
   if (!isClassTeacherOf(ctx, sectionId) || !ctx.scope.hasSection(sectionId)) throw forbidden('Only the class teacher can request a correction');
   const section = await loadSection(ctx.tenantId, sectionId);
   const session = await AttendanceSession.findOne({ tenantId: ctx.tenantId, sectionId, date });
+  if (session?.source === 'periods') throw conflict('That day was taken period by period. Ask the office to correct the period.');
   if (!session || session.status !== 'submitted') throw conflict('That register is not submitted; you can edit it directly');
   const cls = await ClassModel.findById(section.classId);
   const { sendToAdmin } = await import('../comms/notifications.service.js');

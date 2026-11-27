@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { modeOn } from '../../services/attendanceMode.js';
 import { z } from 'zod';
 import { parse, forbidden } from '../../core/utils.js';
 import { teacherDay, teacherWeek, periodsOf } from '../../services/timetable.js';
@@ -23,7 +24,8 @@ r.get('/timetable', async (req, res) => {
   const { date } = parse(dateQ, req.query);
   const c = req.ctx; const d = date || c.today;
   const base = { tenantId: c.tenantId, yearId: c.year._id, teacherId: c.teacher._id, date: d, today: c.today, tz: c.settings.timezone };
-  res.json({ date: d, day: await teacherDay(base), week: await teacherWeek({ ...base, days: c.settings.workingDays }), periods: await periodsOf(c.tenantId) });
+  const pw = (x) => modeOn(c.settings.attendance, x);
+  res.json({ date: d, day: await teacherDay({ ...base, periodWise: pw(d) }), week: await teacherWeek({ ...base, days: c.settings.workingDays, periodWiseOn: pw }), periods: await periodsOf(c.tenantId) });
 });
 
 r.get('/classes', async (req, res) => res.json(await svc.myClasses(req.ctx)));

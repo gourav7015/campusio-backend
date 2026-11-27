@@ -43,11 +43,12 @@ export async function studentCounts(tenantId, sessionFilter) {
 export const addCounts = (a, b) => { for (const k of Object.keys(a)) a[k] += b[k] || 0; return a; };
 
 /** Only records belonging to SUBMITTED registers are real; drafts are invisible and unmarked is never "absent". */
-export async function submittedRecords(tenantId, filter) {
+export async function submittedRecords(tenantId, filter, { registerOnly = false } = {}) {
   const recs = await AttendanceRecord.find({ tenantId, ...filter }).lean();
   if (!recs.length) return [];
   const ids = [...new Set(recs.map((r) => String(r.sessionId)))];
-  const ok = new Set((await AttendanceSession.find({ _id: { $in: ids }, status: 'submitted' }).select('_id').lean()).map((s) => String(s._id)));
+  // registerOnly: the days a class teacher took one register for the whole day (not the days worked out from period registers)
+  const ok = new Set((await AttendanceSession.find({ _id: { $in: ids }, status: 'submitted', ...(registerOnly ? { source: { $ne: 'periods' } } : {}) }).select('_id').lean()).map((s) => String(s._id)));
   return recs.filter((r) => ok.has(String(r.sessionId)));
 }
 

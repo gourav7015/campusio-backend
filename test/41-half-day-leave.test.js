@@ -61,7 +61,7 @@ describe('Half-day leave', () => {
 
   it('a teacher is told whether the school takes attendance period by period (the menu follows it)', async () => {
     expect((await api().get('/api/auth/me').set(W.teacher1.h)).body.user.periodWise).toBe(false);
-    expect((await api().put('/api/school/settings').set(W.h).send({ attendance: { lateCountsAsPresent: true, periodWise: true } })).status).toBe(200);
+    expect((await api().put('/api/school/attendance-mode').set(W.h).send({ periodWise: true, from: TODAY })).status).toBe(200);
     expect((await api().get('/api/auth/me').set(W.teacher1.h)).body.user.periodWise).toBe(true);
   });
 });

@@ -1,14 +1,19 @@
 import { School, AcademicYear, TeachingAssignment, ClassTeacherAssignment, StudentEnrolment, Counter, Teacher, Student, defaultSettings, StaffMember } from '../models/index.js';
 import { isId, todayStr, notFound } from '../core/utils.js';
 import { memo } from '../core/memo.js';
+import { modeOn, modeSummary, dayRuleOf } from './attendanceMode.js';
 
 export function settingsOf(school) {
   const d = defaultSettings();
   const s = school?.settings || {};
+  const tz = s.timezone || d.timezone;
+  const att = { ...d.attendance, ...(s.attendance || {}) };
+  const today = todayStr(tz);
   return {
     ...d, ...s,
     grading: { ...d.grading, ...(s.grading || {}) },
-    attendance: { ...d.attendance, ...(s.attendance || {}) },
+    // periodWise here is the way student attendance is taken TODAY; modeSummary also says since when and any change already booked
+    attendance: { ...att, periodWise: modeOn(att, today), dayRule: dayRuleOf(att), mode: modeSummary(att, today) },
     leaveBalances: { ...d.leaveBalances, ...(s.leaveBalances || {}) },
     staffLeaveBalances: { ...d.staffLeaveBalances, ...(s.staffLeaveBalances || {}) },
     leaveRules: { teaching: { ...d.leaveRules.teaching, ...(s.leaveRules?.teaching || {}) }, nonTeaching: { ...d.leaveRules.nonTeaching, ...(s.leaveRules?.nonTeaching || {}) } },

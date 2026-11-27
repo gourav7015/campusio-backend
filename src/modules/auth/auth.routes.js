@@ -10,6 +10,8 @@ import { isEmailEnabled } from '../../services/email.js';
 import { checkPassword } from '../../services/users.js';
 import * as otp from '../../services/otp.js';
 import { registeredContact, maskEmail } from '../../services/contact.js';
+import { modeSummary } from '../../services/attendanceMode.js';
+import { todayStr } from '../../core/utils.js';
 
 /** The signed-in person as the app sees them. A staff member also says whether they have been given the attendance desk. */
 async function shaped(u) {
@@ -17,7 +19,12 @@ async function shaped(u) {
   pu.registeredEmail = maskEmail((await registeredContact(u)).email);
   if (u.role === 'staff') pu.canMarkAttendance = !!(await StaffMember.findOne({ userId: u._id, tenantId: u.tenantId }).select('canMarkAttendance').lean())?.canMarkAttendance;
   // a teacher sees "Period attendance" only in a school that takes attendance period by period
-  if (u.role === 'teacher') pu.periodWise = !!(await School.findById(u.tenantId).select('settings.attendance.periodWise').lean())?.settings?.attendance?.periodWise;
+  if (u.role === 'teacher' || u.role === 'student') {
+    const sch = await School.findById(u.tenantId).select('settings.attendance settings.timezone').lean();
+    const att = sch?.settings?.attendance || {};
+    const sm = modeSummary(att, todayStr(sch?.settings?.timezone));
+    pu.periodWise = sm.periodWise; pu.periodWiseSince = sm.since; pu.attendanceChange = sm.pending; // pending = a change already booked: { from, periodWise }
+  }
   // Finance sees "Online payments" only in a school where online payment is switched on
   if (u.role === 'finance') pu.onlinePayments = onlineEnabled((await School.findById(u.tenantId).select('settings').lean())?.settings);
   // a class teacher gets a "My class" tab in the Teacher portal

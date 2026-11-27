@@ -11,8 +11,9 @@ import { StudentEnrolment, Payment } from '../../models/index.js';
  */
 const ID = '[a-f0-9]{24}';
 const RULES = [
-  { re: new RegExp(`^/sections/(${ID})/(insight|students|homework)$`), by: 'section' },
+  { re: new RegExp(`^/sections/(${ID})/(insight|students|homework|period-attendance)$`), by: 'section' },
   { re: new RegExp(`^/students/(${ID})(/overview)?$`), by: 'student' },
+  { re: new RegExp(`^/students/(${ID})/attendance-subject/(${ID}|other)$`), by: 'student' },
   { re: new RegExp(`^/analysis/students/(${ID})$`), by: 'student' },
   { re: new RegExp(`^/finance/students/(${ID})/account$`), by: 'student' },
   { re: new RegExp(`^/finance/payments/(${ID})/receipt\\.pdf$`), by: 'payment' },

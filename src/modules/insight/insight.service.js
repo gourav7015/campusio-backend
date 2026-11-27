@@ -9,6 +9,8 @@ import {
 import { notFound, addDays, round1 } from '../../core/utils.js';
 import { submittedRecords, summarize, summarizeCounts, sessionCounts, studentCounts, zeroCounts, addCounts, sessionTotals } from '../../services/attendance.js';
 import { studentHeatmap } from '../attendance/attendance.service.js';
+import { modeOn } from '../../services/attendanceMode.js';
+import { subjectStats, subjectPeriods, sectionSummary } from '../../services/periodStats.js';
 import { busNumbers, busOfStudent } from '../transport/transport.service.js';
 import { studentAccount } from '../finance/finance.service.js';
 import { publishedRows } from '../../services/analytics.js';
@@ -279,9 +281,20 @@ export async function studentOverview(ctx, studentId) {
   ]);
   const monthly = new Map();
   for (const r of recs) { const m = r.date.slice(0, 7); if (!monthly.has(m)) monthly.set(m, []); monthly.get(m).push(r); }
+  // a school that takes attendance period by period: the page shows subjects, and the days of an earlier once-a-day register on their own
+  const periodWise = modeOn(ctx.settings.attendance, ctx.today);
+  let periods = null; let earlier = null;
+  if (periodWise) {
+    periods = await subjectStats({ tenantId: ctx.tenantId, yearId: ctx.year._id, studentId, settings: ctx.settings });
+    const reg = await submittedRecords(ctx.tenantId, { studentId, yearId: ctx.year._id }, { registerOnly: true });
+    if (reg.length) {
+      const by = new Map(); for (const r of reg) { const m = r.date.slice(0, 7); if (!by.has(m)) by.set(m, []); by.get(m).push(r); }
+      earlier = { ...summarize(reg, ctx.settings), until: reg.reduce((d, r) => (r.date > d ? r.date : d), ''), byMonth: [...by.entries()].sort().map(([month, v]) => ({ month, percentage: summarize(v, ctx.settings).percentage, absent: summarize(v, ctx.settings).absent })) };
+    }
+  }
   return {
     profile: { id: student._id, name: student.name, admissionNo: student.admissionNo, className: cls?.name, section: section?.name, rollNo: enr?.rollNo, gender: student.gender, dob: student.dob, house: student.house, phone: student.phone, address: student.address, status: student.status, guardians: student.guardians },
-    attendance: { ...summarize(recs, ctx.settings), days: heat.days, byMonth: [...monthly.entries()].sort().map(([month, v]) => ({ month, percentage: summarize(v, ctx.settings).percentage, absent: summarize(v, ctx.settings).absent })) },
+    attendance: { ...summarize(recs, ctx.settings), periodWise, periods, earlier, days: periodWise ? [] : heat.days, byMonth: [...monthly.entries()].sort().map(([month, v]) => ({ month, percentage: summarize(v, ctx.settings).percentage, absent: summarize(v, ctx.settings).absent })) },
     exams: cards.map((c) => ({ id: c.examId, exam: c.snapshot.exam.name, type: c.snapshot.exam.type, publishedAt: c.publishedAt, percentage: c.snapshot.percentage, grade: c.snapshot.grade, result: c.snapshot.resultStatus, obtained: c.snapshot.totalObtained, max: c.snapshot.totalMax,
       subjects: c.snapshot.subjects.map((s) => ({ subject: s.subject, components: s.components, obtained: s.obtained, max: s.max, percentage: s.percentage, grade: s.grade, absent: s.absent, passed: s.passed })) })),
     homework: hw.map((h) => ({ id: h._id, title: h.title, subject: h.subjectId?.name, teacher: h.teacherId?.name, assignedDate: h.assignedDate, dueDate: h.dueDate, type: h.type })),
@@ -362,4 +375,19 @@ export async function teacherOverview(ctx, teacherId) {
     homework: { total: hwCounts.reduce((n, h) => n + h.n, 0) },
     pay, library: issues.map((i) => ({ id: i._id, title: i.bookId?.title, author: i.bookId?.author, issuedOn: i.issuedOn, dueDate: i.dueDate, returnedOn: i.returnedOn, status: i.status, overdue: i.status === 'issued' && i.dueDate < ctx.today })),
   };
+}
+
+/** One subject of one student, period by period (the sheet opened from the student's attendance tab). */
+export async function studentSubjectPeriods(ctx, studentId, subjectId) {
+  if (!(await Student.exists({ _id: studentId, tenantId: ctx.tenantId }))) throw notFound('Student not found');
+  return subjectPeriods({ tenantId: ctx.tenantId, yearId: ctx.year._id, studentId, subjectId });
+}
+
+/** A section's students, each with their attendance in lessons: the class teacher's and the office's check of the whole class when attendance is taken period by period. */
+export async function sectionPeriodAttendance(ctx, sectionId) {
+  if (!(await Section.exists({ _id: sectionId, tenantId: ctx.tenantId }))) throw notFound('Section not found');
+  const enrols = await StudentEnrolment.find({ tenantId: ctx.tenantId, sectionId, yearId: ctx.year._id, status: rollStatus(ctx.year) }).sort({ rollNo: 1 }).lean();
+  const stu = new Map((await Student.find({ tenantId: ctx.tenantId, _id: { $in: enrols.map((e) => e.studentId) } }).select('name admissionNo').lean()).map((s) => [String(s._id), s]));
+  const roster = enrols.map((e) => ({ studentId: e.studentId, rollNo: e.rollNo, name: stu.get(String(e.studentId))?.name || '', admissionNo: stu.get(String(e.studentId))?.admissionNo }));
+  return { periodWise: modeOn(ctx.settings.attendance, ctx.today), ...(await sectionSummary({ tenantId: ctx.tenantId, yearId: ctx.year._id, sectionId, roster, settings: ctx.settings })) };
 }

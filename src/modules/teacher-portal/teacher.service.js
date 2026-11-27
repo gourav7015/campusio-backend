@@ -1,4 +1,5 @@
 import { gapsForSections } from '../structure/class-structure.service.js';
+import { modeOn } from '../../services/attendanceMode.js';
 import { rollStatus } from '../../services/context.js';
 import { monitorsOf } from '../class-life/class-life.service.js';
 import {
@@ -58,7 +59,7 @@ export async function classOverview(ctx, sectionId) {
     ExaminationSubject.find({ tenantId: ctx.tenantId, classId: section.classId, date: { $gte: ctx.today } }).sort({ date: 1 }).limit(1).populate('subjectId', 'name').populate('examId', 'name schedulePublished'),
     Homework.find({ tenantId: ctx.tenantId, sectionId, teacherId: ctx.teacher._id, status: 'published', dueDate: { $gte: ctx.today } }).countDocuments(),
   ]);
-  const week = await teacherWeek({ tenantId: ctx.tenantId, yearId: ctx.year._id, teacherId: ctx.teacher._id, date: ctx.today, today: ctx.today, tz: ctx.settings.timezone });
+  const week = await teacherWeek({ tenantId: ctx.tenantId, yearId: ctx.year._id, teacherId: ctx.teacher._id, date: ctx.today, today: ctx.today, tz: ctx.settings.timezone, periodWiseOn: (d) => modeOn(ctx.settings.attendance, d) });
   const upcoming = week.flatMap((d) => d.rows.filter((r) => String(r.sectionId) === String(sectionId) && (d.date > ctx.today || (d.date === ctx.today && ['upcoming', 'next', 'current'].includes(r.status)))));
   const subjects = ctx.scope.assignments.filter((a) => String(a.sectionId) === String(sectionId));
   const subjDocs = mk(await Subject.find({ tenantId: ctx.tenantId, _id: { $in: subjects.map((s) => s.subjectId) } }).lean());
@@ -229,7 +230,7 @@ export async function mySubjects(ctx) {
 export async function dashboard(ctx) {
   const { scope, today, year } = ctx;
   const tenantId = ctx.tenantId;
-  const rows = await teacherDay({ tenantId, yearId: year._id, teacherId: ctx.teacher._id, date: today, today, tz: ctx.settings.timezone });
+  const rows = await teacherDay({ tenantId, yearId: year._id, teacherId: ctx.teacher._id, date: today, today, tz: ctx.settings.timezone, periodWise: modeOn(ctx.settings.attendance, today) });
   const sectionIds = scope.sectionIds;
   const [studentsAssigned, sessions, hw, exams, perf, announcements, trendRows, activity] = await Promise.all([
     StudentEnrolment.distinct('studentId', { tenantId, sectionId: { $in: sectionIds }, status: 'active' }),
@@ -243,7 +244,13 @@ export async function dashboard(ctx) {
   // sections this teacher is responsible for registering today: they teach a period there, or they are its class teacher
   // only the class teacher takes a section's daily register
   const respSections = new Set(scope.classTeacherSectionIds);
-  const pendingAttendance = working ? [...respSections].filter((id) => sessionBy.get(id)?.status !== 'submitted').length : 0;
+  const periodWise = modeOn(ctx.settings.attendance, today);
+  // once a day: the class teacher's register. Period by period: the teacher's own lessons that are not submitted yet.
+  let pendingAttendance = working ? [...respSections].filter((id) => sessionBy.get(id)?.status !== 'submitted').length : 0;
+  if (periodWise) {
+    const { teacherPeriodDay } = await import('../scheduling/scheduling.service.js');
+    pendingAttendance = working ? (await teacherPeriodDay(ctx, today, rows)).rows.filter((r) => !r.submitted).length : 0;
+  }
   const todaysSubmitted = sessions.filter((s) => s.status === 'submitted' && sectionIds.includes(String(s.sectionId)));
   const { AttendanceRecord } = await import('../../models/index.js');
   const recs = todaysSubmitted.length ? await AttendanceRecord.find({ sessionId: { $in: todaysSubmitted.map((s) => s._id) } }).select('status').lean() : [];
@@ -257,7 +264,8 @@ export async function dashboard(ctx) {
   return {
     // what is still missing in the classes this teacher is class teacher of (a subject nobody has been assigned to teach)
     classGaps: await gapsForSections(tenantId, year._id, scope.classTeacherSectionIds),
-    permissions: { takeAttendance: scope.classTeacherSectionIds.length > 0 },
+    periodWise,
+    permissions: { takeAttendance: !periodWise && scope.classTeacherSectionIds.length > 0 },
     greeting: { name: ctx.teacher.name, date: today, weekday: isoDay(today), periodsToday: rows.filter((r) => !r.covering || true).length, firstUpcoming: next || null, working },
     cards: { assignedStudents: studentsAssigned.length, assignedClasses: sectionIds.length, pendingAttendance, activeAssignments: published.filter((h) => h.dueDate >= today).length },
     today: rows,

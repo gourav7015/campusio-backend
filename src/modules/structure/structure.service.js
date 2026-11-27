@@ -218,7 +218,8 @@ export async function updateSettings(tenantId, body) {
   school.settings = {
     ...current, ...rest,
     grading: { ...current.grading, ...(rest.grading || {}), ...(scale ? { scale } : {}) },
-    attendance: { ...current.attendance, ...(rest.attendance || {}) },
+    // only the rules are saved here; the way attendance is taken is changed by setAttendanceMode (modules/attendance/attendance.mode.js)
+    attendance: { lateCountsAsPresent: rest.attendance?.lateCountsAsPresent ?? current.attendance.lateCountsAsPresent, dayRule: { ...current.attendance.dayRule, ...(rest.attendance?.dayRule || {}) }, modeSchedule: school.settings?.attendance?.modeSchedule || [], periodWise: !!school.settings?.attendance?.periodWise },
     leaveBalances: { ...current.leaveBalances, ...(rest.leaveBalances || {}) },
     staffLeaveBalances: { ...current.staffLeaveBalances, ...(rest.staffLeaveBalances || {}) },
     leaveRules: { teaching: { ...current.leaveRules?.teaching, ...(rest.leaveRules?.teaching || {}) }, nonTeaching: { ...current.leaveRules?.nonTeaching, ...(rest.leaveRules?.nonTeaching || {}) } },

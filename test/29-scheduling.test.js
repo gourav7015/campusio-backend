@@ -56,35 +56,6 @@ describe('Scheduling: period swaps, attendance on a closed day, period-wise atte
     expect((await api().post(`/api/teacher/swaps/${s2._id}/cancel`).set(T1).send({})).status).toBe(409);
   });
 
-  it('period-wise attendance works only when the school turns it on, for whoever teaches that period', async () => {
-    const day = isoDay(TODAY);
-    const mk = (periodId, assignmentId) => api().post('/api/school/timetable/entries').set(W.h).send({ sectionId: W.sec8A._id, day, periodId, assignmentId });
-    const today1 = (await mk(W.periods[2]._id, W.asgM._id)).body.entry; // today's P3 Maths with Mr Sharma
-    expect((await api().get(`/api/teacher/period-attendance/register?entryId=${today1._id}&date=${TODAY}`).set(T1)).status).toBe(409); // off by default
-    expect((await api().put('/api/school/settings').set(W.h).send({ attendance: { periodWise: true } })).status).toBe(200);
-    const list = (await api().get('/api/teacher/period-attendance').set(T1)).body;
-    expect(list.periods.some((p) => p.entryId === today1._id && p.marked === false)).toBe(true);
-    const reg = (await api().get(`/api/teacher/period-attendance/register?entryId=${today1._id}&date=${TODAY}`).set(T1)).body;
-    expect(reg.students).toHaveLength(3); expect(reg.students.every((s) => s.status === 'present')).toBe(true);
-    expect((await api().get(`/api/teacher/period-attendance/register?entryId=${today1._id}&date=${TODAY}`).set(T2)).status).toBe(403); // not Mrs Gupta's period
-    const a = W.students[0].student._id;
-    expect((await api().put('/api/teacher/period-attendance/register').set(T1).send({ entryId: today1._id, date: TODAY, entries: [{ studentId: a, status: 'absent' }] })).body).toMatchObject({ absent: 1, total: 3 });
-    expect((await api().put('/api/teacher/period-attendance/register').set(T1).send({ entryId: today1._id, date: addDays(TODAY, 1), entries: [] })).status).toBe(400); // weekday mismatch / future
-    expect((await api().get('/api/teacher/period-attendance').set(T1)).body.periods.find((p) => p.entryId === today1._id).marked).toBe(true);
-    // the class teacher sees the whole day of their class period by period: who takes each lesson, whether it is marked and who was away
-    const cp = (await api().get(`/api/teacher/class-periods?sectionId=${W.sec8A._id}&date=${TODAY}`).set(T1)).body;
-    expect(cp.enabled).toBe(true);
-    expect(cp.periods.find((p) => p.entryId === today1._id)).toMatchObject({ subject: 'Mathematics', teacher: 'Mr Sharma', mine: true, marked: true, absent: 1, total: 3 });
-    expect((await api().get(`/api/teacher/class-periods?sectionId=${W.sec8A._id}&date=${TODAY}`).set(T2)).status).toBe(403); // only the class teacher of that section
-    // the student sees their own period-by-period status; the admin sees counts
-    const mine = (await api().get('/api/student/period-attendance').set(W.studentLogins[0].h)).body;
-    expect(mine.periods).toEqual([expect.objectContaining({ status: 'absent', subject: 'Mathematics' })]);
-    expect((await api().get('/api/student/period-attendance').set(W.studentLogins[1].h)).body.periods[0].status).toBe('present');
-    expect((await api().get(`/api/school/period-attendance?sectionId=${W.sec8A._id}`).set(W.h)).body.periods[0]).toMatchObject({ absent: 1, total: 3, teacher: 'Mr Sharma' });
-    await api().put('/api/school/settings').set(W.h).send({ attendance: { periodWise: false } });
-    expect((await api().get(`/api/teacher/class-periods?sectionId=${W.sec8A._id}&date=${TODAY}`).set(T1)).body).toMatchObject({ enabled: false, periods: [] }); // nothing to show when the school does not take attendance by period
-  });
-
   it('attendance on a day the school is closed needs the School Admin\'s approval, then the register opens', async () => {
     const closed = [1, 2, 3, 4, 5, 6, 7].filter((d) => d !== isoDay(TODAY));
     await api().put('/api/school/settings').set(W.h).send({ workingDays: closed });

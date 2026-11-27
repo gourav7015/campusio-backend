@@ -193,6 +193,7 @@ export async function regularise(ctx, user, { sectionId, date, studentId, reason
   if (date < addDays(ctx.today, -REGULARISE_DAYS)) throw bad(`Attendance can be regularised for ${REGULARISE_DAYS} days. Ask the school admin for an older correction.`);
   const session = await AttendanceSession.findOne({ tenantId: ctx.tenantId, sectionId, date });
   if (!session) throw notFound('No attendance was taken for that date');
+  if (session.source === 'periods') throw conflict('That day was taken period by period. Ask the office to correct the period.');
   const rec = await AttendanceRecord.findOne({ sessionId: session._id, studentId });
   if (!rec) throw notFound('That student is not on that register');
   if (!['absent', 'late'].includes(rec.status)) throw bad('Only an absent or late mark can be regularised');

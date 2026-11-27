@@ -21,7 +21,26 @@ if (process.env.DEMO_MESSAGES_FILE) {
 const { buildDemo, DEMO } = await import('./demo-data.js');
 await mongoose.connect(config.mongoUri);
 await mongoose.syncIndexes();
-const server = createApp().listen(config.port);
+const app = createApp();
+// Browser tests only (this script never runs in production): put the demo school back to "attendance once a day" with nothing taken today,
+// so a test can switch the way attendance is taken from today without leaving the shared demo in the other way. POST /__demo/attendance-reset
+const { createServer } = await import('node:http');
+const server = createServer(async (req, res) => {
+  if (req.method === 'POST' && req.url === '/__demo/attendance-reset') {
+    const M = await import('./models/index.js'); const { forgetMemo } = await import('./core/memo.js'); const { todayStr } = await import('./core/utils.js');
+    const gps = await M.School.findOne({ code: 'gps' });
+    const today = todayStr(gps.settings?.timezone);
+    gps.settings = { ...gps.settings, attendance: { ...(gps.settings?.attendance || {}), periodWise: false, modeSchedule: [] } };
+    gps.markModified('settings'); await gps.save(); forgetMemo();
+    const tenantId = gps._id;
+    const sessions = await M.AttendanceSession.find({ tenantId, $or: [{ date: today }, { source: 'periods' }] }).select('_id').lean();
+    await M.AttendanceRecord.deleteMany({ sessionId: { $in: sessions.map((x) => x._id) } });
+    await M.AttendanceSession.deleteMany({ _id: { $in: sessions.map((x) => x._id) } });
+    await M.PeriodAttendanceSession.deleteMany({ tenantId });
+    res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, today })); return;
+  }
+  app(req, res);
+}).listen(config.port);
 await new Promise((r) => server.once('listening', r));
 const base = `http://127.0.0.1:${config.port}`;
 console.log(`API on ${base} — building demo school…`);

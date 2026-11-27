@@ -24,7 +24,10 @@ export const defaultSettings = () => ({
       { min: 60, grade: 'B' }, { min: 50, grade: 'C' }, { min: 33, grade: 'D' }, { min: 0, grade: 'F' },
     ],
   },
-  attendance: { lateCountsAsPresent: true, periodWise: false },
+  // periodWise = how student attendance is taken TODAY (worked out from modeSchedule by settingsOf; never saved by the settings form).
+  // modeSchedule = every change of way, oldest first: [{ from: 'YYYY-MM-DD', periodWise, at, byName }]. Before the first entry a school takes it once a day.
+  // dayRule: when attendance is taken period by period, a day is Present at presentPct% of the periods taken, Half day at halfPct%, else Absent.
+  attendance: { lateCountsAsPresent: true, periodWise: false, modeSchedule: [], dayRule: { presentPct: 75, halfPct: 40 } },
   finance: { receiptFormat: 'RCPT{YYYY}{SEQ:5}', dueDay: 10, advanceDiscount: { enabled: true, minMonths: 12, type: 'months', value: 1 } },
   library: { loanDays: { student: 14, teacher: 30 }, maxBooks: { student: 2, teacher: 5 }, finePerDay: 2, maxRenewals: 1, blockIfOverdue: true },
   admissionFormat: 'ADM{YYYY}{SEQ:4}',
@@ -297,6 +300,8 @@ export const AttendanceSession = model('AttendanceSession', (() => {
     tenantId: tenant, yearId: ref('AcademicYear', { required: true }), sectionId: ref('Section', { required: true }),
     date: { type: String, required: true }, status: { type: String, enum: ['draft', 'submitted'], default: 'draft' },
     markedBy: ref('User'), submittedBy: ref('User'), submittedAt: Date, remarks: String,
+    // 'register' = the class teacher's daily register; 'periods' = the day worked out from the period registers (see services/periodDay.js)
+    source: { type: String, enum: ['register', 'periods'], default: 'register' },
   }, opts);
   s.index({ tenantId: 1, sectionId: 1, date: 1 }, { unique: true });
   return s;
@@ -912,7 +917,11 @@ export const PeriodAttendanceSession = model('PeriodAttendanceSession', (() => {
   const s = new Schema({
     tenantId: tenant, yearId: ref('AcademicYear'), sectionId: ref('Section', { required: true }), periodId: ref('TimetablePeriod', { required: true }), date: { type: String, required: true },
     teacherId: ref('Teacher'), subjectId: ref('Subject'), markedBy: ref('User'),
+    // a period register locks on submit like the daily one; sessions saved before this field existed were final
+    status: { type: String, enum: ['draft', 'submitted'], default: 'submitted' }, submittedAt: Date,
     records: [new Schema({ studentId: ref('Student', { required: true }), status: { type: String, enum: ['present', 'absent', 'late', 'half_day', 'leave', 'excused'], required: true } }, { _id: false })],
+    // every change after submitting: who, from what, to what, why
+    changes: [new Schema({ studentId: ref('Student'), from: String, to: String, by: ref('User'), byName: String, reason: String, at: { type: Date, default: Date.now } }, { _id: false })],
   }, opts);
   s.index({ tenantId: 1, sectionId: 1, date: 1, periodId: 1 }, { unique: true });
   return s;

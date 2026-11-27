@@ -79,7 +79,7 @@ export async function sectionWeek({ tenantId, yearId, sectionId, date, today, tz
 }
 
 /** A teacher's lessons for one date: own periods (minus those covered by a substitute) plus periods they cover. */
-export async function teacherDay({ tenantId, yearId, teacherId, date, today, tz }) {
+export async function teacherDay({ tenantId, yearId, teacherId, date, today, tz, periodWise = false }) {
   const day = isoDay(date);
   const assignments = await TeachingAssignment.find({ tenantId, yearId, teacherId }).lean();
   const mine = assignments.filter((a) => inForce(a, date));
@@ -108,19 +108,20 @@ export async function teacherDay({ tenantId, yearId, teacherId, date, today, tz 
   const mineAsClassTeacher = new Set((await ClassTeacherAssignment.find({ tenantId, yearId, teacherId }).lean()).filter((a) => inForce(a, date)).map((a) => String(a.sectionId)));
   rows.forEach((r) => {
     r.studentCount = cm.get(String(r.sectionId)) || 0; r.covering = r.substitute;
-    if (mineAsClassTeacher.has(String(r.sectionId))) { r.attendance = sm.get(String(r.sectionId)) || 'not_marked'; r.classTeacher = true; }
+    // the class teacher's daily register is shown against their lessons only in a school that takes attendance once a day
+    if (!periodWise && mineAsClassTeacher.has(String(r.sectionId))) { r.attendance = sm.get(String(r.sectionId)) || 'not_marked'; r.classTeacher = true; }
   });
   void sectionIds;
   rows.sort((a, b) => a.periodOrder - b.periodOrder);
   return markNext(rows);
 }
 
-export async function teacherWeek({ tenantId, yearId, teacherId, date, today, tz, days = [1, 2, 3, 4, 5, 6] }) {
+export async function teacherWeek({ tenantId, yearId, teacherId, date, today, tz, days = [1, 2, 3, 4, 5, 6], periodWiseOn = () => false }) {
   const monday = addDays(date, 1 - isoDay(date));
   const out = [];
   for (const d of days) {
     const dt = addDays(monday, d - 1);
-    out.push({ day: d, date: dt, rows: await teacherDay({ tenantId, yearId, teacherId, date: dt, today, tz }) });
+    out.push({ day: d, date: dt, rows: await teacherDay({ tenantId, yearId, teacherId, date: dt, today, tz, periodWise: periodWiseOn(dt) }) });
   }
   return out;
 }
