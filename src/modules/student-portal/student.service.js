@@ -1,4 +1,4 @@
-import { Section, ClassModel, File, User, Notification, ChatThread } from '../../models/index.js';
+import { Section, ClassModel, File, User, Notification, ChatThread, AcademicYear, StudentEnrolment } from '../../models/index.js';
 import { forbidden, addDays, isoDay } from '../../core/utils.js';
 import { sectionDay, sectionWeek } from '../../services/timetable.js';
 import { listForStudent as homeworkFor } from '../homework/homework.service.js';
@@ -24,18 +24,13 @@ export async function profile(ctx) {
     },
     guardians: (student.guardians || []).map((g) => ({ name: g.name, relationship: g.relationship, phone: g.phone, email: g.email })),
     other: { house: student.house, bloodGroup: student.bloodGroup, emergencyContact: student.emergencyContact },
-    account: { loginId: user?.loginId, language: user?.language }, editableFields: ctx.settings.studentCanEditProfile,
+    account: { loginId: user?.loginId, language: user?.language }, editableFields: [], // a student only looks: the class teacher keeps their details (phone, address, guardian) up to date
   };
 }
 
-/** Students change only what the school explicitly allows; class, section, roll and admission number are never editable. */
-export async function updateProfile(ctx, body) {
-  const allowed = new Set(ctx.settings.studentCanEditProfile);
-  const bad = Object.keys(body).filter((k) => !allowed.has(k));
-  if (bad.length) throw forbidden(`You cannot change: ${bad.join(', ')}. Ask the school office.`);
-  Object.assign(ctx.student, body);
-  await ctx.student.save();
-  return profile(ctx);
+/** A student cannot change their own details: the class teacher (or the school office) keeps them. Only a photo can be added by the student. */
+export async function updateProfile() {
+  throw forbidden('Your details are kept by your class teacher. Ask them to change anything that is wrong.');
 }
 
 export async function setPhoto(ctx, file) {
@@ -102,4 +97,22 @@ export async function dashboard(ctx) {
     upcomingExam: next || null, latestResult: latest, announcements: anns, calendar: cal.slice(0, 8),
     activity: activity.map((n) => ({ id: n._id, at: n.createdAt, title: n.title, body: n.body, category: n.category, link: n.link, read: !!n.readAt })),
   };
+}
+
+/**
+ * The academic years the student has been at this school, newest first, each with the class and section they were in. A student promoted to the next
+ * class keeps everything of the earlier years (results, report cards) under that year, so this is how they find it.
+ */
+export async function myYears(ctx) {
+  const enr = await StudentEnrolment.find({ tenantId: ctx.tenantId, studentId: ctx.student._id }).lean();
+  const [years, classes, sections] = await Promise.all([
+    AcademicYear.find({ tenantId: ctx.tenantId, _id: { $in: enr.map((e) => e.yearId) } }).select('name startDate isCurrent').lean(),
+    ClassModel.find({ tenantId: ctx.tenantId, _id: { $in: enr.map((e) => e.classId) } }).select('name').lean(),
+    Section.find({ tenantId: ctx.tenantId, _id: { $in: enr.map((e) => e.sectionId) } }).select('name').lean(),
+  ]);
+  const C = new Map(classes.map((x) => [String(x._id), x.name])); const S = new Map(sections.map((x) => [String(x._id), x.name]));
+  return years.sort((a, b) => String(b.startDate).localeCompare(String(a.startDate))).map((y) => {
+    const e = enr.filter((x) => String(x.yearId) === String(y._id)).sort((a, b) => String(b.startDate).localeCompare(String(a.startDate)))[0];
+    return { id: y._id, name: y.name, current: String(y._id) === String(ctx.year?._id) && !!y.isCurrent, className: C.get(String(e.classId)), section: S.get(String(e.sectionId)), status: e.status };
+  });
 }

@@ -3,6 +3,7 @@ import { Examination, ExaminationSubject, ReportCard, Subject, StudentEnrolment,
 import { loadLook } from '../../services/documents/look.js';
 import { drawReportCard } from '../../services/documents/reportcard.js';
 import { notFound, daysBetween, round1 } from '../../core/utils.js';
+import { rollStatus } from '../../services/context.js';
 import { submittedRecords, summarize, studentCounts, summarizeCounts } from '../../services/attendance.js';
 
 const classIdsOf = (ctx) => [...new Set(ctx.enrolments.map((e) => String(e.classId)))];
@@ -50,11 +51,19 @@ export async function resultDetail(ctx, examId) {
 export async function performance(ctx, { examId } = {}) {
   const cards = await currentCards(ctx);
   const trend = cards.map((c) => ({ exam: c.snapshot.exam.name, examId: c.examId, percentage: c.snapshot.percentage, grade: c.snapshot.grade }));
+  const all = examId === 'all' && cards.length > 0; // every published examination of the year together
   const latest = (examId && cards.find((c) => String(c.examId) === String(examId))) || cards[cards.length - 1];
   const previous = latest ? cards[cards.indexOf(latest) - 1] : null;
-  const subjectWise = latest ? latest.snapshot.subjects.filter((s) => s.percentage != null).map((s) => ({ subject: s.subject, percentage: s.percentage, grade: s.grade })) : [];
-  const gradeCounts = {};
-  latest?.snapshot.subjects.forEach((s) => { if (s.grade) gradeCounts[s.grade] = (gradeCounts[s.grade] || 0) + 1; });
+  // one examination, or (examId=all) the average of each subject over every examination, and the grades of all of them
+  const counted = all ? cards : latest ? [latest] : [];
+  const bySubject = new Map(); const gradeCounts = {};
+  counted.forEach((c) => c.snapshot.subjects.forEach((s) => {
+    if (s.grade) gradeCounts[s.grade] = (gradeCounts[s.grade] || 0) + 1;
+    if (s.percentage == null) return;
+    const k = s.code || s.subject; const x = bySubject.get(k) || { subject: s.subject, sum: 0, n: 0, grade: s.grade };
+    x.sum += s.percentage; x.n += 1; x.grade = s.grade; bySubject.set(k, x);
+  }));
+  const subjectWise = [...bySubject.values()].map((x) => ({ subject: x.subject, percentage: all ? round1(x.sum / x.n) : x.sum, grade: x.grade }));
   const improvement = latest && previous ? latest.snapshot.subjects.filter((s) => s.percentage != null).map((s) => {
     const prev = previous.snapshot.subjects.find((p) => p.code === s.code);
     return prev?.percentage != null ? { subject: s.subject, latest: s.percentage, previous: prev.percentage, change: round1(s.percentage - prev.percentage) } : null;
@@ -64,7 +73,7 @@ export async function performance(ctx, { examId } = {}) {
   recs.forEach((r) => { const k = r.date.slice(0, 7); if (!by.has(k)) by.set(k, []); by.get(k).push(r); });
   const attendanceTrend = [...by.keys()].sort().map((month) => ({ month, percentage: summarize(by.get(month), ctx.settings).percentage }));
   return {
-    trend, latestExam: latest ? { id: latest.examId, name: latest.snapshot.exam.name } : null, subjectWise,
+    trend, latestExam: all ? { id: 'all', name: 'All examinations' } : latest ? { id: latest.examId, name: latest.snapshot.exam.name } : null, subjectWise,
     gradeDistribution: Object.entries(gradeCounts).map(([grade, count]) => ({ grade, count })), attendanceTrend, improvement,
     exams: cards.map((c) => ({ id: c.examId, name: c.snapshot.exam.name })),
   };
@@ -118,11 +127,21 @@ function rankOf(cards, studentId) {
 }
 const attempted = (card) => (card.snapshot.subjects || []).some((s) => !s.absent);
 
+/** The standard examinations every class sits through the year: Unit Tests 1-4, Half-Yearly and the Final Exam (never a teacher's own class test, never one section's test). */
+export const isStandardExam = (e) => !e.sectionId && (['half_yearly', 'annual'].includes(e.type) || /^unit test\s*\d+$/i.test(String(e.name).trim()) || /^(half[- ]?yearly|final( exam)?|annual( exam)?)$/i.test(String(e.name).trim()));
+
+/** The section a student is in now. */
+const currentSectionId = (ctx) => String(ctx.enrolment?.sectionId || ctx.sectionIds[0]);
+
 async function visibleClassExams(ctx) {
   const classIds = [...new Set(ctx.enrolments.map((e) => String(e.classId)))];
   const exams = (await Examination.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, status: { $ne: 'archived' }, classIds: { $in: classIds } }).lean())
     .filter((e) => !e.sectionId || ctx.sectionIds.includes(String(e.sectionId)));
-  const cards = await ReportCard.find({ tenantId: ctx.tenantId, examId: { $in: exams.map((e) => e._id) }, sectionId: { $in: ctx.sectionIds }, isCurrent: true }).lean();
+  const all = await ReportCard.find({ tenantId: ctx.tenantId, examId: { $in: exams.map((e) => e._id) }, sectionId: { $in: ctx.sectionIds }, isCurrent: true }).lean();
+  // classmates are the students of ONE section. A student who moved section during the year has more than one in `sectionIds`
+  // (so their history stays visible), but is compared only with the section they sat each test in, or their current one for a test they did not sit
+  const mine = new Map(all.filter((c) => String(c.studentId) === String(ctx.student._id)).map((c) => [String(c.examId), String(c.sectionId)]));
+  const cards = all.filter((c) => String(c.sectionId) === (mine.get(String(c.examId)) || currentSectionId(ctx)));
   // an unannounced test stays hidden until its results are published
   return { exams: exams.filter((e) => e.schedulePublished || cards.some((c) => String(c.examId) === String(e._id))), cards };
 }
@@ -164,6 +183,96 @@ export async function classExamDetail(ctx, examId) {
   return { exam: { id: exam._id, name: exam.name, type: exam.type }, published: true, subjects: subjectCols, rows, me, classSize: rows.length, average: Math.round((rows.reduce((n, r) => n + (r.percentage ?? 0), 0) / rows.length) * 10) / 10 };
 }
 
+
+/**
+ * Where the student stands among EVERY section of their class (all of LKG, all of Class 8; in Classes 11 and 12 each stream is a class of its own,
+ * so a Commerce student is compared with Commerce, never with Arts). Only the standard examinations count (Unit Tests 1-4, Half-Yearly, Final Exam): a teacher's own class test
+ * is not comparable. Gives numbers only, so nobody is named. Null when the class has one section (it would repeat the section standing) or nothing is published.
+ */
+async function wholeClassStanding(ctx, exams) {
+  if (!ctx.enrolment) return null;
+  const me = String(ctx.student._id);
+  const sections = await Section.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, classId: ctx.enrolment.classId }).select('_id').lean();
+  if (sections.length < 2) return null;
+  const common = exams.filter(isStandardExam);
+  if (!common.length) return null;
+  const [cards, size, cls] = await Promise.all([
+    ReportCard.find({ tenantId: ctx.tenantId, examId: { $in: common.map((e) => e._id) }, sectionId: { $in: sections.map((x) => x._id) }, isCurrent: true }).lean(),
+    StudentEnrolment.countDocuments({ tenantId: ctx.tenantId, yearId: ctx.year._id, classId: ctx.enrolment.classId, status: rollStatus(ctx.year) }),
+    ClassModel.findById(ctx.enrolment.classId).select('name').lean(),
+  ]);
+  const pct = (c) => c.snapshot.percentage ?? 0;
+  const tests = common.map((e) => {
+    const list = cards.filter((c) => String(c.examId) === String(e._id) && attempted(c));
+    if (!list.length) return null;
+    const mine = list.find((c) => String(c.studentId) === me);
+    const ps = list.map(pct);
+    return { e, list, row: { examId: e._id, name: e.name, type: e.type, takers: list.length, myPercentage: mine ? pct(mine) : null, myRank: mine ? rankIn(ps, pct(mine)) : null, average: avg(ps) } };
+  }).filter(Boolean).sort((a, b) => String(a.e.startDate || a.e.createdAt).localeCompare(String(b.e.startDate || b.e.createdAt)));
+  if (!tests.length) return null;
+  const byStudent = new Map();
+  tests.forEach(({ list }) => list.forEach((c) => { const k = String(c.studentId); if (!byStudent.has(k)) byStudent.set(k, []); byStudent.get(k).push(pct(c)); }));
+  const averages = new Map([...byStudent].map(([k, v]) => [k, avg(v)]));
+  if (!averages.has(me)) return null;
+  const all = [...averages.values()];
+  const mineAvg = averages.get(me);
+  return {
+    className: cls?.name, sections: sections.length, classSize: size, tests: tests.map((t) => t.row),
+    overall: { testsCounted: byStudent.get(me).length, myAverage: mineAvg, classAverage: avg(all), gap: round1(mineAvg - avg(all)), rank: rankIn(all, mineAvg), of: all.length, ahead: all.filter((v) => v < mineAvg).length, highest: Math.max(...all) },
+  };
+}
+
+/**
+ * The ranked list of a section, or of the whole class: every student with results, ranked by the LATEST test's percentage, with their average over
+ * the tests counted beside it. Whole tests only (the overall percentage of each), never subject marks.
+ * - "section": every published test of the student's current section (a teacher's own class test included).
+ * - "class": every section of the class, on the standard examinations (Unit Tests 1-4, Half-Yearly, Final Exam), so the comparison is fair.
+ * In Classes 11 and 12 each stream is a class of its own, so a stream is listed with its own sections only.
+ */
+export async function classRanking(ctx, scope = 'section') {
+  const empty = { scope, title: '', basis: '', tests: 0, lastExam: null, size: 0, rows: [] };
+  if (!ctx.enrolment) return empty;
+  const me = String(ctx.student._id);
+  const classId = ctx.enrolment.classId;
+  const sectionId = currentSectionId(ctx);
+  const wholeClass = scope === 'class';
+  const [sections, cls, sec] = await Promise.all([
+    wholeClass ? Section.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, classId }).select('_id name').lean() : [],
+    ClassModel.findById(classId).select('name').lean(),
+    Section.findById(sectionId).select('name').lean(),
+  ]);
+  const sectionIds = wholeClass ? sections.map((x) => String(x._id)) : [sectionId];
+  const exams = (await Examination.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, status: { $ne: 'archived' }, classIds: classId }).lean())
+    .filter((e) => (wholeClass ? isStandardExam(e) : !e.sectionId || String(e.sectionId) === sectionId));
+  const cards = await ReportCard.find({ tenantId: ctx.tenantId, examId: { $in: exams.map((e) => e._id) }, sectionId: { $in: sectionIds }, isCurrent: true }).lean();
+  const pct = (c) => c.snapshot.percentage ?? 0;
+  const held = exams.map((e) => ({ e, list: cards.filter((c) => String(c.examId) === String(e._id) && attempted(c)) })).filter((x) => x.list.length)
+    .sort((a, b) => String(a.e.startDate || a.e.createdAt).localeCompare(String(b.e.startDate || b.e.createdAt)));
+  const title = wholeClass ? `All of ${cls?.name || 'the class'}` : `${cls?.name || ''} ${sec?.name || ''}`.trim();
+  const basis = wholeClass ? 'Standard examinations: Unit Tests, Half-Yearly and Final Exam' : 'Every published test of your section';
+  if (!held.length) return { ...empty, title, basis };
+  const last = held[held.length - 1];
+  const per = new Map();
+  held.forEach(({ list }) => list.forEach((c) => { const k = String(c.studentId); if (!per.has(k)) per.set(k, []); per.get(k).push(pct(c)); }));
+  const lastPct = new Map(last.list.map((c) => [String(c.studentId), pct(c)]));
+  const ids = [...per.keys()];
+  const [students, enrols] = await Promise.all([
+    Student.find({ tenantId: ctx.tenantId, _id: { $in: ids } }).select('name').lean(),
+    StudentEnrolment.find({ tenantId: ctx.tenantId, yearId: ctx.year._id, studentId: { $in: ids }, sectionId: { $in: sectionIds }, status: rollStatus(ctx.year) }).select('studentId sectionId rollNo').lean(),
+  ]);
+  const name = new Map(students.map((x) => [String(x._id), x.name]));
+  const where = new Map(enrols.map((x) => [String(x.studentId), x]));
+  const secName = new Map(sections.map((x) => [String(x._id), x.name]));
+  const rows = ids.map((k) => ({ studentId: k, name: name.get(k) || 'Student', rollNo: where.get(k)?.rollNo ?? null, section: wholeClass ? secName.get(String(where.get(k)?.sectionId)) || '' : undefined,
+    average: avg(per.get(k)), tests: per.get(k).length, lastAverage: lastPct.has(k) ? round1(lastPct.get(k)) : null, isMe: k === me }))
+    // ranked by the latest test (ties share a rank, then the overall average decides the order); a student who missed it is listed below, without a rank
+    .sort((a, b) => (b.lastAverage ?? -1) - (a.lastAverage ?? -1) || b.average - a.average || String(a.name).localeCompare(String(b.name)));
+  let rank = 0; let prev = null;
+  rows.forEach((r, i) => { if (r.lastAverage == null) { r.rank = null; return; } if (r.lastAverage !== prev) { rank = i + 1; prev = r.lastAverage; } r.rank = rank; });
+  rows.forEach((r) => { delete r.studentId; });
+  return { scope, title, basis, tests: held.length, lastExam: { name: last.e.name, takers: last.list.length, average: avg(last.list.map(pct)) }, size: rows.length, rows };
+}
+
 // ── the student's standing in the whole class: built only from published results and submitted registers, other students stay anonymous ──
 const avg = (xs) => (xs.length ? round1(xs.reduce((a, b) => a + b, 0) / xs.length) : null);
 const median = (xs) => { if (!xs.length) return null; const a = [...xs].sort((x, y) => x - y); const m = Math.floor(a.length / 2); return a.length % 2 ? a[m] : round1((a[m - 1] + a[m]) / 2); };
@@ -175,7 +284,7 @@ export async function classAnalysis(ctx) {
   const [section, cls, classSize] = await Promise.all([
     ctx.enrolment ? Section.findById(ctx.enrolment.sectionId).select('name').lean() : null,
     ctx.enrolment ? ClassModel.findById(ctx.enrolment.classId).select('name').lean() : null,
-    StudentEnrolment.countDocuments({ tenantId: ctx.tenantId, yearId: ctx.year._id, sectionId: { $in: ctx.sectionIds }, status: 'active' }),
+    StudentEnrolment.countDocuments({ tenantId: ctx.tenantId, yearId: ctx.year._id, sectionId: currentSectionId(ctx), status: rollStatus(ctx.year) }),
   ]);
   const { exams, cards } = await visibleClassExams(ctx);
   const done = exams.filter((e) => cards.some((c) => String(c.examId) === String(e._id)))
@@ -229,9 +338,10 @@ export async function classAnalysis(ctx) {
   }
 
   // attendance against the section
-  const counts = await studentCounts(ctx.tenantId, { yearId: ctx.year._id, sectionId: { $in: ctx.sectionIds } });
+  const counts = await studentCounts(ctx.tenantId, { yearId: ctx.year._id, sectionId: { $in: [currentSectionId(ctx)] } });
   const pcts = new Map([...counts].map(([k, c]) => [k, summarizeCounts(c, ctx.settings).percentage]).filter(([, v]) => v != null));
   if (pcts.has(me)) { const all = [...pcts.values()]; out.attendance = { mine: pcts.get(me), classAverage: avg(all), rank: rankIn(all, pcts.get(me)), of: all.length }; }
+  out.wholeClass = await wholeClassStanding(ctx, exams);
   out.ready = !!out.overall;
   return out;
 }

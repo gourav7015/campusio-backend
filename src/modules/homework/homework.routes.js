@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { parse } from '../../core/utils.js';
+import { parse, isDateStr } from '../../core/utils.js';
 import { audit } from '../../services/audit.js';
 import { upload, saveFile } from '../../services/files.js';
 import * as v from './homework.validation.js';
@@ -38,4 +38,5 @@ export const teacherRoutes = staffRoutes();
 
 export const studentRoutes = Router();
 studentRoutes.get('/homework', async (req, res) => res.json(await svc.listForStudent(req.ctx, parse(v.studentQuery, req.query))));
+studentRoutes.get('/homework-day', async (req, res) => res.json(await svc.dayForStudent(req.ctx, parse(z.object({ date: z.string().refine(isDateStr).optional(), weekStart: z.string().refine(isDateStr).optional() }), req.query))));
 studentRoutes.get('/homework/:id', async (req, res) => res.json(await svc.getForStudent(req.ctx, req.params.id)));

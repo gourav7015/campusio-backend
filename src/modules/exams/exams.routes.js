@@ -122,5 +122,6 @@ studentRoutes.get('/results/:examId/pdf', async (req, res) => {
 });
 studentRoutes.get('/class-results', async (req, res) => res.json(await results.classExams(req.ctx)));
 studentRoutes.get('/class-results/:examId', async (req, res) => res.json(await results.classExamDetail(req.ctx, req.params.examId)));
+studentRoutes.get('/class-ranking', async (req, res) => res.json(await results.classRanking(req.ctx, req.query.scope === 'class' ? 'class' : 'section')));
 studentRoutes.get('/class-analysis', async (req, res) => res.json(await results.classAnalysis(req.ctx)));
 studentRoutes.get('/performance', async (req, res) => res.json(await results.performance(req.ctx, { examId: req.query.examId })));

@@ -140,20 +140,21 @@ describe('promotion, bulk import, dashboards, profile and sessions', () => {
       expect(adm.teachers.length).toBe(1);
     });
 
-    it('student profile: only school-permitted fields are editable; identity fields never', async () => {
+    it('student profile: a student only looks (the class teacher keeps the details); identity fields never change', async () => {
       const S = W.studentLogins[2].h;
       const p = (await api().get('/api/student/profile').set(S)).body;
       expect(p.academic).toHaveProperty('admissionNo');
-      expect(p.editableFields).toEqual([]); // by default a student can only look at their own details
+      expect(p.editableFields).toEqual([]);
       expect((await api().patch('/api/student/profile').set(S).send({ phone: '9000000001' })).status).toBe(403);
-      await api().put('/api/school/settings').set(W.h).send({ studentCanEditProfile: ['phone', 'address'] }); // a school may choose to allow some
-      expect((await api().patch('/api/student/profile').set(S).send({ phone: '9000000001' })).body.personal.phone).toBe('9000000001');
+      // even a school that still has the old "students may edit" setting stored changes nothing
+      await api().put('/api/school/settings').set(W.h).send({ studentCanEditProfile: ['phone', 'address', 'email'] });
+      expect((await api().get('/api/student/profile').set(S)).body.editableFields).toEqual([]);
+      expect((await api().patch('/api/student/profile').set(S).send({ phone: '9000000001' })).status).toBe(403);
+      expect((await api().patch('/api/student/profile').set(S).send({ email: 'a@b.co' })).status).toBe(403);
       for (const bad of [{ sectionId: '64b000000000000000000000' }, { admissionNo: 'X' }, { rollNo: 1 }, { name: 'New Name' }, { role: 'school_admin' }]) {
         expect((await api().patch('/api/student/profile').set(S).send(bad)).status).toBe(400);
       }
-      expect((await api().patch('/api/student/profile').set(S).send({ email: 'a@b.co' })).status).toBe(403); // not in the allow-list
-      await api().put('/api/school/settings').set(W.h).send({ studentCanEditProfile: ['phone', 'address', 'email'] });
-      expect((await api().patch('/api/student/profile').set(S).send({ email: 'a@b.co' })).status).toBe(200);
+      await api().put('/api/school/settings').set(W.h).send({ studentCanEditProfile: [] });
       expect((await api().patch('/api/auth/preferences').set(S).send({ role: 'school_admin', language: 'hi' })).body.role).toBe('student');
     });
 

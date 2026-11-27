@@ -171,7 +171,8 @@ export async function detachFile(ctx, id, fileId) {
 export async function listForStudent(ctx, q) {
   if (!ctx.sectionIds.length) return [];
   const now = new Date();
-  const f = { tenantId: ctx.tenantId, yearId: ctx.year._id, sectionId: { $in: ctx.sectionIds }, status: { $in: ['published', 'scheduled'] } };
+  // the section the student is in now: a student who moved section is not given the old section's homework as well
+  const f = { tenantId: ctx.tenantId, yearId: ctx.year._id, sectionId: ctx.enrolment ? ctx.enrolment.sectionId : { $in: ctx.sectionIds }, status: { $in: ['published', 'scheduled'] } };
   if (q.subjectId) f.subjectId = q.subjectId;
   const rows = (await Homework.find(f).sort({ dueDate: 1 }).lean()).filter((h) => effectiveStatus(h, now) === 'published');
   const dec = await decorate(ctx.tenantId, rows, ctx.today, now);
@@ -193,4 +194,21 @@ export async function getForStudent(ctx, id) {
   const h = list.find((x) => String(x._id) === String(id));
   if (!h) throw notFound('Homework not found');
   return h;
+}
+
+const mondayOf = (d) => { const wd = new Date(`${d}T00:00:00Z`).getUTCDay(); return addDays(d, -((wd + 6) % 7)); };
+
+/**
+ * One day of the student's homework, in the same shape the school office sees ("Homework by day"): what was given and what falls due that day,
+ * and a fixed Monday-to-Sunday strip with how many were given each day. Only published homework of the section the student is in now.
+ */
+export async function dayForStudent(ctx, { date, weekStart }) {
+  const day = date || ctx.today;
+  const start = mondayOf(weekStart || day);
+  const all = await listForStudent(ctx, { tab: 'all' });
+  const items = all.filter((h) => h.assignedDate === day || h.dueDate === day)
+    .map((h) => ({ ...h, id: h._id, kind: h.assignedDate === day && h.dueDate === day ? 'both' : h.dueDate === day ? 'due' : 'given' }))
+    .sort((a, b) => String(a.subject).localeCompare(String(b.subject)));
+  const days = Array.from({ length: 7 }, (_, i) => { const d = addDays(start, i); return { date: d, count: all.filter((h) => h.assignedDate === d).length }; });
+  return { date: day, weekStart: start, items, days, subjectsWithout: [] };
 }

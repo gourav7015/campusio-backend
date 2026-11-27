@@ -6,6 +6,7 @@ import * as svc from './student.service.js';
 
 const r = Router();
 r.get('/dashboard', async (req, res) => res.json(await svc.dashboard(req.ctx)));
+r.get('/years', async (req, res) => res.json(await svc.myYears(req.ctx)));
 r.get('/profile', async (req, res) => res.json(await svc.profile(req.ctx)));
 r.patch('/profile', async (req, res) => {
   const body = parse(z.object({ phone: z.string().max(20), address: z.string().max(300), email: z.string().email() }).partial().strict(), req.body);

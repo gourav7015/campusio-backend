@@ -186,10 +186,23 @@ describe('examinations with configurable mark fields → approval → publish �
     expect(a.distribution.reduce((n, b) => n + b.count, 0)).toBe(3);
     expect(a.distribution.filter((b) => b.mine)).toHaveLength(1);
     expect(JSON.stringify(a)).not.toMatch(/Bhavna|Chirag/); // other students are never named
+    // and against every section of the class (8-A and 8-B), on the tests all of them sit: numbers only
+    expect(a.wholeClass).toMatchObject({ className: 'Class 8', sections: 2, overall: { rank: 1, of: 3, myAverage: 77.5 } });
+    expect(a.wholeClass.tests[0]).toMatchObject({ name: 'Unit Test 2', myRank: 1, takers: 3 });
+    // the full ranked list of the section, and of the whole class: whole-test percentages only, never subject marks
+    const sec = (await api().get('/api/student/class-ranking?scope=section').set(W.studentLogins[0].h)).body;
+    expect(sec).toMatchObject({ scope: 'section', tests: 1, size: 3, lastExam: { name: 'Unit Test 2' } });
+    expect(sec.rows.map((r) => [r.rank, r.name, r.average, r.lastAverage])).toEqual([[1, 'Aarav Singh', 77.5, 77.5], [2, 'Bhavna Rao', 72.5, 72.5], [3, 'Chirag Das', 10, 10]]);
+    expect(sec.rows[0].isMe).toBe(true);
+    expect(Object.keys(sec.rows[0]).sort()).toEqual(['average', 'isMe', 'lastAverage', 'name', 'rank', 'rollNo', 'tests']);
+    const cls = (await api().get('/api/student/class-ranking?scope=class').set(W.studentLogins[0].h)).body;
+    expect(cls).toMatchObject({ scope: 'class', title: 'All of Class 8', size: 3 });
+    expect(cls.rows.map((r) => [r.rank, r.section])).toEqual([[1, 'A'], [2, 'A'], [3, 'A']]);
+    expect((await api().get('/api/student/class-ranking').set(outsider.h)).body).toMatchObject({ size: 0, rows: [] });
     const b = (await api().get('/api/student/class-analysis').set(W.studentLogins[1].h)).body;
     expect(b.overall).toMatchObject({ rank: 2 });
     // a student whose section has no published result yet gets an honest "not ready", not made-up numbers
-    expect((await api().get('/api/student/class-analysis').set(outsider.h)).body).toMatchObject({ ready: false, overall: null });
+    expect((await api().get('/api/student/class-analysis').set(outsider.h)).body).toMatchObject({ ready: false, overall: null, wholeClass: null });
   });
 
   it('published results are locked; changes go through a formal correction that keeps version 1', async () => {
@@ -303,6 +316,13 @@ describe('examinations with configurable mark fields → approval → publish �
     expect(t.subjectTrend.map((s) => s.subject)).toEqual(['Mathematics']);
     const s = (await api().get('/api/student/performance').set(W.studentLogins[0].h)).body;
     expect(s.trend.length).toBeGreaterThanOrEqual(1);
+    // "All examinations": each subject's average over every published examination, and the grades of all of them
+    const all = (await api().get('/api/student/performance?examId=all').set(W.studentLogins[0].h)).body;
+    expect(all.latestExam).toMatchObject({ id: 'all', name: 'All examinations' });
+    expect(all.subjectWise.length).toBeGreaterThanOrEqual(1);
+    const one = (await api().get(`/api/student/performance?examId=${s.latestExam.id}`).set(W.studentLogins[0].h)).body;
+    expect(one.latestExam.id).toBe(s.latestExam.id);
+    expect(Object.values(all.gradeDistribution).reduce((n, g) => n + g.count, 0)).toBeGreaterThanOrEqual(Object.values(one.gradeDistribution).reduce((n, g) => n + g.count, 0));
   });
 
   it('School Admin: pick a class, see the exams held and every student\'s performance across them, ranked; teacher-made tests count too', async () => {
@@ -358,5 +378,21 @@ describe('examinations with configurable mark fields → approval → publish �
     for (const k of ['fees', 'library', 'attendance', 'homework', 'remarks']) expect(m, k).not.toHaveProperty(k); // only marks
     expect((await api().get(`/api/school/analysis/students/${aarav}`).set(W.teacher1.h)).status).toBe(403);
     expect((await api().get(`/api/school/analysis/students/${'0'.repeat(24)}`).set(W.h)).status).toBe(404);
+  });
+
+  // last of the file: it moves a student, which later tests would notice
+  it('a student who moved section is compared only with one section, never with two pooled together', async () => {
+    const before = (await api().get('/api/student/class-analysis').set(W.studentLogins[1].h)).body;
+    expect(before.classSize).toBe(3); // 8-A has three students
+    const tr = await api().post(`/api/school/students/${ids.b}/transfer`).set(W.h).send({ toSectionId: W.sec8B._id, reason: 'Parent request' });
+    expect(tr.status).toBeLessThan(300);
+    const a = (await api().get('/api/student/class-analysis').set(W.studentLogins[1].h)).body;
+    // she now belongs to 8-B (herself and the one other student there): 2, not 8-A and 8-B pooled
+    expect(a.classSize).toBe(2);
+    expect(a.section).toBe('B');
+    // the test she sat in 8-A is still ranked among the 8-A students who sat it, like it was
+    expect(a.tests.find((t) => t.name === 'Unit Test 2')).toMatchObject({ myRank: 2, takers: 3 });
+    const list = (await api().get('/api/student/class-results').set(W.studentLogins[1].h)).body;
+    expect(list.find((t) => t.name === 'Unit Test 2')).toMatchObject({ classSize: 3, myRank: 2 });
   });
 });

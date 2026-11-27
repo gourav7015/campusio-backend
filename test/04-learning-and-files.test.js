@@ -36,6 +36,15 @@ describe('homework, study materials, files and announcements', () => {
       const mine = (await api().get('/api/student/homework').set(W.studentLogins[0].h)).body;
       expect(mine).toHaveLength(1);
       expect(mine[0]).toMatchObject({ title: 'Exercise 4', subject: 'Mathematics', teacher: 'Mr Sharma', state: 'due_soon' });
+      // the same homework by day, as the school office reads it: given today, due in three days, counted in this week's strip
+      const day = (await api().get(`/api/student/homework-day?date=${TODAY}`).set(W.studentLogins[0].h)).body;
+      expect(day.items.map((i) => [i.title, i.kind])).toEqual([['Exercise 4', 'given']]);
+      expect(day.days).toHaveLength(7);
+      expect(day.days.find((d) => d.date === TODAY).count).toBe(1);
+      const due = (await api().get(`/api/student/homework-day?date=${addDays(TODAY, 3)}`).set(W.studentLogins[0].h)).body;
+      expect(due.items.map((i) => i.kind)).toEqual(['due']);
+      expect((await api().get(`/api/student/homework-day?date=${TODAY}`).set(outsider.h)).body.items).toEqual([]); // another section sees nothing
+      expect((await api().get('/api/student/homework-day?date=nope').set(W.studentLogins[0].h)).status).toBe(400);
       expect((await api().get('/api/student/homework').set(outsider.h)).body).toHaveLength(0);
       expect((await api().get(`/api/student/homework/${hwId}`).set(outsider.h)).status).toBe(404);
       const n = (await api().get('/api/student/notifications?category=homework').set(W.studentLogins[0].h)).body;

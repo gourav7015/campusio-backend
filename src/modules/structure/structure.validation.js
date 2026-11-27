@@ -66,6 +66,6 @@ export const settingsBody = z.object({
     pt: z.object({ enabled: z.boolean(), slabs: z.array(z.object({ upTo: z.number().min(0), amount: z.number().min(0).max(100000) })).min(1).max(8) }).partial(),
   }).partial(),
   showAttendanceVsPerformance: z.boolean(),
-  studentCanEditProfile: z.array(z.enum(['phone', 'address', 'email'])),
+  studentCanEditProfile: z.array(z.enum(['phone', 'address', 'email'])).optional(), // no longer used: students never edit their own details (the class teacher does)
   schoolName: z.string(),
 }).partial();

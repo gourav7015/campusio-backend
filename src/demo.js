@@ -26,6 +26,12 @@ await new Promise((r) => server.once('listening', r));
 const base = `http://127.0.0.1:${config.port}`;
 console.log(`API on ${base} — building demo school…`);
 const info = await buildDemo(base);
+if (process.env.DEMO_PREVIOUS_YEAR) { // opt-in: give the demo school an earlier year, so a student's past results can be looked at
+  const { addPreviousYear } = await import('./sample-previous-year.js');
+  const { School } = await import('./models/index.js');
+  const gps = await School.findOne({ code: 'gps' });
+  console.log('Earlier year:', JSON.stringify(await addPreviousYear({ tenantId: gps._id, classNames: ['Class 8'] })));
+}
 console.log(`\nDemo ready. Open http://localhost:5173 — each role has its own sign-in page (/student/login, /teacher/login, /finance/login, /library/login, /admin/login, /platform/login):\n`);
 console.log(`  Super Admin : ${DEMO.superAdmin.loginId} / ${DEMO.superAdmin.password}`);
 console.log(`  School Admin: ${DEMO.admin.loginId} / ${DEMO.admin.password}`);
