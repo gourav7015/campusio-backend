@@ -24,6 +24,7 @@ teacherRoutes.post('/leave/:id/cancel', withdrawLeave); // the old name still wo
 
 export const adminRoutes = Router();
 adminRoutes.get('/leave', async (req, res) => res.json(await svc.listAll(req.ctx, req.query)));
+adminRoutes.get('/leave/teachers', async (req, res) => res.json(await svc.substituteChoices(req.ctx)));
 adminRoutes.get('/leave/:id/affected-periods', async (req, res) => res.json(await affectedPeriods(req.tenantId, req.params.id)));
 adminRoutes.post('/leave/:id/decide', async (req, res) => {
   const l = await svc.decide(req.ctx, req.params.id, parse(v.decideBody, req.body));

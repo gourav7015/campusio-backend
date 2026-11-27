@@ -1,6 +1,7 @@
 import { LeaveApplication, LeaveGrant, Teacher, User } from '../../models/index.js';
 import { notFound, conflict, bad, forbidden, eachDate, isoDay } from '../../core/utils.js';
 import { notifyUsers } from '../../services/notify.js';
+import { LEAVE_DECIDERS, holdsAny } from '../sub-admins/permissions.js';
 
 export function countDays(settings, start, end) {
   return eachDate(start, end).filter((d) => settings.workingDays.includes(isoDay(d))).length;
@@ -48,6 +49,17 @@ export async function balances(ctx, teacherId) {
   return out;
 }
 
+/** The people who decide a teacher's leave: the full admins, and sub-admins who were given leave approval (or the teachers permission, which always included it). They, and only they, are told about leave. */
+export async function leaveApproverIds(tenantId) {
+  const admins = await User.find({ tenantId, role: 'school_admin', status: 'active' }).select('_id adminLevel permissions role').lean();
+  return admins.filter((u) => holdsAny(u, LEAVE_DECIDERS)).map((u) => u._id);
+}
+const tellApprovers = async (ctx, l, { title, key }) => notifyUsers(ctx.tenantId, await leaveApproverIds(ctx.tenantId), {
+  category: 'leave', title, body: `${ctx.teacher.name}: ${l.leaveType} leave, ${l.startDate} to ${l.endDate}${l.reason ? ` — ${l.reason}` : ''}`, link: { type: 'leave', id: String(l._id) }, dedupeKey: `leave:${l._id}:${key}`,
+});
+/** Active teachers, by name only: what the leave screen needs to offer a substitute (so deciding leave does not need access to the teacher records). */
+export const substituteChoices = (ctx) => Teacher.find({ tenantId: ctx.tenantId, status: 'active' }).select('name employeeId').sort({ name: 1 }).lean();
+
 export const listMine = (ctx) => LeaveApplication.find({ tenantId: ctx.tenantId, teacherId: ctx.teacher._id }).sort({ createdAt: -1 }).lean();
 
 export async function apply(ctx, body) {
@@ -63,6 +75,7 @@ export async function apply(ctx, body) {
     tenantId: ctx.tenantId, teacherId: ctx.teacher._id, userId: ctx.actorId, leaveType: body.leaveType, startDate: body.startDate, endDate: body.endDate, halfDay: !!body.halfDay, halfSession: body.halfDay ? body.halfSession || 'second' : undefined,
     days, reason: body.reason, status: body.draft ? 'draft' : 'submitted',
   });
+  if (leave.status === 'submitted') await tellApprovers(ctx, leave, { title: 'New leave application', key: 'submitted' });
   return leave;
 }
 
@@ -71,7 +84,9 @@ export async function submitDraft(ctx, id) {
   if (!l) throw notFound('Leave application not found');
   if (l.status !== 'draft') throw conflict('Only drafts can be submitted');
   l.status = 'submitted';
-  return l.save();
+  await l.save();
+  await tellApprovers(ctx, l, { title: 'New leave application', key: 'submitted' });
+  return l;
 }
 
 export async function cancel(ctx, id) {
@@ -84,8 +99,7 @@ export async function cancel(ctx, id) {
   await l.save();
   // the office is told when an application it was about to decide, or leave it had approved, is taken back
   if (was !== 'draft') {
-    const admins = (await User.find({ tenantId: ctx.tenantId, role: 'school_admin', status: 'active' }).select('_id adminLevel permissions').lean()).filter((u) => u.adminLevel !== 'sub' || (u.permissions || []).includes('teachers')).map((u) => u._id);
-    await notifyUsers(ctx.tenantId, admins, { category: 'leave', title: was === 'approved' ? 'Approved leave cancelled' : 'Leave application withdrawn', body: `${ctx.teacher.name}: ${l.leaveType} leave, ${l.startDate} to ${l.endDate}`, link: { type: 'leave', id: String(l._id) }, dedupeKey: `leave:${l._id}:withdrawn` });
+    await tellApprovers(ctx, l, { title: was === 'approved' ? 'Approved leave cancelled' : 'Leave application withdrawn', key: 'withdrawn' });
   }
   return l;
 }

@@ -469,6 +469,7 @@ export const Ticket = model('Ticket', (() => {
     status: { type: String, enum: ['open', 'pending', 'resolved', 'closed'], default: 'open' }, // pending = waiting for the person who raised it
     raisedBy: { userId: ref('User', { required: true }), name: String, role: String, email: String },
     assignedTo: { userId: ref('User'), name: String },
+    sentTo: { userId: ref('User'), name: String }, // a school query the teacher addressed to one person: only that person, whoever it is handed to, and the full School Admin can see it
     messages: [reply], lastActivityAt: { type: Date, default: Date.now }, lastReplyBy: { type: String, enum: ['requester', 'handler'], default: 'requester' },
     resolvedAt: Date, closedAt: Date,
   }, opts);

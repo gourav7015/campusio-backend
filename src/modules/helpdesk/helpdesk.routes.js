@@ -42,6 +42,7 @@ export function requesterRoutes(scope) {
     await audit(req, 'ticket.created', 'Ticket', t._id, `Help desk ticket ${t.reference}: ${t.subject}`);
     res.status(201).json(t);
   });
+  if (scope === 'school') r.get('/recipients', async (req, res) => res.json(await svc.recipients(req.ctx))); // whom a teacher may address a query to
   r.get('/:id', async (req, res) => res.json(await svc.getMine(req.ctx, req.user._id, scope, req.params.id)));
   r.post('/:id/replies', attach, async (req, res) => res.status(201).json(await withFiles(req, req.params.id, (files) => svc.replyMine(req.ctx, req.user, scope, req.params.id, parse(v.replyBody.omit({ internal: true }), req.body), { files }))));
   r.post('/:id/files/:fileId/link', async (req, res) => res.json(await svc.linkMine(req.ctx, req.user, scope, req.params.id, req.params.fileId)));
@@ -56,14 +57,15 @@ export function requesterRoutes(scope) {
 export function handlerRoutes(scope) {
   const r = Router();
   const tenant = (req) => (scope === 'school' ? req.tenantId : undefined);
-  r.get('/summary', async (req, res) => res.json(await svc.handlerSummary(scope, tenant(req))));
-  r.get('/', async (req, res) => res.json(await svc.inbox(scope, tenant(req), parse(v.listQuery, req.query), req.user._id)));
-  r.get('/:id', async (req, res) => res.json(await svc.getForHandler(scope, tenant(req), req.params.id)));
+  r.get('/summary', async (req, res) => res.json(await svc.handlerSummary(scope, tenant(req), req.user)));
+  r.get('/', async (req, res) => res.json(await svc.inbox(scope, tenant(req), parse(v.listQuery, req.query), req.user)));
+  if (scope === 'school') r.get('/recipients', async (req, res) => res.json(await svc.recipients({ tenantId: req.tenantId }))); // who a query can be handed to
+  r.get('/:id', async (req, res) => res.json(await svc.getForHandler(scope, tenant(req), req.params.id, req.user)));
   r.post('/:id/files/:fileId/link', async (req, res) => res.json(await svc.linkForHandler(scope, tenant(req), req.user, req.params.id, req.params.fileId)));
   r.post('/:id/replies', attach, async (req, res) => {
     let body;
     // a platform administrator has no school of their own: the file belongs to the school the ticket came from
-    const owner = req.files?.length ? await svc.tenantOf(scope, tenant(req), req.params.id).catch(async (e) => { await Promise.all(req.files.map((f) => fs.promises.unlink(f.path).catch(() => {}))); throw e; }) : req.tenantId;
+    const owner = req.files?.length ? await svc.tenantOf(scope, tenant(req), req.params.id, req.user).catch(async (e) => { await Promise.all(req.files.map((f) => fs.promises.unlink(f.path).catch(() => {}))); throw e; }) : req.tenantId;
     const t = await withFiles(req, req.params.id, (files) => { body = parse(v.replyBody, req.body); return svc.replyAsHandler(scope, tenant(req), req.user, req.params.id, body, { files }); }, owner);
     if (scope === 'platform') req.tenantId = t.school?._id;
     await audit(req, body.internal ? 'ticket.note' : 'ticket.replied', 'Ticket', t._id, `${body.internal ? 'Note on' : 'Reply to'} ticket ${t.reference}`);

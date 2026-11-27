@@ -7,11 +7,12 @@ import { forbidden } from '../../core/utils.js';
 export const PERMISSIONS = {
   academics: { label: 'Years, classes, sections, subjects, timetable, promotion', paths: ['years', 'classes', 'sections', 'subjects', 'offerings', 'class-teachers', 'teaching-assignments', 'timetable', 'substitutions', 'promotions'] },
   students: { label: 'Students and admissions', paths: ['students', 'houses', 'imports', 'documents', 'remarks'] },
-  teachers: { label: 'Teachers and teacher leave', paths: ['teachers', 'teacher-designations', 'employees', 'leave', 'leave-balances', 'swaps', 'attendance-exceptions'] },
+  teachers: { label: 'Teachers and teacher leave', paths: ['teachers', 'teacher-designations', 'employees', 'leave', 'leave-balances', 'swaps', 'attendance-exceptions', 'queries'] },
+  leave_approval: { label: "Approve teachers' leave", paths: ['leave', 'substitutions', 'queries'] },
   attendance: { label: 'Student attendance', paths: ['attendance', 'attendance-overview', 'monitors', 'period-attendance'] },
-  staff_attendance: { label: 'Staff and teacher attendance, staff leave, non-teaching staff', paths: ['staff-attendance', 'staff-leave', 'transport-leave', 'leave-balances', 'employees', 'support-staff', 'designations', 'correct', 'month', 'punches', 'register'] },
+  staff_attendance: { label: 'Staff and teacher attendance, staff leave, non-teaching staff', paths: ['staff-attendance', 'staff-leave', 'transport-leave', 'leave-balances', 'employees', 'support-staff', 'designations', 'correct', 'month', 'punches', 'register', 'queries'] },
   exams: { label: 'Examinations, homework and study materials', paths: ['exams', 'marks', 'report-cards', 'sheets', 'homework', 'materials'] },
-  communication: { label: 'Announcements, calendar, messages', paths: ['announcements', 'events', 'messages', 'school-info', 'licenses'] },
+  communication: { label: 'Announcements, calendar, messages', paths: ['announcements', 'events', 'messages', 'school-info', 'licenses', 'queries'] },
   payroll: { label: 'Payroll and salaries', paths: ['payroll'] },
   finance_view: { label: 'View fees, expenses and budgets', paths: ['finance'] },
   approvals: { label: 'Approve expenses, Sunday attendance and period swaps', paths: ['approvals'] },
@@ -19,6 +20,12 @@ export const PERMISSIONS = {
   transport_view: { label: 'View transport', paths: ['transport'] },
   reports: { label: 'Reports and exports', paths: ['reports', 'export', 'analysis', 'sections'] },
 };
+/** Who may decide a teacher's leave besides the full admin, and who may answer the teachers' queries. Notifications go to exactly these people. */
+export const LEAVE_DECIDERS = ['teachers', 'leave_approval'];
+export const QUERY_HANDLERS = ['communication', 'staff_attendance', 'teachers', 'leave_approval'];
+export const isFullAdmin = (u) => u.role === 'super_admin' || (u.role === 'school_admin' && u.adminLevel !== 'sub');
+/** Does this admin login hold at least one of these permissions? A full admin holds them all. */
+export const holdsAny = (u, keys) => isFullAdmin(u) || (u.permissions || []).some((k) => keys.includes(k));
 export const PERMISSION_KEYS = Object.keys(PERMISSIONS);
 /** Ready-made sets, e.g. a desk that only takes attendance. */
 export const PRESETS = {

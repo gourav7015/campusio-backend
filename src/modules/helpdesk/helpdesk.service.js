@@ -5,6 +5,7 @@ import { sendNotificationEmail } from '../../services/email.js';
 import { config } from '../../core/config.js';
 import { bad, conflict, notFound, escapeRegex, HttpError } from '../../core/utils.js';
 import { signFileToken } from '../../services/files.js';
+import { QUERY_HANDLERS, holdsAny, isFullAdmin } from '../sub-admins/permissions.js';
 
 /**
  * Help desk. Everyone who signs in to a school (School Admin, teacher, student, staff, finance, library, transport) writes to AtKaksha support:
@@ -32,7 +33,9 @@ async function schoolHandlerIds(tenantId) {
 /** Tell the handling side about something the requester did (a new ticket or a new reply). */
 async function tellHandlers(t, { title, body, school, key = String(t.messages.length) }) {
   if (t.scope === 'school') {
-    await notifyUsers(t.tenantId, await schoolHandlerIds(t.tenantId), { category: 'helpdesk', title, body: snippet(body), link: link(t, true), dedupeKey: `tkt:${t._id}:${key}:h` });
+    // a query addressed to one person tells that person (and whoever it was handed to) and nobody else; an open one tells the whole office
+    const to = t.sentTo?.userId ? [t.sentTo.userId, t.assignedTo?.userId] : await schoolHandlerIds(t.tenantId);
+    await notifyUsers(t.tenantId, to, { category: 'helpdesk', title, body: snippet(body), link: link(t, true), dedupeKey: `tkt:${t._id}:${key}:h` });
     return;
   }
   // platform tickets are emailed to the support inbox, or to every Super Admin when no inbox is set; they also show (with a count) in the platform help desk
@@ -46,12 +49,30 @@ async function tellHandlers(t, { title, body, school, key = String(t.messages.le
     });
   }
 }
+/**
+ * Who a teacher may address a query to: the School Admin and the sub-admins who answer queries (communication, staff attendance, teachers or leave approval),
+ * and the office desk. Their names only; nothing else about them.
+ */
+export async function recipients(ctx) {
+  const admins = await User.find({ tenantId: ctx.tenantId, role: 'school_admin', status: 'active' }).select('name adminLevel permissions role').sort({ name: 1 }).lean();
+  const desk = await StaffMember.find({ tenantId: ctx.tenantId, status: 'active', canMarkAttendance: true, userId: { $ne: null } }).select('name userId').sort({ name: 1 }).lean();
+  return [
+    ...admins.filter((a) => holdsAny(a, QUERY_HANDLERS)).map((a) => ({ userId: a._id, name: a.name, title: a.adminLevel === 'sub' ? 'Sub-admin' : 'School Admin' })),
+    ...desk.map((d) => ({ userId: d.userId, name: d.name, title: 'Office desk' })),
+  ];
+}
+/** Which tickets this person may open. Everything, except a school query addressed to someone else (the full School Admin still sees those). */
+const sees = (actor) => {
+  if (!actor || isFullAdmin(actor)) return null;
+  return { $or: [{ 'sentTo.userId': null }, { 'sentTo.userId': actor._id }, { 'assignedTo.userId': actor._id }] };
+};
+
 const tellRequester = (t, title, body, key = `m${t.messages.length}`) => notifyUsers(t.tenantId, [t.raisedBy.userId], { category: 'helpdesk', title, body: snippet(body), link: link(t), dedupeKey: `tkt:${t._id}:r:${key}` });
 
 // ── shapes ──
 const row = (t, extra = {}) => ({
   _id: t._id, reference: t.reference, scope: t.scope, subject: t.subject, category: t.category, priority: t.priority, status: t.status,
-  raisedBy: t.raisedBy, assignedTo: t.assignedTo?.userId ? t.assignedTo : null, lastActivityAt: t.lastActivityAt, lastReplyBy: t.lastReplyBy,
+  raisedBy: t.raisedBy, assignedTo: t.assignedTo?.userId ? t.assignedTo : null, sentTo: t.sentTo?.userId ? t.sentTo : null, lastActivityAt: t.lastActivityAt, lastReplyBy: t.lastReplyBy,
   replies: Math.max(0, t.messages.filter((m) => !m.internal).length - 1), createdAt: t.createdAt, ...extra,
 });
 /** The conversation. The person who raised the ticket never sees internal notes. */
@@ -66,11 +87,19 @@ const schoolOf = async (t) => School.findById(t.tenantId).select('name code').le
 export async function createTicket(ctx, user, scope, body, { _id, files } = {}) {
   const recent = await Ticket.countDocuments({ tenantId: ctx.tenantId, 'raisedBy.userId': user._id, createdAt: { $gt: new Date(Date.now() - HOUR) } });
   if (recent >= LIMITS.newPerHour) throw tooMany('tickets');
+  let sentTo;
+  if (body.sentTo) {
+    if (scope !== 'school') throw bad('Only a query to the school office can be addressed to a person');
+    const who = (await recipients(ctx)).find((r) => String(r.userId) === String(body.sentTo));
+    if (!who) throw bad('Choose someone from the list: that person does not take queries');
+    sentTo = { userId: who.userId, name: who.name };
+  }
   const number = await nextSeq(ctx.tenantId, `ticket:${scope}`);
   const reference = scope === 'platform' ? `${String(ctx.school.code || 'SCH').toUpperCase()}-${number}` : `T-${String(number).padStart(4, '0')}`;
   const t = await Ticket.create({
     ...(_id ? { _id } : {}), tenantId: ctx.tenantId, scope, number, reference, subject: body.subject, category: body.category, priority: body.priority,
     raisedBy: { userId: user._id, name: user.name, role: user.role, email: user.email },
+    ...(sentTo ? { sentTo, assignedTo: sentTo } : {}),
     messages: [{ authorId: user._id, authorName: user.name, authorRole: user.role, body: body.body, attachments: attachmentsOf(files) }],
   });
   await tellRequester(t, `We received your ticket ${t.reference}`, `${t.subject} — we will reply here and by email.`);
@@ -114,10 +143,14 @@ export async function mySummary(ctx, userId, scope) {
 
 // ── handling side ──
 /** `scope` fixes which tickets this person can reach; `tenantId` limits school tickets to the admin's own school (platform tickets span schools). */
-const reach = (scope, tenantId) => ({ scope, ...(scope === 'school' ? { tenantId } : {}) });
+const reach = (scope, tenantId, actor) => {
+  const only = scope === 'school' ? sees(actor) : null;
+  return { scope, ...(scope === 'school' ? { tenantId } : {}), ...(only ? { $and: [only] } : {}) };
+};
 
-export async function inbox(scope, tenantId, query, actorId) {
-  const filter = { ...reach(scope, tenantId) };
+export async function inbox(scope, tenantId, query, actor) {
+  const actorId = actor._id;
+  const filter = { ...reach(scope, tenantId, actor) };
   if (query.status) filter.status = query.status;
   else if (query.open === 'true') filter.status = { $in: ['open', 'pending'] };
   if (query.priority) filter.priority = query.priority;
@@ -128,25 +161,25 @@ export async function inbox(scope, tenantId, query, actorId) {
   const [rows, total, counts] = await Promise.all([
     Ticket.find(filter).sort({ lastActivityAt: -1 }).skip(query.skip).limit(query.limit).populate('tenantId', 'name code'),
     Ticket.countDocuments(filter),
-    Ticket.aggregate([{ $match: reach(scope, tenantId) }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
+    Ticket.aggregate([{ $match: reach(scope, tenantId, actor) }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
   ]);
   const byStatus = { open: 0, pending: 0, resolved: 0, closed: 0 };
   counts.forEach((c) => { byStatus[c._id] = c.n; });
   return { total, counts: byStatus, tickets: rows.map((t) => row(t, { school: t.tenantId?.name ? { _id: t.tenantId._id, name: t.tenantId.name, code: t.tenantId.code } : null })) };
 }
-async function load(scope, tenantId, id) {
-  const t = await Ticket.findOne({ _id: id, ...reach(scope, tenantId) });
+async function load(scope, tenantId, id, actor) {
+  const t = await Ticket.findOne({ _id: id, ...reach(scope, tenantId, actor) });
   if (!t) throw notFound('Ticket not found');
   return t;
 }
 /** Which school a ticket belongs to (used to file attachments under the right school). */
-export async function tenantOf(scope, tenantId, id) { return (await load(scope, tenantId, id)).tenantId; }
-export async function getForHandler(scope, tenantId, id) {
-  const t = await load(scope, tenantId, id);
+export async function tenantOf(scope, tenantId, id, actor) { return (await load(scope, tenantId, id, actor)).tenantId; }
+export async function getForHandler(scope, tenantId, id, actor) {
+  const t = await load(scope, tenantId, id, actor);
   return view(t, { handler: true, school: await schoolOf(t) });
 }
 export async function replyAsHandler(scope, tenantId, user, id, body, { files } = {}) {
-  const t = await load(scope, tenantId, id);
+  const t = await load(scope, tenantId, id, user);
   if (t.status === 'closed' && !body.internal) throw conflict('This ticket is closed. Reopen it to reply.');
   t.messages.push({ authorId: user._id, authorName: user.name, authorRole: user.role, body: body.body, internal: body.internal, attachments: attachmentsOf(files) });
   if (!body.internal) {
@@ -159,16 +192,19 @@ export async function replyAsHandler(scope, tenantId, user, id, body, { files } 
   return view(t, { handler: true, school: await schoolOf(t) });
 }
 export async function updateAsHandler(scope, tenantId, user, id, patch) {
-  const t = await load(scope, tenantId, id);
+  const t = await load(scope, tenantId, id, user);
   const before = t.status;
   if (patch.priority) t.priority = patch.priority;
   if (patch.category) t.category = patch.category;
   if (patch.assignedTo !== undefined) {
     if (patch.assignedTo === null) t.assignedTo = undefined;
     else {
-      const who = await User.findOne({ _id: patch.assignedTo, status: 'active', role: scope === 'platform' ? 'super_admin' : 'school_admin', ...(scope === 'school' ? { tenantId } : {}) }).select('name');
-      if (!who) throw bad(scope === 'platform' ? 'Assign to a platform administrator' : 'Assign to an admin of this school');
+      let who;
+      if (scope === 'platform') who = await User.findOne({ _id: patch.assignedTo, status: 'active', role: 'super_admin' }).select('name');
+      else { const r = (await recipients({ tenantId })).find((x) => String(x.userId) === String(patch.assignedTo)); who = r && { _id: r.userId, name: r.name }; } // a school query is handed to someone who takes queries
+      if (!who) throw bad(scope === 'platform' ? 'Assign to a platform administrator' : 'Hand it to an admin, a sub-admin who takes queries, or the office desk');
       t.assignedTo = { userId: who._id, name: who.name };
+      if (scope === 'school' && String(who._id) !== String(user._id)) await notifyUsers(t.tenantId, [who._id], { category: 'helpdesk', title: `${t.reference} was handed to you`, body: snippet(t.subject), link: link(t, true), dedupeKey: `tkt:${t._id}:assign:${who._id}:${Date.now()}` });
     }
   }
   if (patch.status && patch.status !== t.status) {
@@ -184,8 +220,11 @@ export async function updateAsHandler(scope, tenantId, user, id, patch) {
 }
 
 /** Tickets nobody has answered yet (status open): the count for the handler's menu. */
-export async function handlerSummary(scope, tenantId) {
-  return { count: await Ticket.countDocuments({ ...reach(scope, tenantId), status: 'open' }) };
+export async function handlerSummary(scope, tenantId, actor) {
+  // a query addressed to someone else is that person's to answer, so it does not add to this person's count
+  const mineToAnswer = scope === 'school' && actor ? { $or: [{ 'sentTo.userId': null }, { 'sentTo.userId': actor._id }, { 'assignedTo.userId': actor._id }] } : null;
+  const base = reach(scope, tenantId, actor);
+  return { count: await Ticket.countDocuments({ ...base, ...(mineToAnswer ? { $and: [...(base.$and || []), mineToAnswer] } : {}), status: 'open' }) };
 }
 
 /**
@@ -199,7 +238,7 @@ export function attachmentLink(t, fileId, user, { handler }) {
   return { url: `/api/files/download/${fileId}?token=${encodeURIComponent(signFileToken(fileId, user._id))}`, name: a.name, expiresInSeconds: config.fileLinkTtlSeconds };
 }
 export async function linkMine(ctx, user, scope, id, fileId) { return attachmentLink(await mine(ctx, user._id, scope, id), fileId, user, { handler: false }); }
-export async function linkForHandler(scope, tenantId, user, id, fileId) { return attachmentLink(await load(scope, tenantId, id), fileId, user, { handler: true }); }
+export async function linkForHandler(scope, tenantId, user, id, fileId) { return attachmentLink(await load(scope, tenantId, id, user), fileId, user, { handler: true }); }
 
 /** Resolved tickets that nobody reopened are closed after a week, so the inbox does not fill up. */
 export async function autoCloseResolved(now = new Date()) {

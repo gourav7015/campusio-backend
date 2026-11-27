@@ -8,6 +8,7 @@ const STATUSES = ['open', 'pending', 'resolved', 'closed'];
 export const createBody = z.object({
   subject: z.string().trim().min(3).max(150), body: z.string().trim().min(3).max(5000),
   category: category.default('general'), priority: z.enum(['low', 'normal', 'high']).default('normal'),
+  sentTo: id.optional().or(z.literal('').transform(() => undefined)), // a school query may be addressed to one person; empty = the whole office
 });
 // a reply may arrive as JSON or as a form with files, where every value is text, so "true" is accepted as well as true
 const flag = z.union([z.boolean(), z.enum(['true', 'false']).transform((v) => v === 'true')]).default(false);

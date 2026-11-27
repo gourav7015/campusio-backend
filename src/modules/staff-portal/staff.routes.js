@@ -37,7 +37,7 @@ r.get('/dashboard', async (req, res) => {
   const [staffLeave, teacherLeave, queries] = await Promise.all([
     StaffLeave.countDocuments({ tenantId: ctx.tenantId, group: 'general', status: 'submitted' }),
     LeaveApplication.countDocuments({ tenantId: ctx.tenantId, status: 'submitted' }),
-    handlerSummary('school', ctx.tenantId),
+    handlerSummary('school', ctx.tenantId, req.user),
   ]);
   res.json({ today: ctx.today, name: ctx.staff.name, designation: ctx.designation?.name, registers: regs, pendingStaffLeave: staffLeave, pendingTeacherLeave: teacherLeave, openQueries: queries.count });
 });
