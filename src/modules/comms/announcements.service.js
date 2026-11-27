@@ -3,10 +3,13 @@ import { notFound, forbidden } from '../../core/utils.js';
 import { removeFileBytes } from '../../services/files.js';
 import { notifyUsers } from '../../services/notify.js';
 
+/** Everyone who works at or attends the school and signs in: "Everyone" means all of them, the departments' desks included. */
+export const ALL_ROLES = ['teacher', 'student', 'finance', 'library', 'transport', 'staff'];
+
 /** Which users an announcement targets (used to notify, never to authorise reading). */
 export async function audienceUserIds(tenantId, audience) {
   const ids = new Set();
-  const roles = audience.all ? ['teacher', 'student'] : audience.roles;
+  const roles = audience.all ? ALL_ROLES : audience.roles;
   if (roles.length && !audience.sectionIds.length) {
     (await User.find({ tenantId, role: { $in: roles }, status: 'active' }).select('_id')).forEach((u) => ids.add(String(u._id)));
   }

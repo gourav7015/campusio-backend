@@ -7,6 +7,8 @@ import * as svc from './platform.service.js';
 import { ErrorLog } from '../../models/index.js';
 import { School } from '../../models/index.js';
 import { flagsView, setFlags } from '../../services/flags.js';
+import * as attMode from '../attendance/attendance.mode.js';
+import { adminContext } from '../../middleware/context.js';
 import { z } from 'zod';
 import { handlerRoutes as ticketHandler } from '../helpdesk/helpdesk.routes.js';
 import * as connect from '../connect/connect.service.js';
@@ -63,6 +65,19 @@ r.put('/schools/:id/flags', async (req, res) => {
   const out = await setFlags(req.params.id, body);
   if (!out) return res.status(404).json({ error: 'School not found', code: 'NOT_FOUND' });
   req.tenantId = req.params.id; await audit(req, 'school.flags_changed', 'School', req.params.id, `Changed feature switches: ${Object.keys(body).join(', ')}`);
+  res.json(out);
+});
+// How a school takes student attendance (once a day or period by period) is part of its plan: AtKaksha sets it here, the School Admin only sees it.
+const schoolCtx = async (req) => { req.tenantId = req.params.id; const fake = { tenantId: req.params.id, query: {}, headers: {}, user: req.user }; await adminContext(fake, null, () => {}); return fake.ctx; };
+r.get('/schools/:id/attendance-mode', async (req, res) => {
+  if (!(await School.exists({ _id: req.params.id }))) return res.status(404).json({ error: 'School not found', code: 'NOT_FOUND' });
+  res.json(await attMode.modeInfo(await schoolCtx(req)));
+});
+r.put('/schools/:id/attendance-mode', async (req, res) => {
+  if (!(await School.exists({ _id: req.params.id }))) return res.status(404).json({ error: 'School not found', code: 'NOT_FOUND' });
+  const b = parse(z.object({ periodWise: z.boolean(), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }), req.body);
+  const out = await attMode.setMode(await schoolCtx(req), req.user, b);
+  await audit(req, 'attendance.mode_changed', 'School', req.params.id, out.cancelled ? 'Withdrew a booked change of how attendance is taken' : `Attendance will be taken ${b.periodWise ? 'period by period' : 'once a day'} from ${b.from}`);
   res.json(out);
 });
 r.post('/users/:id/reset-2fa', async (req, res) => {

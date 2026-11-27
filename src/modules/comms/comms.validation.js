@@ -7,7 +7,7 @@ const date = z.string().refine(isDateStr, 'Use YYYY-MM-DD');
 export const announcementBody = z.object({
   title: z.string().trim().min(3).max(150), body: z.string().max(5000).optional(),
   category: z.enum(['urgent', 'holiday', 'examination', 'event', 'homework', 'general']).default('general'),
-  audience: z.object({ all: z.boolean().default(true), roles: z.array(z.enum(['teacher', 'student'])).default([]), sectionIds: z.array(id).default([]) })
+  audience: z.object({ all: z.boolean().default(true), roles: z.array(z.enum(['teacher', 'student', 'finance', 'library', 'transport', 'staff'])).default([]), sectionIds: z.array(id).default([]) })
     .refine((a) => a.all || a.roles.length || a.sectionIds.length, 'Choose who should receive this'),
   publishAt: z.string().datetime().optional(), status: z.enum(['draft', 'published']).default('published'),
 });

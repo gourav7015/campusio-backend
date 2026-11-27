@@ -7,7 +7,6 @@ import { bad } from '../core/utils.js';
  */
 export const FLAGS = {
   onlinePayments: { default: false, label: 'Online fee payment', description: 'Families can pay fees online and Finance sees the Online payments page. Switch on only for a school that has a real payment gateway connected (or for a demo with the test gateway)' },
-  periodAttendance: { default: false, label: 'Period-wise attendance', description: 'Each teacher marks their own period' },
   documentImages: { default: true, label: 'Stamps and signatures on documents', description: 'Receipts and payslips can carry uploaded stamps and signatures' },
 };
 

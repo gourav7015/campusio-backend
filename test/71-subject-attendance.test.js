@@ -6,16 +6,16 @@ const TODAY = todayStr('Asia/Kolkata');
 const YESTERDAY = addDays(TODAY, -1);
 
 describe('Period by period attendance is shown by subject, and earlier once-a-day days stay on their own', () => {
-  let W; let T1; let T2; let A; let B; let C; let ent; let stu;
+  let root; let W; let T1; let T2; let A; let B; let C; let ent; let stu;
   beforeAll(async () => {
-    await setup(); await reset(); const root = await makeSuperAdmin(); W = await seedWorld(root, 'sub');
+    await setup(); await reset(); root = await makeSuperAdmin(); W = await seedWorld(root, 'sub');
     T1 = W.teacher1.h; T2 = W.teacher2.h; [A, B, C] = W.students.map((s) => s.student._id); stu = W.studentLogins[0].h;
     await api().put('/api/school/settings').set(W.h).send({ workingDays: [1, 2, 3, 4, 5, 6, 7] });
     // yesterday the class teacher took one register for the whole day
     await api().put('/api/teacher/attendance/register').set(T1).send({ sectionId: W.sec8A._id, date: YESTERDAY, entries: [{ studentId: A, status: 'absent' }, { studentId: B, status: 'present' }, { studentId: C, status: 'present' }] });
     expect((await api().post('/api/teacher/attendance/register/submit').set(T1).send({ sectionId: W.sec8A._id, date: YESTERDAY, entries: [{ studentId: A, status: 'absent' }, { studentId: B, status: 'present' }, { studentId: C, status: 'present' }] })).status).toBe(200);
     // from today every period has its own register
-    expect((await api().put('/api/school/attendance-mode').set(W.h).send({ periodWise: true, from: TODAY })).status).toBe(200);
+    expect((await api().put(`/api/platform/schools/${W.id}/attendance-mode`).set(root.h).send({ periodWise: true, from: TODAY })).status).toBe(200);
     const day = isoDay(TODAY);
     const mk = (periodId, assignmentId) => api().post('/api/school/timetable/entries').set(W.h).send({ sectionId: W.sec8A._id, day, periodId, assignmentId });
     ent = [(await mk(W.periods[0]._id, W.asgM._id)).body.entry, (await mk(W.periods[1]._id, W.asgE._id)).body.entry, (await mk(W.periods[2]._id, W.asgM._id)).body.entry];

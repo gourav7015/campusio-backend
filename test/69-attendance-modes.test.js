@@ -33,15 +33,19 @@ describe('Student attendance: once a day OR period by period', () => {
     expect((await api().put('/api/school/settings').set(W.h).send({ attendance: { dayRule: { presentPct: 75, halfPct: 40 } } })).status).toBe(200);
   });
 
-  it('a change is refused for a past date, and only a School Admin can make it', async () => {
-    expect((await api().put('/api/school/attendance-mode').set(W.h).send({ periodWise: true, from: addDays(TODAY, -1) })).status).toBe(400);
-    expect((await api().put('/api/school/attendance-mode').set(W.h).send({ periodWise: false, from: TODAY })).status).toBe(409); // already that way
+  it('a change is refused for a past date, and only AtKaksha can make it: the School Admin, a teacher and a student are all refused', async () => {
+    expect((await api().put(`/api/platform/schools/${W.id}/attendance-mode`).set(root.h).send({ periodWise: true, from: addDays(TODAY, -1) })).status).toBe(400);
+    expect((await api().put(`/api/platform/schools/${W.id}/attendance-mode`).set(root.h).send({ periodWise: false, from: TODAY })).status).toBe(409); // already that way
+    const own = await api().put('/api/school/attendance-mode').set(W.h).send({ periodWise: true, from: TODAY });
+    expect(own.status).toBe(403); expect(JSON.stringify(own.body)).toMatch(/plan with AtKaksha/); // the School Admin can look, not change
+    expect((await api().get('/api/school/attendance-mode').set(W.h)).status).toBe(200);
+    expect((await api().put(`/api/platform/schools/${W.id}/attendance-mode`).set(W.h).send({ periodWise: true, from: TODAY })).status).toBe(403); // the platform door is for the Super Admin only
     expect((await api().put('/api/school/attendance-mode').set(T1).send({ periodWise: true, from: TODAY })).status).toBe(403);
     expect((await api().put('/api/school/attendance-mode').set(W.studentLogins[0].h).send({ periodWise: true, from: TODAY })).status).toBe(403);
   });
 
   it('switching on: teachers and students learn it, and the daily register closes', async () => {
-    expect((await api().put('/api/school/attendance-mode').set(W.h).send({ periodWise: true, from: TODAY })).status).toBe(200);
+    expect((await api().put(`/api/platform/schools/${W.id}/attendance-mode`).set(root.h).send({ periodWise: true, from: TODAY })).status).toBe(200);
     expect((await api().get('/api/auth/me').set(T1)).body.user).toMatchObject({ periodWise: true });
     expect((await api().get('/api/auth/me').set(W.studentLogins[0].h)).body.user).toMatchObject({ periodWise: true, attendanceChange: null });
     expect((await notesOf(W.studentLogins[0])).some((n) => /period by period/.test(n.body))).toBe(true);
@@ -149,8 +153,8 @@ describe('Student attendance: once a day OR period by period', () => {
   });
 
   it('switching back is booked for tomorrow because period registers were started today; it can be withdrawn; history stays', async () => {
-    expect((await api().put('/api/school/attendance-mode').set(W.h).send({ periodWise: false, from: TODAY })).status).toBe(400);
-    expect((await api().put('/api/school/attendance-mode').set(W.h).send({ periodWise: false, from: TOMORROW })).body).toMatchObject({ ok: true, from: TOMORROW });
+    expect((await api().put(`/api/platform/schools/${W.id}/attendance-mode`).set(root.h).send({ periodWise: false, from: TODAY })).status).toBe(400);
+    expect((await api().put(`/api/platform/schools/${W.id}/attendance-mode`).set(root.h).send({ periodWise: false, from: TOMORROW })).body).toMatchObject({ ok: true, from: TOMORROW });
     expect((await api().get('/api/auth/me').set(T1)).body.user).toMatchObject({ periodWise: true, attendanceChange: { from: TOMORROW, periodWise: false } });
     const info = (await api().get('/api/school/attendance-mode').set(W.h)).body;
     expect(info).toMatchObject({ periodWise: true, pending: { from: TOMORROW, periodWise: false }, earliest: TOMORROW });
@@ -159,8 +163,8 @@ describe('Student attendance: once a day OR period by period', () => {
     expect((await api().get(`/api/teacher/attendance/register?sectionId=${W.sec8A._id}&date=${TOMORROW}`).set(T1)).body.blocked).not.toBe('period_wise');
     expect((await api().get(`/api/teacher/attendance/register?sectionId=${W.sec8A._id}&date=${TODAY}`).set(T1)).body.blocked).toBe('period_wise');
     // withdraw it: ask for what is in force now
-    expect((await api().put('/api/school/attendance-mode').set(W.h).send({ periodWise: true, from: TOMORROW })).body).toMatchObject({ cancelled: true });
+    expect((await api().put(`/api/platform/schools/${W.id}/attendance-mode`).set(root.h).send({ periodWise: true, from: TOMORROW })).body).toMatchObject({ cancelled: true });
     expect((await api().get('/api/school/attendance-mode').set(W.h)).body.pending).toBeNull();
-    expect((await api().put('/api/school/attendance-mode').set(W.h).send({ periodWise: true, from: TOMORROW })).status).toBe(409);
+    expect((await api().put(`/api/platform/schools/${W.id}/attendance-mode`).set(root.h).send({ periodWise: true, from: TOMORROW })).status).toBe(409);
   });
 });

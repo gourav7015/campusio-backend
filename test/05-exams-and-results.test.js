@@ -52,11 +52,12 @@ describe('examinations with configurable mark fields → approval → publish �
 
   it('teacher enters marks field by field; validation is strict and per field', async () => {
     const mine = (await api().get('/api/teacher/exams').set(W.teacher1.h)).body;
-    // teacher1 teaches Maths and is the class teacher of 8-A, so he has full access to that class: every subject of it is his to mark
-    expect(mine.map((m) => m.subject).sort()).toEqual(['English', 'Mathematics']);
-    const maths = mine.find((m) => m.subject === 'Mathematics'); const english = mine.find((m) => m.subject === 'English');
-    expect(maths).toMatchObject({ status: 'not_started', max: 100, createdByMe: false, viaClassTeacher: false });
-    expect(english).toMatchObject({ viaClassTeacher: true });
+    // teacher1 teaches Maths (and is the class teacher of 8-A, which lets him LOOK at English): the Marks page lists only the subject he teaches
+    expect(mine.map((m) => m.subject).sort()).toEqual(['Mathematics']);
+    const maths = mine.find((m) => m.subject === 'Mathematics');
+    expect(maths).toMatchObject({ status: 'not_started', max: 100, createdByMe: false, viaClassTeacher: false, canEnter: true });
+    // only his class view (My class) also lists English, to follow it, and not to enter it
+    expect((await api().get('/api/teacher/exams?classView=1').set(W.teacher1.h)).body.find((m) => m.subject === 'English')).toMatchObject({ viaClassTeacher: true, canEnter: false });
     expect(maths.components.map((c) => c.label)).toEqual(['Written', 'Practical']);
     expect((await api().get(`/api/teacher/marks/sheet?${sheetQ(esEng)}`).set(W.teacher1.h)).status).toBe(200); // the class teacher may open any subject of his class
     expect((await api().get(`/api/teacher/exams`).set(W.teacher2.h)).body.map((m) => m.subject)).toEqual(['English']); // a subject teacher only his own

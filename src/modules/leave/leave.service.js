@@ -1,5 +1,5 @@
 import { LeaveApplication, LeaveGrant, Teacher, User } from '../../models/index.js';
-import { notFound, conflict, bad, forbidden, eachDate, isoDay } from '../../core/utils.js';
+import { notFound, conflict, bad, forbidden, eachDate, isoDay, addDays } from '../../core/utils.js';
 import { notifyUsers } from '../../services/notify.js';
 import { LEAVE_DECIDERS, holdsAny } from '../sub-admins/permissions.js';
 
@@ -31,6 +31,20 @@ export function assertLeaveRules(ctx, rules, who, days, { leaveType, startDate, 
     const ahead = startDate > ctx.today ? eachDate(ctx.today, startDate).length - 1 : 0;
     if (ahead < r.noticeDays) throw conflict(`Leave for ${who} must be applied for at least ${r.noticeDays} day${r.noticeDays === 1 ? '' : 's'} ahead (sick leave is exempt)`);
   }
+}
+
+/**
+ * Taking approved leave back while its dates have not all gone. Leave that has not begun (or begins today) is cancelled whole. Leave that is already running
+ * ends yesterday: the days already taken stay as leave, the rest go back. Leave that is over cannot be taken back. Returns 'cancel' or 'end_early'
+ * and, for the second, has already changed the leave's end date and days (the caller saves it).
+ */
+export function takeBack(ctx, l) {
+  if (l.endDate < ctx.today) throw conflict('That leave is already over, so it cannot be cancelled');
+  if (l.startDate >= ctx.today) return 'cancel';
+  const end = addDays(ctx.today, -1);
+  if (countDays(ctx.settings, l.startDate, end) < 1) return 'cancel'; // nothing but non-working days has gone by
+  l.endDate = end; l.days = countDays(ctx.settings, l.startDate, end); l.halfDay = false; l.halfSession = undefined;
+  return 'end_early';
 }
 
 export async function balances(ctx, teacherId) {
@@ -93,13 +107,14 @@ export async function cancel(ctx, id) {
   const l = await LeaveApplication.findOne({ _id: id, tenantId: ctx.tenantId, teacherId: ctx.teacher._id });
   if (!l) throw notFound('Leave application not found');
   if (!['draft', 'submitted', 'approved'].includes(l.status)) throw conflict(`A ${l.status} application cannot be cancelled`);
-  if (l.status === 'approved' && l.startDate <= ctx.today) throw conflict('Approved leave that has already started cannot be cancelled');
   const was = l.status;
-  l.status = 'cancelled'; l.withdrawnAt = new Date(); l.withdrawnBy = ctx.actorId;
+  const how = was === 'approved' ? takeBack(ctx, l) : 'cancel';
+  if (how === 'cancel') l.status = 'cancelled';
+  l.withdrawnAt = new Date(); l.withdrawnBy = ctx.actorId;
   await l.save();
   // the office is told when an application it was about to decide, or leave it had approved, is taken back
   if (was !== 'draft') {
-    await tellApprovers(ctx, l, { title: was === 'approved' ? 'Approved leave cancelled' : 'Leave application withdrawn', key: 'withdrawn' });
+    await tellApprovers(ctx, l, { title: how === 'end_early' ? 'Approved leave ended early' : was === 'approved' ? 'Approved leave cancelled' : 'Leave application withdrawn', key: how === 'end_early' ? `ended:${l.endDate}` : 'withdrawn' });
   }
   return l;
 }
@@ -125,4 +140,19 @@ export async function decide(ctx, id, { decision, remark }) {
     category: 'leave', title: `Leave ${l.status}`, body: `${l.startDate} to ${l.endDate}${remark ? ` — ${remark}` : ''}`, link: { type: 'leave', id: String(l._id) }, dedupeKey: `leave:${l._id}:${l.status}`,
   });
   return l;
+}
+
+/** The office takes a teacher's leave back (cancels it, or ends it early if it is running) and tells the teacher. */
+export async function cancelByOffice(ctx, id) {
+  const l = await LeaveApplication.findOne({ _id: id, tenantId: ctx.tenantId });
+  if (!l) throw notFound('Leave application not found');
+  if (!['submitted', 'approved'].includes(l.status)) throw conflict(`A ${l.status} application cannot be cancelled`);
+  const was = l.status;
+  const how = was === 'approved' ? takeBack(ctx, l) : 'cancel';
+  if (how === 'cancel') l.status = 'cancelled';
+  l.withdrawnAt = new Date(); l.withdrawnBy = ctx.actorId;
+  await l.save();
+  const t = await Teacher.findById(l.teacherId).select('userId');
+  await notifyUsers(ctx.tenantId, [t?.userId], { category: 'leave', title: how === 'end_early' ? 'Your leave was ended early' : was === 'approved' ? 'Your approved leave was cancelled' : 'Your leave application was withdrawn', body: `${l.startDate} to ${l.endDate}`, link: { type: 'leave', id: String(l._id) }, dedupeKey: `leave:${l._id}:office-${how}:${l.endDate}` });
+  return { leave: l, how };
 }

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { parse, isDateStr } from '../../core/utils.js';
+import { parse, isDateStr, forbidden } from '../../core/utils.js';
 import { audit } from '../../services/audit.js';
 import { Teacher } from '../../models/index.js';
 import { teacherDay } from '../../services/timetable.js';
@@ -90,9 +90,11 @@ a.put('/period-attendance/correct', async (req, res) => {
   res.json(out);
 });
 a.post('/period-attendance/remind', async (req, res) => res.json(await svc.remindPeriod(req.ctx, parse(z.object({ sectionId: id, date, periodId: id }), req.body))));
-// the way the school takes student attendance: once a day or period by period. Not available to sub-admins (it changes the whole school).
+// the way the school takes student attendance: once a day or period by period. It is part of the school's plan with AtKaksha: the School Admin
+// can LOOK at it (and at what is booked); only AtKaksha (the platform side, or a Super Admin acting on the school) changes it.
 a.get('/attendance-mode', async (req, res) => res.json(await mode.modeInfo(req.ctx)));
 a.put('/attendance-mode', async (req, res) => {
+  if (req.user.role !== 'super_admin') throw forbidden('How student attendance is taken is part of your school\'s plan with AtKaksha. Ask AtKaksha support to change it.');
   const b = parse(z.object({ periodWise: z.boolean(), from: date }), req.body);
   const out = await mode.setMode(req.ctx, req.user, b);
   await audit(req, 'attendance.mode_changed', 'School', req.tenantId, out.cancelled ? 'Withdrew a booked change of how attendance is taken' : `Attendance will be taken ${b.periodWise ? 'period by period' : 'once a day'} from ${b.from}`);

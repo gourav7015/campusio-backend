@@ -18,7 +18,7 @@ import { teacherRoutes as leaveTeacher, adminRoutes as leaveAdmin } from './leav
 import { adminRoutes as homeworkAdmin, teacherRoutes as homeworkTeacher, studentRoutes as homeworkStudent } from './homework/homework.routes.js';
 import { adminRoutes as materialsAdmin, teacherRoutes as materialsTeacher, studentRoutes as materialsStudent } from './materials/materials.routes.js';
 import { adminRoutes as examsAdmin, teacherRoutes as examsTeacher, studentRoutes as examsStudent } from './exams/exams.routes.js';
-import { adminRoutes as commsAdmin, teacherRoutes as commsTeacher, studentRoutes as commsStudent, calendarRead } from './comms/comms.routes.js';
+import { adminRoutes as commsAdmin, teacherRoutes as commsTeacher, studentRoutes as commsStudent, departmentRoutes as commsDepartment, calendarRead } from './comms/comms.routes.js';
 import { linkRoutes, downloadRoutes } from './files/files.routes.js';
 import adminTools from './admin-tools/admin.routes.js';
 import staffRoutes from './staff/staff.routes.js';
@@ -86,10 +86,10 @@ export function mountModules(app, authenticate) {
   app.use('/api/school/transport', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, subAdminGate('transport'), adminContext, viewOnly, transportRouter);
   app.use('/api/school/library', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, subAdminGate('library'), adminContext, viewOnly, libraryRoutes);
   app.use('/api/school', authenticate, requireRole('school_admin', 'super_admin'), requireTenant, subAdminGate(), adminContext, stack(adminRouters));
-  app.use('/api/finance', authenticate, requireRole('finance'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, financeRoutes, payrollAdmin]));
-  app.use('/api/library', authenticate, requireRole('library'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, libraryRoutes]));
-  app.use('/api/transport', authenticate, requireRole('transport'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, transportRouter]));
-  app.use('/api/staff', authenticate, requireRole('staff'), rejectActing, requireTenant, staffContext, deskGate, stack([at('/attendance-desk', attendanceRoutes(DESK_GROUPS)), at('/leave', leaveDeskRoutes('general')), at('/queries', ticketHandler('school')), at('/tickets', ticketRequester('platform')), schoolInfoRead, calendarRead, staffPortal]));
+  app.use('/api/finance', authenticate, requireRole('finance'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), at('/queries', ticketRequester('school')), commsDepartment, schoolInfoRead, calendarRead, financeRoutes, payrollAdmin]));
+  app.use('/api/library', authenticate, requireRole('library'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), at('/queries', ticketRequester('school')), commsDepartment, schoolInfoRead, calendarRead, libraryRoutes]));
+  app.use('/api/transport', authenticate, requireRole('transport'), rejectActing, requireTenant, adminContext, stack([at('/tickets', ticketRequester('platform')), at('/queries', ticketRequester('school')), commsDepartment, schoolInfoRead, calendarRead, transportRouter]));
+  app.use('/api/staff', authenticate, requireRole('staff'), rejectActing, requireTenant, staffContext, deskGate, stack([at('/attendance-desk', attendanceRoutes(DESK_GROUPS)), at('/leave', leaveDeskRoutes('general')), at('/queries', ticketHandler('school')), at('/tickets', ticketRequester('platform')), commsDepartment, schoolInfoRead, calendarRead, staffPortal]));
   // a class teacher sees his own class the way the school office does: the office's read endpoints, behind a guard that limits them to his own sections
   app.use('/api/teacher/office', authenticate, requireRole('teacher'), rejectActing, requireTenant, teacherContext, classOfficeGuard, stack([studentsRoutes, insightRoutes, at('/finance', financeRoutes), at('/library', libraryRoutes)]));
   app.use('/api/teacher', authenticate, requireRole('teacher'), rejectActing, requireTenant, teacherContext, stack(teacherRouters));

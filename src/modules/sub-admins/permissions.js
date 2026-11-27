@@ -12,7 +12,7 @@ export const PERMISSIONS = {
   attendance: { label: 'Student attendance', paths: ['attendance', 'attendance-overview', 'monitors', 'period-attendance'] },
   staff_attendance: { label: 'Staff and teacher attendance, staff leave, non-teaching staff', paths: ['staff-attendance', 'staff-leave', 'transport-leave', 'leave-balances', 'employees', 'support-staff', 'designations', 'correct', 'month', 'punches', 'register', 'queries'] },
   exams: { label: 'Examinations, homework and study materials', paths: ['exams', 'marks', 'report-cards', 'sheets', 'homework', 'materials'] },
-  communication: { label: 'Announcements, calendar, messages', paths: ['announcements', 'events', 'messages', 'school-info', 'licenses', 'queries'] },
+  communication: { label: 'Notices, calendar, messages', paths: ['announcements', 'events', 'messages', 'school-info', 'licenses', 'queries'] },
   payroll: { label: 'Payroll and salaries', paths: ['payroll'] },
   finance_view: { label: 'View fees, expenses and budgets', paths: ['finance'] },
   approvals: { label: 'Approve expenses, Sunday attendance and period swaps', paths: ['approvals'] },

@@ -76,8 +76,10 @@ export async function teacherScope(tenantId, teacherId, yearId, today) {
     classTeacherSectionIds: activeCT.map((a) => String(a.sectionId)),
     sectionIds,
     canTeach: (sectionId, subjectId) => active.some((a) => String(a.sectionId) === String(sectionId) && (!subjectId || String(a.subjectId) === String(subjectId))),
-    // marks and class tests: the subject teacher of that section, and the class teacher of the section for EVERY subject of their class
-    canMark: (sectionId, subjectId) => active.some((a) => String(a.sectionId) === String(sectionId) && (!subjectId || String(a.subjectId) === String(subjectId))) || activeCT.some((a) => String(a.sectionId) === String(sectionId)),
+    // marks and class tests: only the teacher of that subject in that section. The class teacher enters marks only for the subjects he teaches himself...
+    canMark: (sectionId, subjectId) => active.some((a) => String(a.sectionId) === String(sectionId) && (!subjectId || String(a.subjectId) === String(subjectId))),
+    // ...but can LOOK at every subject's marks sheet of his own class (to follow who has submitted and what was entered)
+    canView: (sectionId, subjectId) => active.some((a) => String(a.sectionId) === String(sectionId) && (!subjectId || String(a.subjectId) === String(subjectId))) || activeCT.some((a) => String(a.sectionId) === String(sectionId)),
     hasSection: (sectionId) => sectionIds.includes(String(sectionId)),
   };
 }

@@ -25,6 +25,8 @@ function readRoutes() {
   return r;
 }
 
+/** Notices (read) for the departments' own portals: Finance, Library, Transport and the office desk. */
+export const departmentRoutes = readRoutes();
 export const teacherRoutes = readRoutes();
 teacherRoutes.get('/calendar', async (req, res) => {
   const { from, to } = parse(v.calendarQuery, req.query);

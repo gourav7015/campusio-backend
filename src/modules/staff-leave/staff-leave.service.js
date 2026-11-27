@@ -1,7 +1,7 @@
 import { StaffLeave, LeaveGrant, StaffMember, Designation, User } from '../../models/index.js';
 import { notFound, conflict, bad, forbidden } from '../../core/utils.js';
 import { notifyUsers } from '../../services/notify.js';
-import { leaveDays, assertLeaveRules } from '../leave/leave.service.js';
+import { leaveDays, assertLeaveRules, takeBack } from '../leave/leave.service.js';
 
 /** The year leave is counted in: the academic year if there is one, otherwise the calendar year. */
 const spanOf = (ctx) => (ctx.year ? { from: ctx.year.startDate, to: ctx.year.endDate } : { from: `${ctx.today.slice(0, 4)}-01-01`, to: `${ctx.today.slice(0, 4)}-12-31` });
@@ -44,8 +44,8 @@ export async function cancel(ctx, id) {
   const l = await StaffLeave.findOne({ _id: id, tenantId: ctx.tenantId, staffId: ctx.staff._id });
   if (!l) throw notFound('Leave application not found');
   if (!['submitted', 'approved'].includes(l.status)) throw conflict(`A ${l.status} application cannot be cancelled`);
-  if (l.status === 'approved' && l.startDate <= ctx.today) throw conflict('Approved leave that has already started cannot be cancelled');
-  l.status = 'cancelled';
+  const how = l.status === 'approved' ? takeBack(ctx, l) : 'cancel'; // running leave ends yesterday; leave that has not begun is cancelled whole
+  if (how === 'cancel') l.status = 'cancelled';
   return l.save();
 }
 
@@ -102,12 +102,13 @@ export async function withdraw(ctx, group, id) {
   const l = await StaffLeave.findOne({ _id: id, tenantId: ctx.tenantId, group });
   if (!l) throw notFound('Leave application not found');
   if (!['submitted', 'approved'].includes(l.status)) throw conflict(`A ${l.status === 'cancelled' ? 'withdrawn' : l.status} application cannot be withdrawn`);
-  if (l.status === 'approved' && l.startDate <= ctx.today) throw conflict('Approved leave that has already begun cannot be cancelled');
   const was = l.status;
-  l.status = 'cancelled'; l.awaitingAdmin = false; l.withdrawnAt = new Date(); l.withdrawnBy = ctx.actorId;
+  const how = was === 'approved' ? takeBack(ctx, l) : 'cancel';
+  if (how === 'cancel') { l.status = 'cancelled'; l.awaitingAdmin = false; }
+  l.withdrawnAt = new Date(); l.withdrawnBy = ctx.actorId;
   await l.save();
-  await notifyUsers(ctx.tenantId, [l.userId], { category: 'leave', title: was === 'approved' ? 'Your approved leave was cancelled' : 'Your leave application was withdrawn', body: `${l.startDate} to ${l.endDate}`, link: { type: 'leave', id: String(l._id) }, dedupeKey: `staffleave:${l._id}:withdrawn` });
-  if (!isAdmin(ctx) && group === 'transport') await tellAdmins(ctx, l, await nameOf(l), { title: was === 'approved' ? 'Approved transport staff leave cancelled' : 'Transport staff leave withdrawn', key: 'withdrawn' });
+  await notifyUsers(ctx.tenantId, [l.userId], { category: 'leave', title: how === 'end_early' ? 'Your leave was ended early' : was === 'approved' ? 'Your approved leave was cancelled' : 'Your leave application was withdrawn', body: `${l.startDate} to ${l.endDate}`, link: { type: 'leave', id: String(l._id) }, dedupeKey: `staffleave:${l._id}:withdrawn` });
+  if (!isAdmin(ctx) && group === 'transport') await tellAdmins(ctx, l, await nameOf(l), { title: how === 'end_early' ? 'Transport staff leave ended early' : was === 'approved' ? 'Approved transport staff leave cancelled' : 'Transport staff leave withdrawn', key: how === 'end_early' ? `ended:${l.endDate}` : 'withdrawn' });
   return l;
 }
 

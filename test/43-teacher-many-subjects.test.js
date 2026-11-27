@@ -64,7 +64,7 @@ describe('A teacher who teaches several subjects (Mr Sharma: Maths and English i
   it('marks: he can enter marks for his subject in a section, and only for it', async () => {
     const exam = await api().post('/api/teacher/exams').set(W.teacher1.h).send({ name: 'Quick test', type: 'class_test', sectionId: W.sec8B._id, subjectId: W.eng._id, date: addDays(TODAY, -1), components: [{ label: 'Score', max: 10 }], marksDeadline: addDays(TODAY, 3) });
     expect(exam.status, JSON.stringify(exam.body)).toBe(201);
-    expect((await api().post('/api/teacher/exams').set(W.teacher1.h).send({ name: 'Class teacher test', type: 'class_test', sectionId: W.sec8A._id, subjectId: W.eng._id, date: addDays(TODAY, -1), components: [{ label: 'Score', max: 10 }], marksDeadline: addDays(TODAY, 3) })).status).toBe(201); // he is the class teacher of 8-A, so every subject of that class is his to test and mark
+    expect((await api().post('/api/teacher/exams').set(W.teacher1.h).send({ name: 'Class teacher test', type: 'class_test', sectionId: W.sec8A._id, subjectId: W.eng._id, date: addDays(TODAY, -1), components: [{ label: 'Score', max: 10 }], marksDeadline: addDays(TODAY, 3) })).status).toBe(403); // he is the class teacher of 8-A, but English there is Mrs Gupta's: a teacher enters marks and adds tests only for the subjects he teaches
     expect((await api().post('/api/teacher/exams').set(W.teacher2.h).send({ name: 'Not mine', type: 'class_test', sectionId: W.sec8A._id, subjectId: W.maths._id, date: addDays(TODAY, -1), components: [{ label: 'Score', max: 10 }], marksDeadline: addDays(TODAY, 3) })).status).toBe(403); // a subject teacher only in her own subject
   });
 });

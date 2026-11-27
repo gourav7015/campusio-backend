@@ -26,6 +26,11 @@ export const adminRoutes = Router();
 adminRoutes.get('/leave', async (req, res) => res.json(await svc.listAll(req.ctx, req.query)));
 adminRoutes.get('/leave/teachers', async (req, res) => res.json(await svc.substituteChoices(req.ctx)));
 adminRoutes.get('/leave/:id/affected-periods', async (req, res) => res.json(await affectedPeriods(req.tenantId, req.params.id)));
+adminRoutes.post('/leave/:id/cancel', async (req, res) => {
+  const { leave, how } = await svc.cancelByOffice(req.ctx, req.params.id);
+  await audit(req, how === 'end_early' ? 'leave.ended_early' : 'leave.cancelled_by_office', 'LeaveApplication', leave._id, how === 'end_early' ? `Leave ended early: now ${leave.startDate} to ${leave.endDate}` : `Leave cancelled: ${leave.startDate} to ${leave.endDate}`);
+  res.json({ ...leave.toObject(), how });
+});
 adminRoutes.post('/leave/:id/decide', async (req, res) => {
   const l = await svc.decide(req.ctx, req.params.id, parse(v.decideBody, req.body));
   await audit(req, `leave.${l.status}`, 'LeaveApplication', l._id, `Leave ${l.status}`);

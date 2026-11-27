@@ -85,7 +85,7 @@ adminRoutes.post('/marks/sheet/submit', async (req, res) => res.json(await marks
 
 // ───────────── Teacher ─────────────
 export const teacherRoutes = Router();
-teacherRoutes.get('/exams', async (req, res) => res.json(await marks.teacherExamList(req.ctx)));
+teacherRoutes.get('/exams', async (req, res) => res.json(await marks.teacherExamList(req.ctx, { classView: req.query.classView === '1' })));
 teacherRoutes.post('/exams', async (req, res) => {
   const out = await marks.createTeacherExam(req.ctx, parse(v.teacherExamBody, req.body), req.user.name);
   await audit(req, 'exam.teacher_created', 'Examination', out.exam._id, `Added ${out.exam.name} (${out.exam.type})`);

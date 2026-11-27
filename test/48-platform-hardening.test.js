@@ -102,17 +102,18 @@ describe('Platform hardening: versioned API, idempotent POSTs, error log, durabl
 
   it('feature switches: a default for everyone, an override for one school, unknown names refused', async () => {
     const school = (await api().get(`/api/platform/schools/${W.id}/flags`).set(root.h)).body;
-    expect(school.find((f) => f.name === 'periodAttendance')).toMatchObject({ value: false, overridden: false });
-    const set = await api().put(`/api/platform/schools/${W.id}/flags`).set(root.h).send({ periodAttendance: true, onlinePayments: false });
+    expect(school.find((f) => f.name === 'documentImages')).toMatchObject({ value: true, overridden: false });
+    expect(school.find((f) => f.name === 'periodAttendance')).toBeUndefined(); // the attendance way is a plan setting with its own route now
+    const set = await api().put(`/api/platform/schools/${W.id}/flags`).set(root.h).send({ documentImages: false, onlinePayments: false });
     expect(set.status).toBe(200);
-    expect(set.body.find((f) => f.name === 'periodAttendance')).toMatchObject({ value: true, overridden: true });
+    expect(set.body.find((f) => f.name === 'documentImages')).toMatchObject({ value: false, overridden: true });
     expect(flagOn({ flags: { onlinePayments: false } }, 'onlinePayments')).toBe(false);
     expect(flagOn({}, 'onlinePayments')).toBe(FLAGS.onlinePayments.default);
     expect(flagOn({}, 'nonsense')).toBe(false);
-    const back = await api().put(`/api/platform/schools/${W.id}/flags`).set(root.h).send({ periodAttendance: null });
-    expect(back.body.find((f) => f.name === 'periodAttendance').overridden).toBe(false);
+    const back = await api().put(`/api/platform/schools/${W.id}/flags`).set(root.h).send({ documentImages: null });
+    expect(back.body.find((f) => f.name === 'documentImages').overridden).toBe(false);
     expect((await api().put(`/api/platform/schools/${W.id}/flags`).set(root.h).send({ nonsense: true })).status).toBe(400);
-    expect((await api().put(`/api/platform/schools/${W.id}/flags`).set(W.h).send({ periodAttendance: true })).status).toBe(403);
+    expect((await api().put(`/api/platform/schools/${W.id}/flags`).set(W.h).send({ documentImages: true })).status).toBe(403);
   });
 
   it('a request that never answers is ended with a clear message', async () => {
