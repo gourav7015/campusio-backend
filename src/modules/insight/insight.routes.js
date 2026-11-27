@@ -9,7 +9,9 @@ const id = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id');
 const analysisQuery = z.object({ classId: id.optional(), sectionId: id.optional() }).refine((q) => q.classId || q.sectionId, { message: 'Choose a class' });
 
 r.get('/sections/:id/insight', async (req, res) => res.json(await svc.sectionInsight(req.ctx, req.params.id)));
-r.get('/sections/:id/period-attendance', async (req, res) => res.json(await svc.sectionPeriodAttendance(req.ctx, req.params.id)));
+const rangeQ = z.object({ range: z.enum(['month', 'quarter', 'year']).default('year') });
+r.get('/sections/:id/period-attendance', async (req, res) => res.json(await svc.sectionPeriodAttendance(req.ctx, req.params.id, parse(rangeQ, req.query).range)));
+r.get('/sections/:id/day-attendance', async (req, res) => res.json(await svc.sectionDayAttendance(req.ctx, req.params.id, parse(rangeQ, req.query).range)));
 r.get('/sections/:id/students', async (req, res) => res.json(await svc.sectionStudents(req.ctx, req.params.id)));
 r.get('/sections/:id/homework', async (req, res) => {
   const { date, weekStart } = parse(z.object({ date: z.string().refine(isDateStr).optional(), weekStart: z.string().refine(isDateStr).optional() }), req.query);

@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { PeriodAttendanceSession, Subject, TimetablePeriod } from '../models/index.js';
+import { PeriodAttendanceSession, Subject, TimetablePeriod, Teacher } from '../models/index.js';
 import { dayRuleOf } from './attendanceMode.js';
 import { addDays, isoDay } from '../core/utils.js';
 
@@ -93,16 +93,20 @@ export async function subjectPeriods({ tenantId, yearId, studentId, subjectId, l
  * is below the target in, and how the class does in each subject. Counted by the database, so a big section stays quick.
  * `roster` = [{ studentId, name, rollNo, admissionNo }].
  */
-export async function sectionSummary({ tenantId, yearId, sectionId, roster, settings }) {
+export async function sectionSummary({ tenantId, yearId, sectionId, roster, settings, from, to }) {
   const target = dayRuleOf(settings.attendance).presentPct;
   const lateCounts = settings.attendance?.lateCountsAsPresent !== false;
   const oid = (x) => new mongoose.Types.ObjectId(String(x));
   const rows = await PeriodAttendanceSession.aggregate([
-    { $match: { tenantId: oid(tenantId), yearId: oid(yearId), sectionId: oid(sectionId), status: 'submitted' } },
+    { $match: { tenantId: oid(tenantId), yearId: oid(yearId), sectionId: oid(sectionId), status: 'submitted', ...(from || to ? { date: { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) } } : {}) } },
     { $unwind: '$records' },
     { $group: { _id: { s: '$records.studentId', sub: '$subjectId', st: '$records.status' }, n: { $sum: 1 } } },
   ]);
   const names = new Map((await Subject.find({ tenantId, _id: { $in: [...new Set(rows.map((r) => r._id.sub).filter(Boolean).map(String))] } }).select('name').lean()).map((s) => [String(s._id), s.name]));
+  const who = await PeriodAttendanceSession.aggregate([{ $match: { tenantId: oid(tenantId), yearId: oid(yearId), sectionId: oid(sectionId), status: 'submitted' } }, { $group: { _id: { sub: '$subjectId', t: '$teacherId' }, n: { $sum: 1 } } }]);
+  const tn = new Map((await Teacher.find({ tenantId, _id: { $in: [...new Set(who.map((w) => w._id.t).filter(Boolean).map(String))] } }).select('name').lean()).map((t) => [String(t._id), t.name]));
+  const teacherOf = new Map();
+  for (const w of who.sort((a, b) => a.n - b.n)) teacherOf.set(key(w._id.sub), tn.get(String(w._id.t)) || ''); // the one who took most of the lessons wins
   const per = new Map(); const bySubject = new Map();
   for (const r of rows) {
     const { s, sub, st } = r._id;
@@ -118,14 +122,15 @@ export async function sectionSummary({ tenantId, yearId, sectionId, roster, sett
     const o = per.get(String(st.studentId));
     const percentage = o ? pct(o.attended, o.periods) : null;
     const below = o ? [...o.subjects.values()].filter((x) => x.periods && x.attended / x.periods < target / 100).length : 0;
-    return { ...st, periods: o?.periods || 0, attended: o?.attended || 0, absent: o?.absent || 0, late: o?.late || 0, percentage, below, state: percentage == null ? 'none' : percentage >= target ? (percentage >= target + 10 ? 'good' : 'watch') : 'low' };
+    const cells = o ? Object.fromEntries([...o.subjects.entries()].map(([k, x]) => [k, pct(x.attended, x.periods)])) : {};
+    return { ...st, cells, periods: o?.periods || 0, attended: o?.attended || 0, absent: o?.absent || 0, late: o?.late || 0, percentage, below, state: percentage == null ? 'none' : percentage >= target ? (percentage >= target + 10 ? 'good' : 'watch') : 'low' };
   });
   const counted = students.filter((s) => s.percentage != null);
   const tot = counted.reduce((a, s) => ({ periods: a.periods + s.periods, attended: a.attended + s.attended }), { periods: 0, attended: 0 });
   return {
     target,
     totals: { students: roster.length, marked: counted.length, percentage: pct(tot.attended, tot.periods), below: counted.filter((s) => s.state === 'low').length },
-    subjects: [...bySubject.values()].map((b) => ({ ...b, percentage: pct(b.attended, b.periods) })).sort((a, b) => (a.percentage ?? 101) - (b.percentage ?? 101)),
+    subjects: [...bySubject.values()].map((b) => ({ ...b, teacher: teacherOf.get(b.subjectId) || '', percentage: pct(b.attended, b.periods) })).sort((a, b) => (a.percentage ?? 101) - (b.percentage ?? 101)),
     students,
   };
 }

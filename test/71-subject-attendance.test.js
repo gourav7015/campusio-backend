@@ -72,6 +72,17 @@ describe('Period by period attendance is shown by subject, and earlier once-a-da
     expect((await api().get(`/api/teacher/office/students/${A}/overview`).set(T1)).body.attendance.periods.totals.periods).toBe(3);
     expect((await api().get(`/api/teacher/office/students/${A}/attendance-subject/${m.subjectId}`).set(T1)).status).toBe(200);
     expect((await api().get(`/api/teacher/office/students/${A}/attendance-subject/${m.subjectId}`).set(T2)).status).toBe(403);
+    // once a day (the earlier register, plus the day worked out from the periods): every student's days, and who needs a word
+    const day = (await api().get(`/api/school/sections/${W.sec8A._id}/day-attendance?range=year`).set(W.h)).body;
+    expect(day.target).toBe(75); expect(day.totals.students).toBe(3);
+    expect(day.students.map((x) => x.name)).toEqual(['Aarav Singh', 'Bhavna Rao', 'Chirag Das']);
+    expect(day.students[0]).toMatchObject({ absent: 2, workingDays: 2, percentage: 0, streak: 2, lastAbsent: TODAY, state: 'low' });
+    expect(day.needs.map((n) => n.name)).toContain('Aarav Singh');
+    expect(day.byMonth.length).toBeGreaterThan(0);
+    expect((await api().get(`/api/school/sections/${W.sec8A._id}/day-attendance?range=forever`).set(W.h)).status).toBe(400);
+    expect((await api().get(`/api/teacher/office/sections/${W.sec8A._id}/day-attendance`).set(T1)).status).toBe(200);
+    expect((await api().get(`/api/teacher/office/sections/${W.sec8A._id}/day-attendance`).set(T2)).status).toBe(403);
+    expect((await api().get(`/api/school/sections/${W.sec8A._id}/period-attendance?range=month`).set(W.h)).body.range).toBe('month');
     // the whole class at once: every student, in lessons
     const cls = (await api().get(`/api/school/sections/${W.sec8A._id}/period-attendance`).set(W.h)).body;
     expect(cls.periodWise).toBe(true); expect(cls.target).toBe(75);
@@ -80,6 +91,8 @@ describe('Period by period attendance is shown by subject, and earlier once-a-da
     expect(cls.students[2]).toMatchObject({ percentage: 100, state: 'good', below: 0 });
     expect(cls.totals).toMatchObject({ students: 3, marked: 3, below: 2 }); // Bhavna (2 of 3) is below as well
     expect(cls.subjects.map((x) => x.subject).sort()).toEqual(['English', 'Mathematics']);
+    expect(cls.subjects.find((x) => x.subject === 'Mathematics').teacher).toBe('Mr Sharma');
+    expect(Object.keys(cls.students[0].cells)).toHaveLength(2);
     expect((await api().get(`/api/teacher/office/sections/${W.sec8A._id}/period-attendance`).set(T1)).status).toBe(200);
     expect((await api().get(`/api/teacher/office/sections/${W.sec8A._id}/period-attendance`).set(T2)).status).toBe(403); // not the class teacher
     expect((await api().get(`/api/school/sections/${W.sec8B._id}/period-attendance`).set(W.h)).body.students).toEqual([]);

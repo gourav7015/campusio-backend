@@ -11,25 +11,31 @@ import { isEmailEnabled, sendNotificationEmail } from './email.js';
 export async function notifyUsers(tenantId, userIds, { category, title, body, link, dedupeKey }) {
   const ids = [...new Set(userIds.filter(Boolean).map(String))];
   if (!ids.length) return 0;
-  const users = await User.find({ _id: { $in: ids }, tenantId, status: 'active' }).select('notificationPrefs email name');
+  const users = (await User.find({ _id: { $in: ids }, tenantId, status: 'active' }).select('notificationPrefs email name')).filter((u) => !(u.notificationPrefs && u.notificationPrefs[category] === false));
+  if (!users.length) return 0;
   const mail = isEmailEnabled() && config.mail.categories.has(category);
+  // one batch per few hundred people, not one round trip per person: a whole school is told in a moment
   let n = 0;
-  for (const u of users) {
-    if (u.notificationPrefs && u.notificationPrefs[category] === false) continue;
-    try {
-      await Notification.create({ tenantId, userId: u._id, category, title, body, link, dedupeKey: dedupeKey ? `${dedupeKey}` : undefined });
+  for (let i = 0; i < users.length; i += 500) {
+    const chunk = users.slice(i, i + 500);
+    const docs = chunk.map((u) => ({ tenantId, userId: u._id, category, title, body, link, dedupeKey: dedupeKey ? `${dedupeKey}` : undefined }));
+    let skipped = new Set(); // already notified for this event: no second notification, no second email
+    try { await Notification.insertMany(docs, { ordered: false }); } catch (e) {
+      const errs = e.writeErrors || e.results?.filter?.((r) => r instanceof Error) || [];
+      if (!errs.length || errs.some((w) => (w.code ?? w.err?.code) !== 11000)) throw e;
+      skipped = new Set(errs.map((w) => w.index ?? w.err?.index));
+    }
+    chunk.forEach((u, j) => {
+      if (skipped.has(j)) return;
       n++;
-    } catch (e) {
-      if (e.code !== 11000) throw e;
-      continue; // already notified for this event: no second email either
-    }
-    if (mail && u.email && u.notificationPrefs?.email !== false) {
-      sendNotificationEmail(u.email, {
-        subject: title, heading: title, lines: [body || ''].filter(Boolean),
-        button: { label: 'Open AtKaksha', url: config.mail.appUrl },
-        footer: 'You get this email because of a notification in your AtKaksha account.',
-      });
-    }
+      if (mail && u.email && u.notificationPrefs?.email !== false) {
+        sendNotificationEmail(u.email, {
+          subject: title, heading: title, lines: [body || ''].filter(Boolean),
+          button: { label: 'Open AtKaksha', url: config.mail.appUrl },
+          footer: 'You get this email because of a notification in your AtKaksha account.',
+        });
+      }
+    });
   }
   return n;
 }

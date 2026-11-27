@@ -383,11 +383,55 @@ export async function studentSubjectPeriods(ctx, studentId, subjectId) {
   return subjectPeriods({ tenantId: ctx.tenantId, yearId: ctx.year._id, studentId, subjectId });
 }
 
-/** A section's students, each with their attendance in lessons: the class teacher's and the office's check of the whole class when attendance is taken period by period. */
-export async function sectionPeriodAttendance(ctx, sectionId) {
+/** "This month", "Last 3 months" or "This year" as a pair of dates (the year is the school's current session). */
+function rangeOf(ctx, range) {
+  if (range === 'month') return { from: `${ctx.today.slice(0, 7)}-01`, to: ctx.today };
+  if (range === 'quarter') return { from: addDays(ctx.today, -90), to: ctx.today };
+  return { from: ctx.year.startDate, to: ctx.today };
+}
+async function rosterOf(ctx, sectionId) {
   if (!(await Section.exists({ _id: sectionId, tenantId: ctx.tenantId }))) throw notFound('Section not found');
   const enrols = await StudentEnrolment.find({ tenantId: ctx.tenantId, sectionId, yearId: ctx.year._id, status: rollStatus(ctx.year) }).sort({ rollNo: 1 }).lean();
   const stu = new Map((await Student.find({ tenantId: ctx.tenantId, _id: { $in: enrols.map((e) => e.studentId) } }).select('name admissionNo').lean()).map((s) => [String(s._id), s]));
-  const roster = enrols.map((e) => ({ studentId: e.studentId, rollNo: e.rollNo, name: stu.get(String(e.studentId))?.name || '', admissionNo: stu.get(String(e.studentId))?.admissionNo }));
-  return { periodWise: modeOn(ctx.settings.attendance, ctx.today), ...(await sectionSummary({ tenantId: ctx.tenantId, yearId: ctx.year._id, sectionId, roster, settings: ctx.settings })) };
+  return enrols.map((e) => ({ studentId: e.studentId, rollNo: e.rollNo, name: stu.get(String(e.studentId))?.name || '', admissionNo: stu.get(String(e.studentId))?.admissionNo }));
+}
+
+/** A section's students, each with their attendance in lessons: the class teacher's and the office's check of the whole class when attendance is taken period by period. */
+export async function sectionPeriodAttendance(ctx, sectionId, range = 'year') {
+  const roster = await rosterOf(ctx, sectionId);
+  const { from, to } = rangeOf(ctx, range);
+  return { periodWise: modeOn(ctx.settings.attendance, ctx.today), range, ...(await sectionSummary({ tenantId: ctx.tenantId, yearId: ctx.year._id, sectionId, roster, settings: ctx.settings, from, to })) };
+}
+
+/**
+ * The same check of the whole class when attendance is taken once a day: every student's days, who needs a word (low attendance, or absent several
+ * days in a row), the class month by month, and where today's register stands.
+ */
+export async function sectionDayAttendance(ctx, sectionId, range = 'year') {
+  const roster = await rosterOf(ctx, sectionId);
+  const { from, to } = rangeOf(ctx, range);
+  const target = ctx.settings.attendance?.dayRule?.presentPct ?? 75;
+  const ids = roster.map((r) => r.studentId);
+  const recs = ids.length ? await submittedRecords(ctx.tenantId, { studentId: { $in: ids }, yearId: ctx.year._id, date: { $gte: from, $lte: to } }) : [];
+  const by = new Map(); for (const r of recs) { const k = String(r.studentId); if (!by.has(k)) by.set(k, []); by.get(k).push(r); }
+  const students = roster.map((st) => {
+    const mine = (by.get(String(st.studentId)) || []).sort((a, b) => a.date.localeCompare(b.date));
+    const sm = summarize(mine, ctx.settings);
+    let streak = 0; for (let i = mine.length - 1; i >= 0 && mine[i].status === 'absent'; i--) streak++;
+    const lastAbsent = [...mine].reverse().find((r) => r.status === 'absent')?.date || null;
+    const percentage = sm.percentage;
+    return { ...st, percentage, workingDays: sm.workingDays, present: sm.present + sm.late, absent: sm.absent, late: sm.late, leave: sm.leave + sm.excused, halfDay: sm.half_day, lastAbsent, streak, state: percentage == null ? 'none' : percentage >= target ? (percentage >= target + 10 ? 'good' : 'watch') : 'low' };
+  });
+  const months = new Map(); for (const r of recs) { const m = r.date.slice(0, 7); if (!months.has(m)) months.set(m, []); months.get(m).push(r); }
+  const all = summarize(recs, ctx.settings);
+  const sessions = await AttendanceSession.find({ tenantId: ctx.tenantId, sectionId, date: ctx.today }).select('status source').lean();
+  const todayRecs = sessions.some((s) => s.status === 'submitted') ? recs.filter((r) => r.date === ctx.today) : [];
+  const needs = students.filter((s) => s.state === 'low' || s.streak >= 3).sort((a, b) => b.streak - a.streak || (a.percentage ?? 101) - (b.percentage ?? 101)).slice(0, 8)
+    .map((s) => ({ studentId: s.studentId, name: s.name, percentage: s.percentage, why: [s.streak >= 3 ? `absent ${s.streak} days in a row` : null, s.state === 'low' ? `below ${target}%` : null].filter(Boolean).join(', ') }));
+  return {
+    periodWise: modeOn(ctx.settings.attendance, ctx.today), range, from, to, target,
+    totals: { students: roster.length, percentage: all.percentage, below: students.filter((s) => s.state === 'low').length, streak3: students.filter((s) => s.streak >= 3).length, presentToday: todayRecs.filter((r) => r.status === 'present' || r.status === 'late').length, markedToday: todayRecs.length, registerToday: sessions[0]?.status || 'not_marked' },
+    byMonth: [...months.entries()].sort().map(([month, v]) => ({ month, percentage: summarize(v, ctx.settings).percentage })),
+    needs, students,
+  };
 }
